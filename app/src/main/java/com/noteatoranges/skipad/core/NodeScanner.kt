@@ -209,9 +209,11 @@ class NodeScanner(
      * - E1 居中卡片（短文本包围盒）边缘 ±12% 内的小可点控件，且卡片内有营销文案；
      * - E2 节点稀疏（≤60）的窗口里，纵向 60% 以下的小可点图片控件（独立弹窗 Activity）；
      * - E3 控件文字本身就是"关闭 / close / ×"，且落在屏幕中央偏下——正常页面的
-     *   关闭钮都在角落，中央偏下基本只有弹窗会有。
+     *   关闭钮都在角落，中央偏下基本只有弹窗会有；
+     * - E4 卡片下沿内的全宽文字按钮（「我知道了」「以后再说」这类，宽度可到 92% 屏宽）。
      *
-     * 业务型弹窗（登录、支付、授权、隐私）一律不点：点掉会打断用户正在做的事。
+     * 业务型弹窗（登录、支付、授权、隐私、订单）一律不点：点掉会打断用户正在做的事。
+     * 业务词优先于营销词——命中业务词就整窗放弃，宁可漏一个营销弹窗。
      */
     fun findPopupCloseTarget(
         root: AccessibilityNodeInfo,
@@ -225,19 +227,11 @@ class NodeScanner(
             return null
         }
 
-        // 业务弹窗排除：登录 / 支付 / 授权 / 隐私类弹窗点掉会打断正常操作。
-        // 只看屏幕中央区域内的文本——外侧的“钱包银行卡支付优惠”这类入口文案不算
-        for (s in snaps) {
-            val t = s.text ?: continue
-            val cx = s.rect.exactCenterX()
-            val cy = s.rect.exactCenterY()
-            if (cx > screenW * 0.30f && cx < screenW * 0.70f &&
-                cy > screenH * 0.18f && cy < screenH * 0.88f &&
-                POPUP_BUSINESS_WORDS.any { t.contains(it, ignoreCase = true) }
-            ) {
-                lastPopupDebug = "popup-block 业务弹窗「${t.take(12)}」"
-                return null
-            }
+        // 业务弹窗排除（第一道）：屏幕中央区的业务词。早退，省掉后面的包围盒计算。
+        // 只看中央区是因为首页常驻的「登录」「银行卡」在四角，不能因此整页放弃
+        businessWordIn(snaps, screenW, screenH, null)?.let {
+            lastPopupDebug = "popup-block 业务弹窗「${it.take(12)}」"
+            return null
         }
 
         // 卡片 = 营销文案的包围盒。没有营销文案的窗口不是营销弹窗，宁可漏掉
@@ -258,13 +252,22 @@ class NodeScanner(
             card.exactCenterX() in (screenW * 0.35f)..(screenW * 0.65f) &&
             card.exactCenterY() in (screenH * 0.28f)..(screenH * 0.72f)
 
+        // 业务弹窗排除（第二道）：卡片范围内的业务词。弹窗自己的文案都在卡片里，
+        // 这一道能拦住「确认收货 / 开通会员前先绑定手机号」这类不带营销词的业务弹窗
+        if (card != null) {
+            businessWordIn(snaps, screenW, screenH, card)?.let {
+                lastPopupDebug = "popup-block 业务弹窗(卡片内)「${it.take(12)}」"
+                return null
+            }
+        }
+
         for (s in snaps) {
-            if (closeCandidate(s, screenW, screenH) == null) continue
             val st = s.text
+            val shapeOk = closeCandidate(s, screenW, screenH) != null
             // E3：文字以"关闭"开头（淘宝 poplayer 的按钮描述就叫"关闭按钮"），
             // 且落在屏幕中央偏下——正常页面的关闭钮都在角落。
             // 用 startsWith 而不是 contains：只排除正文里顺带提到"关闭"的句子
-            if (st != null && st.length <= 6 &&
+            if (shapeOk && st != null && st.length <= 6 &&
                 STRONG_CLOSE_WORDS.any { st.startsWith(it, ignoreCase = true) } &&
                 s.rect.exactCenterX() > screenW * 0.30f && s.rect.exactCenterX() < screenW * 0.70f &&
                 s.rect.exactCenterY() > screenH * 0.55f
@@ -272,6 +275,20 @@ class NodeScanner(
                 lastPopupDebug = "popup-hit E3「$st」"
                 return PopupHit(s.node, "关闭「$st」")
             }
+            // E4：卡片下沿内的全宽文字按钮。这类按钮高度常超 8% 屏高、宽度接近整卡，
+            // 过不了 closeCandidate 的形状闸，但文字本身就是关闭语义，且有卡片做背书
+            if (cardOk && card != null && st != null && st.length in 2..10 &&
+                CLOSE_WORDS.any { st.startsWith(it, ignoreCase = true) } &&
+                s.rect.width() <= screenW * 0.92f && s.rect.height() <= screenH * 0.12f &&
+                s.rect.exactCenterX() > card.left - screenW * 0.06f &&
+                s.rect.exactCenterX() < card.right + screenW * 0.06f &&
+                s.rect.exactCenterY() > card.bottom - screenH * 0.16f &&
+                s.rect.exactCenterY() < card.bottom + screenH * 0.06f
+            ) {
+                lastPopupDebug = "popup-hit E4「$st」"
+                return PopupHit(s.node, "关闭「$st」")
+            }
+            if (!shapeOk) continue
             // E1：营销卡片边缘的小控件
             if (cardOk && card != null && edgeOfCard(s.rect, card, screenW, screenH)) {
                 lastPopupDebug = "popup-hit E1 card=$card"
@@ -288,6 +305,26 @@ class NodeScanner(
         }
         lastPopupDebug = "popup-no-match nodes=${snaps.size} texts=${texts.size}" +
             " card=${if (cardOk) "ok" else "no"} mk=${marketingTexts.size}"
+        return null
+    }
+
+    /**
+     * 业务弹窗关键词扫描。card 为 null 时只看屏幕中央区；给了卡片就只看卡片范围。
+     * 返回命中的原文（用于日志），没有返回 null。
+     */
+    private fun businessWordIn(snaps: List<Snap>, w: Int, h: Int, card: Rect?): String? {
+        for (s in snaps) {
+            val t = s.text ?: continue
+            val cx = s.rect.exactCenterX()
+            val cy = s.rect.exactCenterY()
+            val inScope = if (card == null) {
+                cx > w * 0.30f && cx < w * 0.70f && cy > h * 0.18f && cy < h * 0.88f
+            } else {
+                cx > card.left - w * 0.04f && cx < card.right + w * 0.04f &&
+                    cy > card.top - h * 0.02f && cy < card.bottom + h * 0.02f
+            }
+            if (inScope && POPUP_BUSINESS_WORDS.any { t.contains(it, ignoreCase = true) }) return t
+        }
         return null
     }
 
@@ -443,10 +480,12 @@ class NodeScanner(
             "抽奖", "膨胀", "礼包", "福利", "奖励", "无门槛", "新人专享", "免费领",
         )
 
-        /** 业务弹窗排除词：登录、支付、授权、隐私这类弹窗点掉会打断正常操作 */
+        /** 业务弹窗排除词：登录、支付、授权、隐私、订单这类弹窗点掉会打断正常操作。
+         *  业务词优先于营销词——命中就整窗放弃 */
         val POPUP_BUSINESS_WORDS = listOf(
             "登录", "注册", "授权", "同意", "隐私", "协议", "密码", "验证码",
-            "支付", "付款", "确认", "删除", "退出", "卸载",
+            "支付", "付款", "转账", "银行卡", "确认", "删除", "退出", "卸载",
+            "收货", "实名", "绑定", "注销", "退款", "提现", "订单",
         )
 
         /** 这些控件不可能是关闭按钮 */

@@ -86,8 +86,15 @@ class SkipAccessibilityService : AccessibilityService() {
     /** 事件心跳日志的节流时间戳（确认无障碍事件真的在进来） */
     private var lastEventLogAt = 0L
 
-    /** 弹窗点击冷却：误判的代价是点掉一个正常控件，宁可慢也不连着点 */
-    private var lastPopupClickAt = 0L
+    /** 弹窗点击冷却：按窗口记账，同窗口 4 秒内不重复点（原来是整 App 20 秒） */
+    private val popupClickAt = HashMap<String, Long>()
+    private val popupClickCount = HashMap<String, Int>()
+
+    /** 上一次弹窗动作时间：保证两次动作之间隔开一个验证周期 */
+    private var lastPopupActionAt = 0L
+
+    /** 手动执行坐标规则后的静默期：这段时间内弹窗通道不再动手，避免同一下点两遍 */
+    private var popupSuppressUntil = 0L
 
     private data class PendingSkip(
         val windowKey: String,
@@ -219,8 +226,8 @@ class SkipAccessibilityService : AccessibilityService() {
             )
         }
         bubbleToast("已执行 ${rules.size} 条坐标规则（成功 $ok）")
-        // 手动点过之后，弹窗通道短时间内不要再来一次，避免同一下点两遍
-        lastPopupClickAt = SystemClock.elapsedRealtime()
+        // 手动点过之后，弹窗通道静默一段时间，避免同一下点两遍
+        popupSuppressUntil = SystemClock.elapsedRealtime() + MANUAL_POINT_SUPPRESS_MS
     }
 
     /** 1dp 对应的像素，锚点偏移用 */
@@ -307,6 +314,9 @@ class SkipAccessibilityService : AccessibilityService() {
         factsCache.clear()
         val prefix = "$pkg|"
         ruleState.keys.filter { it.startsWith(prefix) }.forEach { ruleState.remove(it) }
+        // 弹窗计数跟着页面走：同窗口的冷却记录留着没意义，窗口 id 会换
+        popupClickAt.clear()
+        popupClickCount.clear()
         userScannerKey = null
     }
 
@@ -343,12 +353,21 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            type != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+            type != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
+            type != AccessibilityEvent.TYPE_WINDOWS_CHANGED
         ) return
 
         val now = SystemClock.elapsedRealtime()
         if (now - lastHandleAt < THROTTLE_MS) return
         lastHandleAt = now
+
+        // 新增窗口（浮层弹窗最常见形态）单独走弹窗通道：这类窗口不一定改动
+        // 活动窗口的 root，只靠 WSC/WCC 会漏。不动开屏扫描，避免重复点
+        if (type == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            if (event.windowChanges and AccessibilityEvent.WINDOWS_CHANGE_ADDED == 0) return
+            tryPopupClose(event, now)
+            return
+        }
 
         // 内容变化事件在信息流里一秒能来几十个，每次都要全树走一遍无障碍节点，
         // 是耗电主因。开屏广告真正出现时伴随 WINDOW_STATE_CHANGED，内容变化慢一拍不影响
@@ -391,7 +410,7 @@ class SkipAccessibilityService : AccessibilityService() {
         // 闸外不等于放弃：用户点菜单后的弹窗要靠下面的弹窗通道，它有自己的节流。
         val stateAt = lastStateChangeAt[pkg] ?: now
         if (now - stateAt > SPLASH_WINDOW_MS) {
-            tryPopupClose(root, pkg, event, now, w, h)
+            tryPopupClose(event, now)
             return
         }
 
@@ -409,7 +428,7 @@ class SkipAccessibilityService : AccessibilityService() {
         if (hit == null) {
             Log.v(TAG, "scan $pkg: ${userScanner?.lastDebug ?: builtinScanner?.lastDebug}")
             // 开屏窗口期内也可能先浮出营销弹窗，主路径没命中就顺带试一次弹窗通道
-            tryPopupClose(root, pkg, event, now, w, h)
+            tryPopupClose(event, now)
             return
         }
         val detail = hit.first.text?.toString()
@@ -445,23 +464,18 @@ class SkipAccessibilityService : AccessibilityService() {
      * 应用内弹窗通道：用户点菜单后浮出来的营销卡片。
      *
      * 不套启动窗口闸——弹窗出现时距 Activity 切换可能已过几分钟；改用两道自己的节流：
-     * 扫描间隔 [POPUP_SCAN_MS]（未命中也走），点击后 [POPUP_COOLDOWN_MS] 内不再点。
-     * 点完同样进 800ms 验证：弹窗没消失就不记账，且只补刀一次。
+     * 扫描间隔（窗口切换 500ms / 新增窗口 400ms / 内容变化 1800ms），点击后按**窗口**
+     * 冷却 4 秒、同一窗口最多 3 次——此前是整 App 20 秒冷却，一个 App 里连着两个弹窗，
+     * 第二个基本会被放过。
+     *
+     * 扫描范围是所有可交互窗口（活动窗口优先，最多 3 个）：浮层弹窗常常是独立窗口，
+     * 不在 rootInActiveWindow 里。点完同样进 800ms 验证：没消失就不记账，只补刀一次。
      */
-    private fun tryPopupClose(
-        root: AccessibilityNodeInfo,
-        pkg: String,
-        event: AccessibilityEvent,
-        now: Long,
-        w: Int,
-        h: Int,
-    ) {
-        // 窗口切换（新 Activity / Dialog）时弹窗可能刚出现，用更短的间隔；
-        // 信息流的内容变化事件一秒几十个，没必要跟着全速扫
-        val interval = if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            POPUP_SCAN_STATE_MS
-        } else {
-            POPUP_SCAN_MS
+    private fun tryPopupClose(event: AccessibilityEvent, now: Long) {
+        val interval = when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> POPUP_SCAN_STATE_MS
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> POPUP_SCAN_WINDOW_MS
+            else -> POPUP_SCAN_MS
         }
         if (now - lastPopupScanAt < interval) return
         lastPopupScanAt = now
@@ -469,28 +483,67 @@ class SkipAccessibilityService : AccessibilityService() {
             Log.w(TAG, "popup: builtinScanner 未初始化（服务未连上）")
             return
         }
-        val hit = scanner.findPopupCloseTarget(root, w, h)
-        if (hit == null) {
-            Log.v(TAG, "popup-none $pkg: ${scanner.lastPopupDebug}")
-            return
-        }
-        if (now - lastPopupClickAt < POPUP_COOLDOWN_MS) {
-            Log.v(TAG, "popup-cool $pkg: ${scanner.lastPopupDebug}")
-            return
-        }
-        lastPopupClickAt = now
-        val key = "popup:$pkg/${event.className ?: root.className ?: ""}"
-        Log.d(TAG, "popup-match $pkg: ${scanner.lastPopupDebug}")
-        dumpTree(root, pkg, "popup")
-        if (clicker?.click(hit.node) == true) {
-            lastSkipWindow = key
-            lastSkipAt = now
-            pending = PendingSkip(key, pkg, "弹窗·${hit.why}", 0, 1)
-            val token = pending
-            mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
-        } else {
+        val w = resources.displayMetrics.widthPixels
+        val h = resources.displayMetrics.heightPixels
+        var scanned = 0
+        for (win in popupWindowCandidates()) {
+            val root = win.root ?: continue
+            val pkg = root.packageName?.toString() ?: continue
+            scanned++
+            val hit = scanner.findPopupCloseTarget(root, w, h)
+            if (hit == null) {
+                Log.v(TAG, "popup-none $pkg#${win.id}: ${scanner.lastPopupDebug}")
+                continue
+            }
+            val key = "$pkg#${win.id}"
+            if (!gatePopup(key, now)) {
+                Log.v(TAG, "popup-cool $key: ${scanner.lastPopupDebug}")
+                continue
+            }
+            Log.d(TAG, "popup-match $key: ${scanner.lastPopupDebug}")
+            dumpTree(root, pkg, "popup")
+            if (clicker?.click(hit.node) == true) {
+                lastSkipWindow = key
+                lastSkipAt = now
+                pending = PendingSkip(key, pkg, "弹窗·${hit.why}", 0, 1)
+                val token = pending
+                mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
+                return
+            }
             Log.d(TAG, "popup-click-failed $pkg")
         }
+        if (scanned == 0) Log.v(TAG, "popup: 没有可扫窗口")
+    }
+
+    /** 待扫窗口：活动窗口优先，跳过自己和黑名单，最多 [POPUP_SCAN_WINDOWS] 个 */
+    private fun popupWindowCandidates(): List<AccessibilityWindowInfo> {
+        val all = runCatching { windows?.toList() ?: emptyList() }.getOrDefault(emptyList())
+        if (all.isEmpty()) return emptyList()
+        val out = ArrayList<AccessibilityWindowInfo>(POPUP_SCAN_WINDOWS)
+        for (win in all.sortedByDescending { it.isActive }) {
+            val p = runCatching { win.root?.packageName?.toString() }.getOrNull() ?: continue
+            if (p == packageName || p in blacklist) continue
+            out.add(win)
+            if (out.size >= POPUP_SCAN_WINDOWS) break
+        }
+        return out
+    }
+
+    /**
+     * 弹窗点击闸门：按窗口冷却 + 同窗口次数上限 + 全局最小间隔。
+     * 全局最小间隔是为了让上一次的 800ms 验证先跑完，别在验证期间插队点第二个。
+     */
+    private fun gatePopup(key: String, now: Long): Boolean {
+        if (now < popupSuppressUntil) return false
+        if (now - lastPopupActionAt < POPUP_GLOBAL_MIN_MS) return false
+        val last = popupClickAt[key] ?: 0L
+        if (last > 0 && now - last < POPUP_WINDOW_COOLDOWN_MS) return false
+        val n = popupClickCount[key] ?: 0
+        if (n >= POPUP_MAX_PER_WINDOW) return false
+        popupClickAt[key] = now
+        popupClickCount[key] = n + 1
+        lastPopupActionAt = now
+        return true
     }
 
     private fun windowKeyFor(pkg: String, event: AccessibilityEvent, root: AccessibilityNodeInfo): String =
@@ -840,14 +893,27 @@ class SkipAccessibilityService : AccessibilityService() {
         /** 窗口切换时弹窗可能刚出现，用更短的间隔 */
         const val POPUP_SCAN_STATE_MS = 500L
 
+        /** 新增窗口事件：弹窗刚挂上来，间隔再短一点 */
+        const val POPUP_SCAN_WINDOW_MS = 400L
+
+        /** 一次最多扫几个窗口（浮层弹窗常在独立窗口里，但没必要把整桌窗口扫一遍） */
+        const val POPUP_SCAN_WINDOWS = 3
+
         /** 内容变化事件的最小间隔：滑动信息流时一秒能来几十个，没必要每个都扫 */
         const val CONTENT_THROTTLE_MS = 900L
 
         /** 找锚点控件的遍历上限：锚点通常就在弹窗里，不用扫全树 */
         const val ANCHOR_SCAN_NODES = 600
 
-        /** 弹窗点击后的冷却：同一 App 20 秒内不再点弹窗关闭钮 */
-        const val POPUP_COOLDOWN_MS = 20000L
+        /** 弹窗冷却改为按窗口：同窗口 4 秒内不重复点，最多 3 次（此前整 App 20 秒） */
+        const val POPUP_WINDOW_COOLDOWN_MS = 4000L
+        const val POPUP_MAX_PER_WINDOW = 3
+
+        /** 两次弹窗动作的最小间隔：让上一次的 800ms 验证先跑完 */
+        const val POPUP_GLOBAL_MIN_MS = 1200L
+
+        /** 手动执行坐标规则后的静默期，避免自动通道在同一点上再点一次 */
+        const val MANUAL_POINT_SUPPRESS_MS = 8000L
         const val UNBIND_RECOVER_DELAY_MS = 1500L
         const val VERIFY_DELAY_MS = 800L
         const val MAX_RETRY = 2

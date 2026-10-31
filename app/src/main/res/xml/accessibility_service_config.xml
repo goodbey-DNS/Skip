@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   无障碍服务配置（核心，详见 docs/design.md §2）：
-  - 监听窗口切换 + 窗口内容变化（后者在服务内做节流）
+  - 监听窗口切换 + 窗口内容变化 + 窗口增删（后者用于浮层弹窗，服务内做节流）
   - canPerformGestures：坐标手势兜底点击（WebView 广告等拿不到可点击节点的场景）
   - flagReportViewIds：暴露 viewIdResourceName，M2 per-App 规则依赖
   - isAccessibilityTool（API 31+ 要求声明；低版本忽略不报错）
   - packageNames 不设置 = 接收所有应用，粗筛在服务代码层做（黑名单）
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeWindowsChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
