@@ -286,9 +286,10 @@ class SnapshotDetailActivity : AppCompatActivity() {
                 val x = dm.widthPixels * xr
                 val y = dm.heightPixels * yr
                 sb.append("方式：坐标 ${(100 * xr).toInt()}%，${(100 * yr).toInt()}%\n\n")
-                val under = nodes.firstOrNull {
+                // 取面积最小的包含节点：根节点覆盖全屏，取第一个永远命中根节点
+                val under = nodes.filter {
                     it.w > 0 && it.h > 0 && x >= it.l && x <= it.r && y >= it.t && y <= it.b
-                }
+                }.minByOrNull { it.w.toLong() * it.h }
                 if (under != null) {
                     sb.append("落点：#${under.idx} ${under.cls.substringAfterLast('.')}")
                     if (under.text.isNotEmpty()) sb.append("「${under.text.take(16)}」")
