@@ -83,6 +83,9 @@ class SkipAccessibilityService : AccessibilityService() {
     /** 内容变化事件的独立节流时间戳 */
     private var lastContentAt = 0L
 
+    /** 事件心跳日志的节流时间戳（确认无障碍事件真的在进来） */
+    private var lastEventLogAt = 0L
+
     /** 弹窗点击冷却：误判的代价是点掉一个正常控件，宁可慢也不连着点 */
     private var lastPopupClickAt = 0L
 
@@ -109,6 +112,8 @@ class SkipAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        // 连接留痕：装了新包之后服务是否真的起来了，只能靠这一行判断
+        Log.i(TAG, "service-connected 0.10.1")
         builtinScanner = NodeScanner(BuiltinRules.defaults(), factsCache).also {
             it.verbose = Log.isLoggable(TAG, Log.VERBOSE)
         }
@@ -141,6 +146,7 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        Log.i(TAG, "service-unbind")
         val appContext = applicationContext
         Thread {
             SystemClock.sleep(UNBIND_RECOVER_DELAY_MS)
@@ -459,7 +465,10 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         if (now - lastPopupScanAt < interval) return
         lastPopupScanAt = now
-        val scanner = builtinScanner ?: return
+        val scanner = builtinScanner ?: run {
+            Log.w(TAG, "popup: builtinScanner 未初始化（服务未连上）")
+            return
+        }
         val hit = scanner.findPopupCloseTarget(root, w, h)
         if (hit == null) {
             Log.v(TAG, "popup-none $pkg: ${scanner.lastPopupDebug}")
