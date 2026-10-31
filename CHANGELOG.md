@@ -2,6 +2,15 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.12.1 - 2026-11-01 · Gradle 9 工具链（消掉 out of date 提示）
+
+- Gradle wrapper 8.7 → **9.8.2**；AGP 8.2.2 → **9.5.0**；compileSdk 34 → **36**；CI JDK 17 → **21**（AGP 9 要求）。
+- AGP 9 内置 Kotlin：删除 `org.jetbrains.kotlin.android` 插件（AGP 会直接报 `Failed to apply plugin` 并提示移除），`kotlinOptions {}` 换成顶层 `kotlin { compilerOptions { jvmTarget = ... } }`，jvmTarget 默认跟随 `compileOptions.targetCompatibility`。
+- 工作流：安装 `platforms;android-36` + `build-tools;36.0.0`。
+- 结果：`Gradle version is out of date` 提示消失（grep 日志 0 次），构建全绿，0.12.1 装机后服务连接、引擎扫描、界面渲染均正常。
+- 残留（非阻塞）：`Deprecated Gradle features were used ... incompatible with Gradle 10`，来自 AGP/settings 脚本，Gradle 9 下不影响构建。
+- 版本 0.12.1 / versionCode 40。
+
 ## 0.12.0 - 2026-10-31 · 弹窗候选打分 + 图片弹窗 E6 + 弱证据二次确认
 
 **改了什么**
