@@ -14,3 +14,4 @@ build/
 *.jks
 *.log
 _slim.py
+ci-keystore.jks

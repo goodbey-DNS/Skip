@@ -52,13 +52,32 @@ jobs:
           sed -i '/maven.aliyun.com/d' settings.gradle
           cat settings.gradle
 
+      - name: Restore signing keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "KEYSTORE_B64 未配置，本次会用随机 debug 签名"
+          else
+            echo "$KEYSTORE_B64" | base64 -d > ci-keystore.jks
+            ls -l ci-keystore.jks
+          fi
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
       - name: Build debug APK
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Verify signature
+        run: |
+          APKSH=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | head -1)
+          "$APKSH" verify --print-certs app/build/outputs/apk/debug/*.apk | grep -i 'SHA-256' || true
 
       - name: Rename APK with version
         run: |

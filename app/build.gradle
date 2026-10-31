@@ -17,10 +17,31 @@ android {
         versionName "0.8.2"
     }
 
+    // 固定签名：CI 从 GitHub Secrets 还原 keystore 后设这两个环境变量，
+    // 保证每次构建出来的包签名一致，可以直接覆盖安装，不用卸载。
+    // 本地没有这两个变量时这个 signingConfig 是空的，走系统默认 debug 签名。
+    def ciStoreB64 = System.getenv("KEYSTORE_B64")
+    def ciStorePwd = System.getenv("KEYSTORE_PASSWORD")
+
+    signingConfigs {
+        ci {
+            if (ciStoreB64 && ciStorePwd) {
+                storeFile file("${rootDir}/ci-keystore.jks")
+                storePassword ciStorePwd
+                keyAlias "skipad"
+                keyPassword ciStorePwd
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (ciStoreB64 && ciStorePwd) signingConfig signingConfigs.ci
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (ciStoreB64 && ciStorePwd) signingConfig signingConfigs.ci
         }
     }
     compileOptions {
