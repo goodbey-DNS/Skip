@@ -110,9 +110,6 @@ class NodeScanner(rules: List<SkipRule>) {
                         }
                     }
                 }
-                        }
-                    }
-                }
             }
 
             for (i in 0 until node.childCount) {
