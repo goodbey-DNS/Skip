@@ -38,11 +38,16 @@ class NodeScanner(rules: List<SkipRule>) {
     var lastDebug: String? = null
         private set
 
-    /** 返回 (可点击目标节点, 命中的规则)；找不到返回 null */
+    /** 返回 (可点击目标节点, 命中的规则)；找不到返回 null
+     *
+     * @param hasAdHint 该窗口里已看到广告标识（"广告"文本 / 广告 SDK viewId），
+     *                  命中时免位置闸——广告页里的"跳过"无论在哪都是按钮
+     */
     fun findSkipTarget(
         root: AccessibilityNodeInfo,
         screenW: Int,
         screenH: Int,
+        hasAdHint: Boolean = false,
     ): Pair<AccessibilityNodeInfo, SkipRule>? {
         if (screenW <= 0 || screenH <= 0) return null
         val screenArea = screenW.toFloat() * screenH
@@ -99,7 +104,7 @@ class NodeScanner(rules: List<SkipRule>) {
                         val cy = rect.exactCenterY()
                         val inCenter = cx > screenW * 0.3f && cx < screenW * 0.7f &&
                             cy > screenH * 0.2f && cy < screenH * 0.8f
-                        if (!byViewId && inCenter) {
+                        if (!byViewId && !hasAdHint && inCenter) {
                             reject = "「${text?.take(12)}」在中央区域(cx=${cx.toInt()},cy=${cy.toInt()})"
                         } else if (area in 1f..screenArea * matched.rule.maxAreaRatio) {
                             lastDebug = "HIT「${(text ?: vid)?.take(20)}」面积${pct}% 规则=${matched.rule.id}" +
@@ -119,6 +124,50 @@ class NodeScanner(rules: List<SkipRule>) {
         lastDebug = "no-match nodes=$visited texts=[${samples.joinToString("|").take(180)}]" +
             (reject?.let { " reject=$it" } ?: "")
         return null
+    }
+
+    /**
+     * 兜底：开屏窗口里右上 / 右下角的"小可点击控件"。
+     * 用于纯图片、视频类开屏广告——跳过按钮是 ImageView，既没有文本也没有 skip 类 viewId，
+     * 无障碍层只能靠"位置 + 尺寸"认。调用方只在 Activity 名含 splash / welcome / ad 时启用，
+     * 避免在正常页面误点右上角的搜索、更多。
+     */
+    fun findCornerButton(
+        root: AccessibilityNodeInfo,
+        screenW: Int,
+        screenH: Int,
+    ): AccessibilityNodeInfo? {
+        if (screenW <= 0 || screenH <= 0) return null
+        val w = screenW.toFloat()
+        val h = screenH.toFloat()
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var n = 0
+        var best: AccessibilityNodeInfo? = null
+        var bestArea = Float.MAX_VALUE
+        while (queue.isNotEmpty() && n < CORNER_SCAN_NODES) {
+            val node = queue.removeFirst()
+            n++
+            if (node.isClickable && node.isVisibleToUser) {
+                val r = Rect()
+                node.getBoundsInScreen(r)
+                val cw = r.width().toFloat()
+                val ch = r.height().toFloat()
+                val cx = r.exactCenterX()
+                val cy = r.exactCenterY()
+                val inCorner = cx > w * 0.62f && (cy < h * 0.22f || cy > h * 0.78f)
+                val sizeOk = cw in (w * 0.04f)..(w * 0.30f) && ch in (h * 0.015f)..(h * 0.09f)
+                if (inCorner && sizeOk) {
+                    val area = cw * ch
+                    if (area < bestArea) {
+                        best = node
+                        bestArea = area
+                    }
+                }
+            }
+            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
+        }
+        return best
     }
 
     private fun firstMatch(
@@ -161,6 +210,7 @@ class NodeScanner(rules: List<SkipRule>) {
         const val MAX_NODES = 800
         const val TRAVERSE_TIMEOUT_MS = 400L
         const val ANCESTOR_HOPS = 6
+        const val CORNER_SCAN_NODES = 400
 
         /** 负向关键词：出现即判定不是广告跳过按钮（宁可少点，不能误点引导页） */
         val NEGATIVE_HINTS = listOf(

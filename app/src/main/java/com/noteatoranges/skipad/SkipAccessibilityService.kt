@@ -53,6 +53,9 @@ class SkipAccessibilityService : AccessibilityService() {
     /** 快照广播只注册一次：onServiceConnected 可能被系统重复回调，重复注册会导致一次点击抓多张 */
     private var snapshotRegistered = false
 
+    /** 窗口 id → (时间戳, 是否有广告标识)，避免每次扫描重走节点树 */
+    private val adHintCache = HashMap<Int, Pair<Long, Boolean>>()
+
     private var lastSkipWindow: String? = null
     private var lastSkipAt = 0L
     private var lastFgPkg: String? = null
@@ -204,9 +207,10 @@ class SkipAccessibilityService : AccessibilityService() {
 
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
-        // 用户规则优先
-        val hit = userScanner?.findSkipTarget(root, w, h)
-            ?: builtinScanner?.findSkipTarget(root, w, h)
+        // 用户规则优先；窗口有"广告"标识时免位置闸
+        val adHint = adHintFor(-1, root)
+        val hit = userScanner?.findSkipTarget(root, w, h, adHint)
+            ?: builtinScanner?.findSkipTarget(root, w, h, adHint)
         if (hit == null) {
             Log.v(TAG, "scan $pkg: ${userScanner?.lastDebug ?: builtinScanner?.lastDebug}")
             return
@@ -265,11 +269,40 @@ class SkipAccessibilityService : AccessibilityService() {
             val root = window.root ?: continue
             val wp = root.packageName?.toString() ?: continue
             if (wp == packageName || wp in blacklist) continue
-            val hit = userScanner?.findSkipTarget(root, w, h)
-                ?: builtinScanner?.findSkipTarget(root, w, h)
+            // 窗口里有"广告"标识时，跳过按钮不设位置闸（微博的跳过就在右下角）
+            val adHint = adHintFor(window.id, root)
+            val hit = userScanner?.findSkipTarget(root, w, h, adHint)
+                ?: builtinScanner?.findSkipTarget(root, w, h, adHint)
             if (hit != null) return Triple(hit.first, wp, "win#${window.id} ${window.type}")
+            // 纯图片/视频开屏：跳过按钮既无文本也无 skip 类 id，只在开屏类 Activity 上
+            // 按"右上/右下角 + 小尺寸"兜底，避免在正常页面误点搜索、更多按钮
+            val act = lastActivityClass[wp] ?: ""
+            if (isSplashLike(act)) {
+                val corner = builtinScanner?.findCornerButton(root, w, h)
+                if (corner != null) {
+                    Log.d(TAG, "corner-fallback $wp act=$act")
+                    return Triple(corner, wp, "corner#${window.id}")
+                }
+            }
         }
         return null
+    }
+
+    /** 广告标识判定带 1.5 秒缓存：同一次开屏会被反复扫描，别每次都重走 200 个节点 */
+    private fun adHintFor(windowId: Int, root: AccessibilityNodeInfo): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        adHintCache[windowId]?.let { (t, v) -> if (now - t < AD_HINT_TTL_MS) return v }
+        val v = adSignature(root) == true
+        adHintCache[windowId] = now to v
+        return v
+    }
+
+    /** 开屏类 Activity：决定能不能用"角落小按钮"兜底 */
+    private fun isSplashLike(act: String): Boolean {
+        if (act.isEmpty()) return false
+        val low = act.lowercase(java.util.Locale.ROOT)
+        return low.contains("splash") || low.contains("welcome") || low.contains("advert") ||
+            low.contains("adactivity") || low.contains(".ad.")
     }
 
     // ———————— 坐标点按 ————————
@@ -535,6 +568,7 @@ class SkipAccessibilityService : AccessibilityService() {
         )
         val AD_TEXT_HINTS = listOf("广告", "Sponsored")
         const val AD_SIGNATURE_SCAN_NODES = 200
+        const val AD_HINT_TTL_MS = 1500L
 
         /** 系统包与噪声大户：直接跳过节点遍历（李跳跳同款"先粗筛再遍历"思路） */
         val PACKAGE_BLACKLIST = setOf(
