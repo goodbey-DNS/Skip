@@ -2,6 +2,22 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.16.6 - 2026-11-01 · 修「设置里开着但自检说掉线」+ 状态三态
+
+**根因**
+- `KeepAlive.isRunningNow` 拿 `AccessibilityServiceInfo.id` 和 `ComponentName.flattenToString()` 直接比字符串。前者用的是 `flattenToShortString()`，同包名的类会被缩写成 `com.noteatoranges.skipad/.SkipAccessibilityService`；后者给的是完整类名 `com.noteatoranges.skipad/com.noteatoranges.skipad.SkipAccessibilityService`。两者永远不相等 → `isRunningNow` 恒为 false。
+- 后果链：主界面用 `isEnabledInSettings`（配置态）显示「✓ 已开启」，自检用运行态判断 → 必然走「掉线」分支 → 没授权静默复活就提示「未授权静默复活」。用户去系统设置一看，无障碍明明是开的，于是对不上。
+- 更隐性的代价：静默复活模式（有 adb 授权）下，每次自检都会判定「掉线」并走两段式写入，等于把服务重启一遍。
+
+**改了什么**
+- 新增 `sameService(raw, ComponentName)`：把标识反解析成 `ComponentName` 再比包名与类名，短名/全名都能对上。`isEnabledInSettings` / `isRunningNow` / `tryReEnable` / 异常补偿四处统一改用它。
+- `checkAndRecover` 的失败分支分两种文案：配置态还开着 → `ka_result_not_bound`「系统设置里显示已开启，但服务实例没绑上——把无障碍开关关开一次，或稍等几秒再自检」；配置态也关了 → 原来的 `ka_result_notified`。
+- 主界面状态改三态：运行中 → `status_on`；设置里开着但没连上 → 新增 `status_not_bound`；未开启 → `status_off`。
+- 版本 0.16.6 / versionCode 53。
+
+**为什么**
+- 用户报告「点立即自检提示未授权静默复活，但系统设置里无障碍是开启状态」。
+
 ## 0.16.5 - 2026-11-01 · 去重提前到 dumpTree 之前 + 扫描耗时实测
 
 **改了什么**

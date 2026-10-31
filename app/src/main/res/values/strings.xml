@@ -5,6 +5,7 @@
     <string name="section_status">无障碍服务</string>
     <string name="status_on">✓ 已开启，正在自动跳过开屏广告</string>
     <string name="status_off">✗ 未开启，点下方按钮去系统设置开启</string>
+    <string name="status_not_bound">⚠ 设置里已开启，但服务没连上——点「立即自检」，或把无障碍开关关开一次</string>
     <string name="action_enable">去开启无障碍服务</string>
     <string name="action_open_settings">查看无障碍设置</string>
     <string name="action_check_now">立即自检</string>
@@ -124,6 +125,7 @@
     <string name="ka_result_cooldown">刚检查过，服务正在恢复中，稍后再试</string>
     <string name="ka_result_revived">服务已掉线 → 已静默重新开启 ✓</string>
     <string name="ka_result_notified">服务已掉线 → 未授权静默复活，已发通知提醒</string>
+    <string name="ka_result_not_bound">系统设置里显示已开启，但服务实例没绑上——把无障碍开关关开一次，或稍等几秒再自检</string>
 
     <string name="accessibility_service_label">SkipAd 开屏跳过</string>
     <string name="accessibility_service_summary">自动点击开屏广告的“跳过”按钮</string>

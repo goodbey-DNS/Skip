@@ -60,22 +60,36 @@ object KeepAlive {
     fun serviceComponent(context: Context): ComponentName =
         ComponentName(context, SkipAccessibilityService::class.java)
 
+    /**
+     * 比较两个无障碍服务标识是否指同一个服务。
+     *
+     * 必须反解析成 ComponentName 再比：`AccessibilityServiceInfo.id` 用的是
+     * `flattenToShortString()`，同包名的类会被缩成 `.SkipAccessibilityService`；
+     * 而 `flattenToString()` 给的是完整类名。直接比字符串永远不相等——
+     * 这就是「设置里明明开着，自检却说服务掉线」的根因。
+     */
+    private fun sameService(raw: String?, me: ComponentName): Boolean {
+        raw ?: return false
+        val a = ComponentName.unflattenFromString(raw) ?: return false
+        return a.packageName == me.packageName && a.className == me.className
+    }
+
     /** 配置态：系统设置里已登记为开启 */
     fun isEnabledInSettings(context: Context): Boolean {
         val cur = Settings.Secure.getString(
             context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: return false
-        val me = serviceComponent(context).flattenToString()
-        return cur.split(':').any { it.equals(me, ignoreCase = true) }
+        val me = serviceComponent(context)
+        return cur.split(':').any { sameService(it, me) }
     }
 
     /** 运行态：系统当前真实绑定着本服务（比配置态可信，ROM 拦自启时配置在但没绑定） */
     fun isRunningNow(context: Context): Boolean {
         val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
             ?: return false
-        val me = serviceComponent(context).flattenToString()
+        val me = serviceComponent(context)
         return am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-            .any { it.id.equals(me, ignoreCase = true) }
+            .any { sameService(it.id, me) }
     }
 
     fun hasWriteSecureSettings(context: Context): Boolean =
@@ -101,7 +115,12 @@ object KeepAlive {
         }
         StatsStore.logEvent(context, context.getString(R.string.ka_log_detected_off))
         notifyToReEnable(context)
-        return context.getString(R.string.ka_result_notified)
+        // 配置态还开着却绑不上：不是「用户关了」，而是「系统里有登记但服务没起效」。
+        // 这时只说「未授权静默复活」会让人去系统设置里看，可那里明明显示是开的
+        return context.getString(
+            if (isEnabledInSettings(context)) R.string.ka_result_not_bound
+            else R.string.ka_result_notified
+        )
     }
 
     /**
@@ -111,12 +130,13 @@ object KeepAlive {
      */
     fun tryReEnable(context: Context): Boolean = try {
         val cr = context.contentResolver
-        val me = serviceComponent(context).flattenToString()
+        val me = serviceComponent(context)
+        val meStr = me.flattenToString()
         val cur = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
         val all = cur.split(':').filter { it.isNotBlank() }
-        val others = all.filter { !it.equals(me, ignoreCase = true) }
-        val mine = all.any { it.equals(me, ignoreCase = true) }
-        val target = (others + me).joinToString(":")
+        val others = all.filter { !sameService(it, me) }
+        val mine = all.any { sameService(it, me) }
+        val target = (others + meStr).joinToString(":")
         if (mine) {
             // 同值写入系统不会重新解析绑定，必须制造一次变更。中间态（不含我）只允许
             // 存在一瞬间：紧接着必须写回 target，否则服务会从系统设置里消失。
@@ -130,13 +150,14 @@ object KeepAlive {
     } catch (e: Exception) {
         // 第二段写失败时尽力补回，避免服务被上面的中间态"删掉"后找不回来
         runCatching {
-            val me = serviceComponent(context).flattenToString()
+            val me = serviceComponent(context)
             val cr = context.contentResolver
             val cur = Settings.Secure.getString(
                 cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
             ) ?: ""
-            if (!cur.split(':').any { it.equals(me, ignoreCase = true) }) {
-                val fixed = (cur.split(':').filter { it.isNotBlank() } + me).joinToString(":")
+            if (!cur.split(':').any { sameService(it, me) }) {
+                val fixed = (cur.split(':').filter { it.isNotBlank() } + me.flattenToString())
+                    .joinToString(":")
                 Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, fixed)
             }
         }

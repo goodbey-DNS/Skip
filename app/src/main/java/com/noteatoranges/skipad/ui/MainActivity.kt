@@ -135,10 +135,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refresh() {
-        val enabled = KeepAlive.isEnabledInSettings(this)
-        statusText.setText(if (enabled) R.string.status_on else R.string.status_off)
-        statusText.setTextColor(getColor(if (enabled) R.color.status_on else R.color.status_off))
-        actionButton.setText(if (enabled) R.string.action_open_settings else R.string.action_enable)
+        // 配置态和运行态要分开看：设置里开着不等于服务真的绑上了。只显示配置态，
+        // 用户在无障碍设置里看到「已开启」、自检却说掉线，就会以为 App 在乱报
+        val inSettings = KeepAlive.isEnabledInSettings(this)
+        val running = KeepAlive.isRunningNow(this)
+        val (textId, colorId) = when {
+            running -> R.string.status_on to R.color.status_on
+            inSettings -> R.string.status_not_bound to R.color.status_off
+            else -> R.string.status_off to R.color.status_off
+        }
+        statusText.setText(textId)
+        statusText.setTextColor(getColor(colorId))
+        actionButton.setText(if (inSettings) R.string.action_open_settings else R.string.action_enable)
         loadStatsAsync()
     }
 
