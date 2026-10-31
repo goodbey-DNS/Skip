@@ -237,6 +237,14 @@ class SkipAccessibilityService : AccessibilityService() {
         // 是耗电主因。开屏广告真正出现时伴随 WINDOW_STATE_CHANGED，内容变化慢一拍不影响
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             if (now - lastContentAt < CONTENT_THROTTLE_MS) return
+            // 滑动信息流只产生 SCROLL / TEXT_CHANGED，弹窗浮层是整棵子树插进来。
+            // 没带 SUBTREE 的变化基本不可能长出关闭按钮，直接跳过（0 表示未上报，不过滤）
+            val types = event.contentChangeTypes
+            if (types != 0 &&
+                types and AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE == 0
+            ) {
+                return
+            }
             lastContentAt = now
         }
 
