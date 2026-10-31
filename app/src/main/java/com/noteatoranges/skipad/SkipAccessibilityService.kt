@@ -877,6 +877,15 @@ class SkipAccessibilityService : AccessibilityService() {
                 idx++
                 val r = Rect()
                 node.getBoundsInScreen(r)
+                // 负宽高（滚动/动画中间态、WebView 未布局）在快照里没有意义，
+                // 还会让用户选中一个点不到的节点，直接不收
+                if (r.width() <= 0 || r.height() <= 0) {
+                    for (i in 0 until node.childCount) {
+                        val child = node.getChild(i) ?: continue
+                        queue.add(child to if (path.isEmpty()) "$i" else "$path/$i")
+                    }
+                    continue
+                }
                 nodes.add(
                     SnapshotStore.Node(
                         idx, node.className?.toString() ?: "",
