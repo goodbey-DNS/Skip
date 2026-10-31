@@ -20,7 +20,19 @@ data class SkipRule(
     val maxTextLength: Int = 24,
     val maxAreaRatio: Float = 0.12f,
     val enabled: Boolean = true,
-)
+    /** 命中后的动作：click（默认）/ back（返回键）/ none（只记录不动手） */
+    val action: String = ACTION_CLICK,
+    /** 同一条规则两次动作之间的最小间隔，0 = 不限 */
+    val cooldownMs: Long = 0L,
+    /** 同一条规则累计动作次数上限，0 = 不限（换页面时清零） */
+    val maxCount: Int = 0,
+) {
+    companion object {
+        const val ACTION_CLICK = "click"
+        const val ACTION_BACK = "back"
+        const val ACTION_NONE = "none"
+    }
+}
 
 /** M1 内置默认规则：多语言关键字 + 倒计时正则 + viewId 结构匹配（GKD 路数） */
 object BuiltinRules {

@@ -16,7 +16,14 @@ import java.util.Locale
  * 注：AccessibilityNodeInfo.recycle() 在 API 33+ 已废弃（系统接管回收）；
  * 低版本上不主动回收只造成轻微内存压力，换来规避 recycle 误用型崩溃，有意不回收。
  */
-class NodeScanner(rules: List<SkipRule>) {
+class NodeScanner(
+    rules: List<SkipRule>,
+    /** 共享的节点属性缓存：开屏与弹窗两个通道在同一次事件里复用同一份读取结果 */
+    private val facts: NodeFactsCache? = null,
+) {
+
+    private fun factsOf(node: AccessibilityNodeInfo): NodeFacts =
+        facts?.of(node) ?: NodeFacts(node)
 
     private data class Compiled(
         val rule: SkipRule,
@@ -82,10 +89,11 @@ class NodeScanner(rules: List<SkipRule>) {
                 return null
             }
             val node = queue.removeFirst()
+            val f = factsOf(node)
 
-            val text = nodeText(node)
+            val text = f.label
             if (text != null && samples.size < 20) samples.add(text.take(16))
-            val vid = node.viewIdResourceName?.lowercase(Locale.ROOT)
+            val vid = f.vid?.lowercase(Locale.ROOT)
             if (vid != null && vid.contains("skip") && samples.size < 20) samples.add("vid=$vid")
 
             val matched = firstMatch(node, text, vid)
@@ -107,11 +115,11 @@ class NodeScanner(rules: List<SkipRule>) {
                     // 失败再按节点中心坐标点。微博开屏的"跳过"是纯 TextView（clickable=false、
                     // 祖先也不可点），只有这条路能点掉
                     val cand = clickableAncestor(node) ?: node
-                    if (!cand.isVisibleToUser) {
+                    val candFacts = factsOf(cand)
+                    if (!candFacts.visible) {
                         reject = "「${(text ?: vid)?.take(12)}」不可见"
                     } else {
-                        val rect = Rect()
-                        cand.getBoundsInScreen(rect)
+                        val rect = candFacts.rect
                         val area = rect.width().toFloat() * rect.height()
                         val pct = (area / screenArea * 100).toInt()
                         // 位置闸：广告跳过按钮可以出现在任意角落（微博在右下角 95%），
@@ -169,9 +177,9 @@ class NodeScanner(rules: List<SkipRule>) {
         while (queue.isNotEmpty() && n < CORNER_SCAN_NODES) {
             val node = queue.removeFirst()
             n++
-            if (node.isClickable && node.isVisibleToUser) {
-                val r = Rect()
-                node.getBoundsInScreen(r)
+            val f = factsOf(node)
+            if (f.clickable && f.visible) {
+                val r = f.rect
                 val cw = r.width().toFloat()
                 val ch = r.height().toFloat()
                 val cx = r.exactCenterX()
@@ -298,8 +306,8 @@ class NodeScanner(rules: List<SkipRule>) {
         queue.add(root to 0)
         while (queue.isNotEmpty() && out.size < POPUP_SCAN_NODES) {
             val (node, depth) = queue.removeFirst()
-            val r = Rect()
-            node.getBoundsInScreen(r)
+            val f = factsOf(node)
+            val r = f.rect
             // 负宽高（滚动动画里的数码轮）与越界节点（WebView 常用 Integer.MIN_VALUE
             // 表示"未布局"）直接丢弃，否则会把包围盒拉爆
             if (!r.isEmpty && r.width() > 0 && r.height() > 0 &&
@@ -310,9 +318,9 @@ class NodeScanner(rules: List<SkipRule>) {
                     Snap(
                         node = node,
                         rect = Rect(r),
-                        cls = node.className?.toString() ?: "",
-                        text = nodeText(node),
-                        clickable = node.isClickable,
+                        cls = f.cls,
+                        text = f.label,
+                        clickable = f.clickable,
                     )
                 )
             }
@@ -380,15 +388,6 @@ class NodeScanner(rules: List<SkipRule>) {
             }
             if (vid != null && c.viewIds.any { vid.contains(it) }) return c
         }
-        return null
-    }
-
-    /** text 优先，无 text 用 contentDescription（图片型"跳过"按钮常只有 desc） */
-    private fun nodeText(node: AccessibilityNodeInfo): String? {
-        val t = node.text?.toString()
-        if (!t.isNullOrBlank()) return t
-        val d = node.contentDescription?.toString()
-        if (!d.isNullOrBlank()) return d
         return null
     }
 

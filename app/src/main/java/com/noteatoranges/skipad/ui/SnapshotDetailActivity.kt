@@ -164,12 +164,16 @@ class SnapshotDetailActivity : AppCompatActivity() {
         if (n.text.isNotEmpty() || n.desc.isNotEmpty()) opts.add(OPT_TEXT)
         if (n.vid.isNotEmpty()) opts.add(OPT_VID)
         opts.add(OPT_POINT)
+        // 无文字的图片按钮唯一的稳定定位：挂在它自己（或旁边卡片）的控件引用上，
+        // 偏移用 dp 而不是屏幕百分比，换机型/分屏/弹窗变高都不会偏
+        if (n.vid.isNotEmpty() || n.text.isNotEmpty() || n.desc.isNotEmpty()) opts.add(OPT_RELATIVE)
         AlertDialog.Builder(this)
             .setTitle("为 ${meta.pkg} 生成规则")
             .setItems(opts.toTypedArray()) { _, which ->
                 when (opts[which]) {
                     OPT_TEXT -> askText(n)
                     OPT_VID -> confirm("node", viewId = n.vid)
+                    OPT_RELATIVE -> askRelative(n)
                     else -> {
                         val dm = resources.displayMetrics
                         confirm(
@@ -180,6 +184,39 @@ class SnapshotDetailActivity : AppCompatActivity() {
                     }
                 }
             }
+            .show()
+    }
+
+    /** 相对控件坐标：落点 = 锚点中心 X + dx、锚点底边 Y + dy，单位 dp */
+    private fun askRelative(n: SnapshotStore.Node) {
+        val anchor = n.vid.ifEmpty { n.text.ifEmpty { n.desc } }
+        val input = EditText(this).apply {
+            setText("0, 0")
+            setSelection(text.length)
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("相对此控件")
+            .setMessage(
+                "锚点：${anchor.take(30)}\n\n" +
+                    "格式：dx, dy（dp）。0, 0 = 点这个控件本身；" +
+                    "要点头顶卡片下方的关闭钮，就选那张卡片再填 0, 24。"
+            )
+            .setView(input)
+            .setPositiveButton("下一步") { _, _ ->
+                val parts = input.text.toString().split(",", "，")
+                val dx = parts.getOrNull(0)?.trim()?.toIntOrNull() ?: 0
+                val dy = parts.getOrNull(1)?.trim()?.toIntOrNull() ?: 0
+                val hasVid = n.vid.isNotEmpty()
+                confirm(
+                    "point",
+                    anchorVid = if (hasVid) n.vid else null,
+                    anchorText = if (hasVid) null else n.text.ifEmpty { n.desc }.takeIf { it.isNotEmpty() },
+                    dxDp = dx,
+                    dyDp = dy,
+                )
+            }
+            .setNegativeButton("取消", null)
             .show()
     }
 
@@ -225,14 +262,32 @@ class SnapshotDetailActivity : AppCompatActivity() {
         textContains: String? = null,
         xRatio: Float? = null,
         yRatio: Float? = null,
+        anchorVid: String? = null,
+        anchorText: String? = null,
+        dxDp: Int? = null,
+        dyDp: Int? = null,
     ) {
         AlertDialog.Builder(this)
             .setTitle("确认生成")
-            .setMessage(preview(viewId, textContains, xRatio, yRatio))
+            .setMessage(
+                preview(viewId, textContains, xRatio, yRatio, anchorVid, anchorText, dxDp, dyDp) +
+                    "\n\n只在「${meta.activity.substringAfterLast('.').ifEmpty { "本页面" }}」生效。" +
+                    "动作默认点击，可在规则页改成返回键。"
+            )
             .setPositiveButton("保存") { _, _ ->
                 RuleStore.add(
                     this,
-                    rule(kind, viewId = viewId, textContains = textContains, xRatio = xRatio, yRatio = yRatio),
+                    rule(
+                        kind,
+                        viewId = viewId,
+                        textContains = textContains,
+                        xRatio = xRatio,
+                        yRatio = yRatio,
+                        anchorVid = anchorVid,
+                        anchorText = anchorText,
+                        dxDp = dxDp,
+                        dyDp = dyDp,
+                    ),
                 )
                 Toast.makeText(this, R.string.rule_saved, Toast.LENGTH_SHORT).show()
             }
@@ -245,9 +300,30 @@ class SnapshotDetailActivity : AppCompatActivity() {
         textContains: String?,
         xRatio: Float?,
         yRatio: Float?,
+        anchorVid: String? = null,
+        anchorText: String? = null,
+        dxDp: Int? = null,
+        dyDp: Int? = null,
     ): String {
         val sb = StringBuilder()
         when {
+            anchorVid != null || anchorText != null -> {
+                sb.append("方式：相对控件（锚点")
+                sb.append(if (anchorVid != null) " id=$anchorVid" else " 文字「${anchorText?.take(16)}」")
+                sb.append("）偏移 ${dxDp ?: 0}, ${dyDp ?: 0} dp\n\n")
+                val hits = nodes.filter {
+                    if (anchorVid != null) it.vid.contains(anchorVid, ignoreCase = true)
+                    else it.text.contains(anchorText ?: "", ignoreCase = true) ||
+                        it.desc.contains(anchorText ?: "", ignoreCase = true)
+                }.sortedBy { it.w.toLong() * it.h }
+                if (hits.isEmpty()) {
+                    sb.append("⚠ 本帧没有这个锚点，规则可能不生效")
+                } else {
+                    val a = hits.first()
+                    sb.append("本帧命中 ${hits.size} 个锚点，取面积最小：#${a.idx} ${a.cls.substringAfterLast('.')}")
+                    sb.append("\n落点约 (${a.l + a.w / 2 + (dxDp ?: 0)}, ${a.b + (dyDp ?: 0)})")
+                }
+            }
             viewId != null -> {
                 val hits = nodes.filter { it.vid.contains(viewId, ignoreCase = true) }
                 sb.append("方式：控件 ID 包含\n$viewId\n\n")
@@ -309,6 +385,10 @@ class SnapshotDetailActivity : AppCompatActivity() {
         textContains: String? = null,
         xRatio: Float? = null,
         yRatio: Float? = null,
+        anchorVid: String? = null,
+        anchorText: String? = null,
+        dxDp: Int? = null,
+        dyDp: Int? = null,
     ) = SkipAppRule(
         id = UUID.randomUUID().toString(),
         app = meta.pkg,
@@ -320,6 +400,12 @@ class SnapshotDetailActivity : AppCompatActivity() {
         yRatio = yRatio,
         delayMs = 900L,
         createdAt = System.currentTimeMillis(),
+        // 快照是在哪个页面抓的，规则就先只在那个页面生效；换页不生效，误触面最小
+        activity = meta.activity.takeIf { it.isNotBlank() },
+        anchorVid = anchorVid,
+        anchorText = anchorText,
+        dxDp = dxDp,
+        dyDp = dyDp,
     )
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
@@ -336,7 +422,8 @@ class SnapshotDetailActivity : AppCompatActivity() {
     private companion object {
         const val OPT_TEXT = "按文字"
         const val OPT_VID = "按控件 ID"
-        const val OPT_POINT = "按坐标"
+        const val OPT_POINT = "按坐标（屏幕比例）"
+        const val OPT_RELATIVE = "相对此控件（推荐无文字按钮）"
 
         /** 抽核心词用的词表，长词在前（firstOrNull 取第一个命中） */
         val CORE_WORDS = listOf("跳过广告", "关闭", "跳过", "close", "skip", "×", "✕")

@@ -21,6 +21,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.noteatoranges.skipad.core.BuiltinRules
 import com.noteatoranges.skipad.core.ClickPerformer
+import com.noteatoranges.skipad.core.NodeFactsCache
 import com.noteatoranges.skipad.core.NodeScanner
 import com.noteatoranges.skipad.core.SkipRule
 import com.noteatoranges.skipad.db.RuleStore
@@ -49,6 +50,19 @@ class SkipAccessibilityService : AccessibilityService() {
     private var userRulesVersionSeen = -1
     private var clicker: ClickPerformer? = null
     private var lastHandleAt = 0L
+
+    /** 两个通道共享的节点属性缓存：同一次事件里弹窗通道直接复用开屏通道读过的属性 */
+    private val factsCache = NodeFactsCache()
+
+    /** 扫描器重建的键（规则版本 + 包名 + 页面）：换 App / 换页面都要重建，否则规则会跨页生效 */
+    private var userScannerKey: String? = null
+
+    /** 每条规则的运行态：上次动作时间与累计次数（换页面清零） */
+    private class RuleRun(var lastAt: Long = 0L, var count: Int = 0)
+    private val ruleState = HashMap<String, RuleRun>()
+
+    /** 每个 App 上次执行规则时的页面，用于判断“换页” */
+    private val stateActivity = HashMap<String, String>()
 
     /** 快照广播只注册一次：onServiceConnected 可能被系统重复回调，重复注册会导致一次点击抓多张 */
     private var snapshotRegistered = false
@@ -95,7 +109,7 @@ class SkipAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        builtinScanner = NodeScanner(BuiltinRules.defaults()).also {
+        builtinScanner = NodeScanner(BuiltinRules.defaults(), factsCache).also {
             it.verbose = Log.isLoggable(TAG, Log.VERBOSE)
         }
         clicker = ClickPerformer(this)
@@ -166,33 +180,129 @@ class SkipAccessibilityService : AccessibilityService() {
      * 不依赖任何启发式判断，因此零误判。冷启动开屏仍由 [schedulePointTaps] 自动触发。
      */
     fun bubbleLongClicked() {
-        val pkg = rootInActiveWindow?.packageName?.toString()
-        if (pkg == null) {
+        val root = rootInActiveWindow
+        val pkg = root?.packageName?.toString()
+        if (pkg == null || root == null) {
             bubbleToast("读不到当前页面")
             return
         }
-        val rules = RuleStore.pointRules(this).filter { it.app == pkg }
+        val act = lastActivityClass[pkg] ?: ""
+        val rules = RuleStore.pointRules(this, pkg, act)
         if (rules.isEmpty()) {
             val label = com.noteatoranges.skipad.util.AppLabels.get(this, pkg).label
             bubbleToast("$label 没有坐标规则")
             return
         }
-        val w = resources.displayMetrics.widthPixels
-        val h = resources.displayMetrics.heightPixels
         var ok = 0
         rules.forEach { r ->
-            val x = w * (r.xRatio ?: 0.93f)
-            val y = h * (r.yRatio ?: 0.065f)
-            if (clicker?.clickPoint(x, y) == true) ok++
-            Log.d(TAG, "manual-point ${r.id} ${pkg} (${(xRatioOf(r) * 100).toInt()}%,${(yRatioOf(r) * 100).toInt()}%) ok=${ok > 0}")
+            val point = resolvePoint(root, r) ?: run {
+                bubbleToast("规则 ${r.id.take(6)} 的锚点控件不在当前页面")
+                return@forEach
+            }
+            val fired = when (r.action) {
+                SkipRule.ACTION_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
+                SkipRule.ACTION_NONE -> true
+                else -> clicker?.clickPoint(point.first, point.second) == true
+            }
+            if (fired) ok++
+            Log.d(
+                TAG,
+                "manual-point ${r.id} ${r.actionLabel} $pkg" +
+                    " (${(point.first / resources.displayMetrics.widthPixels * 100).toInt()}%," +
+                    "${(point.second / resources.displayMetrics.heightPixels * 100).toInt()}%) ok=$fired",
+            )
         }
-        bubbleToast("已按 ${rules.size} 条坐标规则点击")
+        bubbleToast("已执行 ${rules.size} 条坐标规则（成功 $ok）")
         // 手动点过之后，弹窗通道短时间内不要再来一次，避免同一下点两遍
         lastPopupClickAt = SystemClock.elapsedRealtime()
     }
 
-    private fun xRatioOf(r: com.noteatoranges.skipad.db.SkipAppRule): Float = r.xRatio ?: 0.93f
-    private fun yRatioOf(r: com.noteatoranges.skipad.db.SkipAppRule): Float = r.yRatio ?: 0.065f
+    /** 1dp 对应的像素，锚点偏移用 */
+    private fun dp(v: Int): Float = v * resources.displayMetrics.density
+
+    /**
+     * 解析坐标规则的落点。
+     *
+     * 有锚点时按锚点控件的实际矩形算（锚点中心 + dx，锚点底边 + dy），这样换机型、
+     * 分屏、弹窗内容变高变矮都不影响——固定屏幕比例做不到这点；
+     * 锚点找不到（页面变了）才退回屏幕比例，两者都没有就放弃本次。
+     */
+    private fun resolvePoint(root: AccessibilityNodeInfo?, r: com.noteatoranges.skipad.db.SkipAppRule): Pair<Float, Float>? {
+        if (r.hasAnchor) {
+            val anchor = findAnchorRect(root, r)
+            if (anchor != null) {
+                return (anchor.exactCenterX() + dp(r.dxDp ?: 0)) to
+                    (anchor.bottom.toFloat() + dp(r.dyDp ?: 0))
+            }
+            Log.d(TAG, "anchor-miss ${r.id} vid=${r.anchorVid} text=${r.anchorText}")
+            if (r.xRatio == null || r.yRatio == null) return null
+        }
+        val xr = r.xRatio ?: return null
+        val yr = r.yRatio ?: return null
+        return resources.displayMetrics.widthPixels * xr to resources.displayMetrics.heightPixels * yr
+    }
+
+    /** 在树里找锚点控件，多个命中时取面积最小的那个（最具体的那个才是按钮本体） */
+    private fun findAnchorRect(root: AccessibilityNodeInfo?, r: com.noteatoranges.skipad.db.SkipAppRule): Rect? {
+        root ?: return null
+        val vid = r.anchorVid?.takeIf { it.isNotBlank() }?.lowercase(java.util.Locale.ROOT)
+        val txt = r.anchorText?.takeIf { it.isNotBlank() }
+        if (vid == null && txt == null) return null
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var best: Rect? = null
+        var bestArea = Int.MAX_VALUE
+        var n = 0
+        while (queue.isNotEmpty() && n < ANCHOR_SCAN_NODES) {
+            val node = queue.removeFirst()
+            n++
+            val f = factsCache.of(node)
+            val vidHit = vid != null && f.vid?.lowercase(java.util.Locale.ROOT)?.contains(vid) == true
+            val textHit = txt != null &&
+                (f.text?.contains(txt, ignoreCase = true) == true ||
+                    f.desc?.contains(txt, ignoreCase = true) == true)
+            if (vidHit || textHit) {
+                val rect = f.rect
+                val area = rect.width() * rect.height()
+                if (area in 1 until bestArea) {
+                    best = Rect(rect)
+                    bestArea = area
+                }
+            }
+            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
+        }
+        return best
+    }
+
+    /**
+     * 规则闸门：冷却与次数上限。
+     *
+     * 误点的代价远大于漏跳，所以判断放在动作之前，通过才记账。
+     */
+    private fun gate(key: String, cooldownMs: Long, maxCount: Int, now: Long): Boolean {
+        val st = ruleState.getOrPut(key) { RuleRun() }
+        if (maxCount > 0 && st.count >= maxCount) {
+            Log.v(TAG, "gate-max $key ${st.count}/$maxCount")
+            return false
+        }
+        if (cooldownMs > 0 && st.lastAt > 0 && now - st.lastAt < cooldownMs) {
+            Log.v(TAG, "gate-cd $key ${now - st.lastAt}ms/${cooldownMs}ms")
+            return false
+        }
+        st.lastAt = now
+        st.count++
+        return true
+    }
+
+    /** 换 App / 换页面：清节点属性缓存与规则计数，并强制重建扫描器 */
+    private fun onPageChanged(pkg: String, activity: String) {
+        if (stateActivity[pkg] == activity) return
+        stateActivity[pkg] = activity
+        factsCache.clear()
+        val prefix = "$pkg|"
+        ruleState.keys.filter { it.startsWith(prefix) }.forEach { ruleState.remove(it) }
+        userScannerKey = null
+    }
 
     private fun bubbleToast(msg: String) {
         mainHandler.post { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
@@ -213,12 +323,13 @@ class SkipAccessibilityService : AccessibilityService() {
                 if (lastStateChangeAt.size > 50) lastStateChangeAt.clear()
                 val freshSwitch = lastFgPkg != ep && ep !in blacklist
                 lastStateChangeAt[ep] = SystemClock.elapsedRealtime()
+                val act = event.className?.toString() ?: lastActivityClass[ep].orEmpty()
                 event.className?.toString()?.let { lastActivityClass[ep] = it }
+                // 换页：清属性缓存、清规则计数、下次事件重建扫描器
+                onPageChanged(ep, act)
                 if (freshSwitch && ep !in blacklist) {
                     // 用户 point 规则优先
-                    RuleStore.pointRules(this).filter { it.app == ep }.forEach { r ->
-                        schedulePointTaps(ep, r.xRatio ?: 0.93f, r.yRatio ?: 0.065f, r.delayMs, "rule:${r.id}")
-                    }
+                    RuleStore.pointRules(this, ep, act).forEach { r -> schedulePointTaps(ep, r) }
                     if (ep in CORNER_TAP_PKGS) scheduleCornerTaps(ep)
                 }
                 lastFgPkg = ep
@@ -252,12 +363,15 @@ class SkipAccessibilityService : AccessibilityService() {
         val pkg = root.packageName?.toString() ?: event.packageName?.toString() ?: return
         if (pkg in blacklist || pkg == packageName) return
 
-        // 刷新用户规则扫描器（版本变化才重建）
+        // 刷新用户规则扫描器（规则版本 / 包名 / 页面任一变化就重建）
         val ver = RuleStore.version(this)
-        if (ver != userRulesVersionSeen) {
+        val act = lastActivityClass[pkg].orEmpty()
+        val key = "$ver|$pkg|$act"
+        if (key != userScannerKey) {
             userRulesVersionSeen = ver
-            val nodeRules = RuleStore.nodeRulesAsScannerRules(this)
-            userScanner = if (nodeRules.isEmpty()) null else NodeScanner(nodeRules).also {
+            userScannerKey = key
+            val nodeRules = RuleStore.nodeRulesAsScannerRules(this, pkg, act)
+            userScanner = if (nodeRules.isEmpty()) null else NodeScanner(nodeRules, factsCache).also {
                 it.verbose = Log.isLoggable(TAG, Log.VERBOSE)
             }
         }
@@ -299,13 +413,26 @@ class SkipAccessibilityService : AccessibilityService() {
         Log.d(TAG, "match $pkg: ${userScanner?.lastDebug ?: builtinScanner?.lastDebug}")
         dumpTree(root, pkg, "match")
 
-        if (clicker?.click(hit.first) == true) {
-            lastSkipWindow = windowKeyFor(pkg, event, root)
-            lastSkipAt = now
-            pending = PendingSkip(lastSkipWindow ?: "", pkg, detail, 0)
-            val token = pending
-            mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
+        val rule = hit.second
+        // 冷却 / 次数上限：拦在这里，误点的代价远大于漏跳
+        if (!gate("$pkg|${rule.id}", rule.cooldownMs, rule.maxCount, now)) return
+        if (rule.action == SkipRule.ACTION_NONE) {
+            Log.d(TAG, "match-only $pkg 「$detail」 规则=${rule.id}")
+            return
         }
+        val fired = when (rule.action) {
+            SkipRule.ACTION_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
+            else -> clicker?.click(hit.first) == true
+        }
+        if (!fired) {
+            Log.d(TAG, "action-fail $pkg ${rule.action} 规则=${rule.id}")
+            return
+        }
+        lastSkipWindow = windowKeyFor(pkg, event, root)
+        lastSkipAt = now
+        pending = PendingSkip(lastSkipWindow ?: "", pkg, detail, 0)
+        val token = pending
+        mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
     }
 
     /**
@@ -436,16 +563,29 @@ class SkipAccessibilityService : AccessibilityService() {
 
     // ———————— 坐标点按 ————————
 
-    private fun schedulePointTaps(pkg: String, xRatio: Float, yRatio: Float, delayMs: Long, tag: String) {
-        listOf(delayMs, delayMs + 1000).forEach { d ->
+    private fun schedulePointTaps(pkg: String, r: com.noteatoranges.skipad.db.SkipAppRule) {
+        // 开屏窗口里 root 常常还是旧窗口，落点必须在真正要点的时刻算，不能提前算好
+        listOf(r.delayMs, r.delayMs + 1000).forEach { d ->
             mainHandler.postDelayed({
                 val root = rootInActiveWindow ?: return@postDelayed
                 if (root.packageName?.toString() != pkg) return@postDelayed
-                val ok = clicker?.clickPoint(
-                    resources.displayMetrics.widthPixels * xRatio,
-                    resources.displayMetrics.heightPixels * yRatio,
-                ) ?: false
-                Log.d(TAG, "point $tag $pkg ok=$ok (${(xRatio * 100).toInt()}%,${(yRatio * 100).toInt()}%)")
+                val now = SystemClock.elapsedRealtime()
+                if (!gate("$pkg|${r.id}", r.cooldownMs, r.maxCount, now)) return@postDelayed
+                val point = resolvePoint(root, r) ?: return@postDelayed
+                val fired = when (r.action) {
+                    SkipRule.ACTION_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
+                    SkipRule.ACTION_NONE -> {
+                        Log.d(TAG, "point-match-only ${r.id} $pkg")
+                        true
+                    }
+                    else -> clicker?.clickPoint(point.first, point.second) ?: false
+                }
+                Log.d(
+                    TAG,
+                    "point ${r.id} ${r.actionLabel} $pkg ok=$fired" +
+                        " (${(point.first / resources.displayMetrics.widthPixels * 100).toInt()}%," +
+                        "${(point.second / resources.displayMetrics.heightPixels * 100).toInt()}%)",
+                )
             }, d)
         }
     }
@@ -693,6 +833,9 @@ class SkipAccessibilityService : AccessibilityService() {
 
         /** 内容变化事件的最小间隔：滑动信息流时一秒能来几十个，没必要每个都扫 */
         const val CONTENT_THROTTLE_MS = 900L
+
+        /** 找锚点控件的遍历上限：锚点通常就在弹窗里，不用扫全树 */
+        const val ANCHOR_SCAN_NODES = 600
 
         /** 弹窗点击后的冷却：同一 App 20 秒内不再点弹窗关闭钮 */
         const val POPUP_COOLDOWN_MS = 20000L

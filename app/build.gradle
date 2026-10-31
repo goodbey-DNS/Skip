@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
 }
@@ -13,8 +13,8 @@ android {
         applicationId "com.noteatoranges.skipad"
         minSdk 26
         targetSdk 34
-        versionCode 32
-        versionName "0.9.3"
+        versionCode 34
+        versionName "0.10.0"
     }
 
     // 固定签名：CI 从 GitHub Secrets 还原 keystore 后设这两个环境变量，

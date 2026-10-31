@@ -102,13 +102,48 @@ class RulesActivity : AppCompatActivity() {
                     "node" -> listOfNotNull(
                         r.viewId?.let { "id=$it" },
                         r.textContains?.let { "文本=$it" },
+                        "动作=${r.actionLabel}",
                     ).joinToString(" / ")
-                    else -> "坐标 (${(100 * (r.xRatio ?: 0f)).toInt()}%, ${(100 * (r.yRatio ?: 0f)).toInt()}%) 延迟${r.delayMs}ms"
+                    else -> buildString {
+                        if (r.hasAnchor) {
+                            append("锚点=${r.anchorVid?.substringAfterLast('/') ?: r.anchorText}")
+                            append(" 偏移(${r.dxDp ?: 0},${r.dyDp ?: 0})dp")
+                        } else {
+                            append("坐标 (${(100 * (r.xRatio ?: 0f)).toInt()}%, ${(100 * (r.yRatio ?: 0f)).toInt()}%)")
+                        }
+                        append(" · 动作=${r.actionLabel} 延迟${r.delayMs}ms")
+                    }
                 }
                 textSize = 12f
                 setTextColor(getColor(R.color.text_secondary))
             })
+            info.addView(TextView(this).apply {
+                val scope = r.activity?.substringAfterLast('.')?.takeIf { it.isNotEmpty() } ?: "全应用"
+                val limits = buildString {
+                    if (r.cooldownMs > 0) append("冷却${r.cooldownMs}ms")
+                    if (r.maxCount > 0) append(if (isEmpty()) "最多${r.maxCount}次" else " 最多${r.maxCount}次")
+                }
+                text = "范围：$scope${if (limits.isEmpty()) "" else " · $limits"}"
+                textSize = 11f
+                setTextColor(getColor(R.color.text_secondary))
+            })
             row.addView(info)
+            // 改动作：点击 → 返回键 → 只匹配，循环切换（有些弹窗只有返回键能关）
+            info.addView(TextView(this).apply {
+                text = "改动作"
+                textSize = 11f
+                setTextColor(getColor(R.color.status_on))
+                setPadding(0, dp(2), 0, dp(2))
+                setOnClickListener {
+                    val updated = RuleStore.cycleAction(this@RulesActivity, r.id)
+                    Toast.makeText(
+                        this@RulesActivity,
+                        "动作已改为「${updated?.actionLabel ?: ""}」",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    renderRules()
+                }
+            })
             val sw = Switch(this).apply {
                 isChecked = r.enabled
                 setOnCheckedChangeListener { _, checked ->
