@@ -66,6 +66,9 @@ class SkipAccessibilityService : AccessibilityService() {
     /** 弹窗通道节流：每次全树扫描有成本，未命中时也不低于这个间隔 */
     private var lastPopupScanAt = 0L
 
+    /** 内容变化事件的独立节流时间戳 */
+    private var lastContentAt = 0L
+
     /** 弹窗点击冷却：误判的代价是点掉一个正常控件，宁可慢也不连着点 */
     private var lastPopupClickAt = 0L
 
@@ -229,6 +232,13 @@ class SkipAccessibilityService : AccessibilityService() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastHandleAt < THROTTLE_MS) return
         lastHandleAt = now
+
+        // 内容变化事件在信息流里一秒能来几十个，每次都要全树走一遍无障碍节点，
+        // 是耗电主因。开屏广告真正出现时伴随 WINDOW_STATE_CHANGED，内容变化慢一拍不影响
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            if (now - lastContentAt < CONTENT_THROTTLE_MS) return
+            lastContentAt = now
+        }
 
         val root = rootInActiveWindow ?: return
         val pkg = root.packageName?.toString() ?: event.packageName?.toString() ?: return
@@ -667,6 +677,9 @@ class SkipAccessibilityService : AccessibilityService() {
 
         /** 窗口切换时弹窗可能刚出现，用更短的间隔 */
         const val POPUP_SCAN_STATE_MS = 500L
+
+        /** 内容变化事件的最小间隔：滑动信息流时一秒能来几十个，没必要每个都扫 */
+        const val CONTENT_THROTTLE_MS = 900L
 
         /** 弹窗点击后的冷却：同一 App 20 秒内不再点弹窗关闭钮 */
         const val POPUP_COOLDOWN_MS = 20000L
