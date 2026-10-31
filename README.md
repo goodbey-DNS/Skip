@@ -1,4 +1,4 @@
-# SkipAd
+# Skip
 
 > 基于 Android 无障碍服务的开屏广告自动跳过工具 —— 类李跳跳的**开源自用版**。
 > 零权限（连 INTERNET 都不申请）、零联网、所有识别本地完成。
@@ -37,7 +37,7 @@ git clone https://github.com/notEatOranges/SkipAd.git
 
 ## 致谢与声明
 
-- 思路致敬：[李跳跳](https://www.cnblogs.com/Cl0ud/p/17684204.html)（已停更）、[GKD](https://github.com/gkd-kit/gkd)（GPL-3.0，本项目仅借鉴设计思想，未复制任何代码）、[Android-Touch-Helper](https://github.com/zfdang/Android-Touch-Helper)（MIT）；
+- 思路致敬：[李跳跳]（已停更）、[GKD](https://github.com/gkd-kit/gkd)（GPL-3.0，本项目仅借鉴设计思想，未复制任何代码）、[Android-Touch-Helper](https://github.com/zfdang/Android-Touch-Helper)（MIT）；
 - **本项目仅供学习交流与个人使用，禁止用于商业或非法用途，不上架任何应用商店。** 纯属个人测试娱乐，
 
 ## License
