@@ -35,6 +35,85 @@ class MaintenanceActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.clear_stats_button).setOnClickListener { confirmClearStats() }
         findViewById<Button>(R.id.export_backup_button).setOnClickListener { exportBackup() }
+        findViewById<Button>(R.id.import_backup_button).setOnClickListener {
+            // 选文件交给系统文件选择器（SAF），不申请存储权限
+            pickBackup.launch(arrayOf("*/*"))
+        }
+        findViewById<TextView>(R.id.restore_latest_button).setOnClickListener {
+            val latest = Backup.latestBackup(applicationContext)
+            if (latest == null) {
+                Toast.makeText(this, "backup 目录里还没有备份文件", Toast.LENGTH_SHORT).show()
+            } else {
+                confirmImport(latest, "最近备份 ${latest.name}")
+            }
+        }
+    }
+
+    private val pickBackup = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) confirmImport(uri, uri.lastPathSegment ?: "选中的备份文件")
+    }
+
+    private fun confirmImport(file: java.io.File, label: String) {
+        AlertDialog.Builder(this)
+            .setTitle("从备份恢复")
+            .setMessage(
+                "来自：$label\n\n" +
+                    "会覆盖自建规则与关键字（备份里没有的那类不动），快照按目录合并、不删现有。\n" +
+                    "恢复前会先自动导出当前数据到 backup 目录作为后悔药。"
+            )
+            .setNegativeButton("取消", null)
+            .setPositiveButton("恢复") { _, _ -> doImportFile(file) }
+            .show()
+    }
+
+    private fun confirmImport(uri: android.net.Uri, label: String) {
+        AlertDialog.Builder(this)
+            .setTitle("从备份恢复")
+            .setMessage(
+                "来自：$label\n\n" +
+                    "会覆盖自建规则与关键字（备份里没有的那类不动），快照按目录合并、不删现有。\n" +
+                    "恢复前会先自动导出当前数据到 backup 目录作为后悔药。"
+            )
+            .setNegativeButton("取消", null)
+            .setPositiveButton("恢复") { _, _ -> doImportUri(uri) }
+            .show()
+    }
+
+    private fun doImportFile(file: java.io.File) {
+        Toast.makeText(this, "正在恢复…", Toast.LENGTH_SHORT).show()
+        Io.run("backup-import") {
+            val safe = Backup.export(applicationContext)
+            val res = runCatching { file.inputStream().use { Backup.restore(applicationContext, it) } }.getOrNull()
+            afterImport(res, safe)
+        }
+    }
+
+    private fun doImportUri(uri: android.net.Uri) {
+        Toast.makeText(this, "正在恢复…", Toast.LENGTH_SHORT).show()
+        Io.run("backup-import") {
+            val safe = Backup.export(applicationContext)
+            val res = runCatching {
+                contentResolver.openInputStream(uri)?.use { Backup.restore(applicationContext, it) }
+            }.getOrNull()
+            afterImport(res, safe)
+        }
+    }
+
+    private fun afterImport(res: Backup.Restored?, safe: java.io.File?) {
+        runOnUiThread {
+            if (res == null) {
+                Toast.makeText(this, "恢复失败：不是可识别的 SkipAd 备份", Toast.LENGTH_LONG).show()
+                return@runOnUiThread
+            }
+            val safeText = safe?.let { "；当前数据已备份为 ${it.name}" } ?: ""
+            Toast.makeText(
+                this,
+                "已恢复：规则 ${res.rules} 条、关键字 ${res.keywords} 条、快照 ${res.snapshots} 份$safeText",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
     }
 
     /** 导出备份：打包在 IO 线程做，完成后直接拉起系统分享面板 */

@@ -116,15 +116,40 @@
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
 
-                <Button
-                    android:id="@+id/export_backup_button"
-                    style="?android:attr/borderlessButtonStyle"
-                    android:layout_width="wrap_content"
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:text="导出备份"
-                    android:textColor="@color/primary"
-                    android:textSize="13sp" />
+                    android:orientation="horizontal">
+
+                    <Button
+                        android:id="@+id/export_backup_button"
+                        style="?android:attr/borderlessButtonStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="导出备份"
+                        android:textColor="@color/primary"
+                        android:textSize="13sp" />
+
+                    <Button
+                        android:id="@+id/import_backup_button"
+                        style="?android:attr/borderlessButtonStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="从备份恢复"
+                        android:textColor="@color/primary"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/restore_latest_button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:paddingTop="2dp"
+                    android:paddingBottom="2dp"
+                    android:text="恢复最近一次备份（backup 目录里最新那份）"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
             </LinearLayout>
 
             <TextView

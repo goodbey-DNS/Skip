@@ -165,6 +165,15 @@ object RuleStore {
         write(context, read(context).filter { it.id != id })
     }
 
+    /** 从备份恢复：JSON 不合法直接抛错（调用方兜），合法才整份覆盖并让服务重建扫描器 */
+    fun importFrom(context: Context, bytes: ByteArray): Int {
+        val text = String(bytes, Charsets.UTF_8).trim()
+        val arr = JSONArray(text)
+        file(context).writeText(text)
+        bumpVersion(context)
+        return arr.length()
+    }
+
     fun setEnabled(context: Context, id: String, enabled: Boolean) {
         write(context, read(context).map { if (it.id == id) it.copy(enabled = enabled) else it })
     }

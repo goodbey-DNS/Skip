@@ -115,6 +115,16 @@ object KeywordStore {
         write(context, read(context).filter { it.id != id })
     }
 
+    /** 从备份恢复：合法 JSON 才覆盖，并让服务重新取词 */
+    fun importFrom(context: Context, bytes: ByteArray): Int {
+        val text = String(bytes, Charsets.UTF_8).trim()
+        val arr = JSONArray(text)
+        file(context).writeText(text)
+        val v = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("v", 0) + 1
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt("v", v).apply()
+        return arr.length()
+    }
+
     fun setEnabled(context: Context, id: String, enabled: Boolean) {
         write(context, read(context).map { if (it.id == id) it.copy(enabled = enabled) else it })
     }
