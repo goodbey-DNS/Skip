@@ -324,6 +324,15 @@ class SnapshotDetailActivity : AppCompatActivity() {
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
 
+    /**
+     * 节点列表是动态生成的（一个大快照能到 1600 个 View），
+     * 页面退掉后主动断开引用，别等 GC 慢慢收
+     */
+    override fun onDestroy() {
+        super.onDestroy()
+        if (::nodeContainer.isInitialized) nodeContainer.removeAllViews()
+    }
+
     private companion object {
         const val OPT_TEXT = "按文字"
         const val OPT_VID = "按控件 ID"

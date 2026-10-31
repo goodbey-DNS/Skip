@@ -8,7 +8,13 @@ object AppLabels {
 
     data class Info(val label: String, val icon: Drawable?)
 
-    private val cache = HashMap<String, Info>()
+    /** 最多缓存这么多个应用，超出按 LRU 淘汰（图标是位图，不设上限会一直长） */
+    private const val MAX_CACHE = 30
+
+    private val cache = object : LinkedHashMap<String, Info>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Info>): Boolean =
+            size > MAX_CACHE
+    }
 
     fun get(context: Context, pkg: String): Info {
         synchronized(cache) { cache[pkg]?.let { return it } }

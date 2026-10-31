@@ -560,6 +560,9 @@ class SkipAccessibilityService : AccessibilityService() {
                         val nodeCount = nodes.size
                         Io.run("snapshot-save") {
                             val dir = SnapshotStore.save(appCtx, pkg, act, nodes, bitmap)
+                            // 全屏图 1220×2712 一张 13MB，compress 完就没人用了，
+                            // 不主动回收会一直压在 native heap，抓几次就积几十 MB
+                            bitmap?.recycle()
                             StatsStore.logEvent(appCtx, "快照已保存：$pkg（$nodeCount 节点）")
                             Log.d(TAG, "snapshot saved ${dir.path}")
                         }
@@ -590,6 +593,8 @@ class SkipAccessibilityService : AccessibilityService() {
             )
             val bitmap = hw?.copy(Bitmap.Config.ARGB_8888, false)
             screenshot.hardwareBuffer.close()
+            // 硬件位图占的是图形内存，copy 完就没用了
+            hw?.recycle()
             onResult(bitmap)
         }
 
