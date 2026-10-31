@@ -37,7 +37,7 @@ git clone https://github.com/notEatOranges/SkipAd.git
 
 ## 致谢与声明
 
-- 思路致敬：[李跳跳](https://www.cnblogs.com/Cl0ud/p/17684204.html)（已停更）、[GKD](https://github.com/gkd-kit/gkd)（GPL-3.0，本项目仅借鉴设计思想，未复制任何代码）、[Android-Touch-Helper](https://github.com/zfdang/Android-Touch-Helper)（MIT）；
+- 思路致敬：[李跳跳]（已停更）、[GKD](https://github.com/gkd-kit/gkd)（GPL-3.0，本项目仅借鉴设计思想，未复制任何代码）、[Android-Touch-Helper](https://github.com/zfdang/Android-Touch-Helper)（MIT）；
 - **本项目仅供学习交流与个人使用，禁止用于商业或非法用途，不上架任何应用商店。** 纯属个人测试娱乐，
 
 ## License
