@@ -1,0 +1,39 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.noteatoranges.skipad'
+    // 34：工程实际用到的最高 API 是 31（blurBehindRadius / isAccessibilityTool），
+    // 34 是 AGP 8.2.2 原生支持的上限，云端 CI 无需额外装预览版 platform
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.noteatoranges.skipad"
+        minSdk 26
+        targetSdk 34
+        versionCode 19
+        versionName "0.8.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    // M1 刻意保持最小依赖：不引入 material/compose，减小体积与攻击面
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+}

@@ -1,0 +1,56 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install platform and build-tools
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
+      # runner 在海外：把国内镜像换成官方源，避免 130MB 发行包拉取超时
+      - name: Use official Gradle distribution
+        run: |
+          sed -i 's#https://mirrors.cloud.tencent.com/gradle#https://services.gradle.org/distributions#' gradle/wrapper/gradle-wrapper.properties
+          grep distributionUrl gradle/wrapper/gradle-wrapper.properties
+
+      - name: Prefer official Maven repos
+        run: |
+          sed -i '/maven.aliyun.com/d' settings.gradle
+          cat settings.gradle
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SkipAd-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

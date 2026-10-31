@@ -1,0 +1,7 @@
+# 统一换行：源码 LF，Windows 脚本 CRLF，二进制原样
+* text=auto eol=lf
+gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.png binary

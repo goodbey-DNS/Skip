@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 快进双三角（白色），处于 adaptive icon 66x66 安全区内 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M40,40 L40,68 L58,54 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M58,40 L58,68 L76,54 Z" />
+</vector>

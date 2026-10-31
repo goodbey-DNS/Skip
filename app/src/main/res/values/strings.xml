@@ -1,0 +1,133 @@
+<resources>
+    <string name="app_name">SkipAd</string>
+    <string name="app_subtitle">开屏广告自动跳过 · 零联网权限 · 本地识别</string>
+
+    <string name="section_status">无障碍服务</string>
+    <string name="status_on">✓ 已开启，正在自动跳过开屏广告</string>
+    <string name="status_off">✗ 未开启，点下方按钮去系统设置开启</string>
+    <string name="action_enable">去开启无障碍服务</string>
+    <string name="action_open_settings">查看无障碍设置</string>
+    <string name="action_check_now">立即自检</string>
+
+    <string name="section_rank">广告排行榜</string>
+    <string name="stats_summary_format">累计已跳过 %1$d 次开屏广告 · 涉及 %2$d 个应用</string>
+    <string name="stats_empty">还没有跳过记录——开启服务后，开屏广告的「跳过」一点就会记在这里</string>
+    <string name="rank_others_format">…还有 %1$d 个应用，共 %2$d 次</string>
+    <string name="times_format">%1$d 次</string>
+    <string name="times_format_detail">命中「%1$s」</string>
+
+    <string name="entry_recent">查看最近记录 ›</string>
+    <string name="entry_keepalive">保活与后台 ›</string>
+
+    <string name="tab_home">首页</string>
+    <string name="tab_settings">设置</string>
+    <string name="settings_group_skip">广告跳过</string>
+    <string name="settings_group_ka">保活</string>
+    <string name="settings_group_general">通用</string>
+    <string name="settings_row_rules">跳过规则与快照</string>
+    <string name="settings_row_rules_sub">自建规则管理 · 快照点选生成</string>
+    <string name="settings_row_ka">保活与后台</string>
+    <string name="settings_row_ka_sub">静默复活 · 电池优化 · 自启动</string>
+    <string name="settings_row_maintain">数据与维护</string>
+    <string name="settings_row_maintain_sub">内存占用 · 清理缓存 · 清空统计</string>
+    <string name="maintain_title">数据与维护</string>
+    <string name="clear_stats_warn_repeat">清空操作不可恢复，包含累计次数、排行榜与最近记录；保活日志不受影响。</string>
+    <string name="tab_about">关于</string>
+
+    <string name="snap_channel">快照与规则</string>
+    <string name="snap_notif_title">SkipAd 运行中</string>
+    <string name="snap_notif_text">遇到杀不掉的广告？下拉点「抓取快照」，回 App 点选生成跳过规则</string>
+    <string name="snapshot_selected">选中的元素</string>
+    <string name="snapshot_pick_hint">点选截图上的元素（或下方列表），然后生成跳过规则</string>
+    <string name="action_generate_rule">生成跳过规则</string>
+    <string name="section_nodes">全部节点（可点击的排前）</string>
+    <string name="snap_action">抓取快照</string>
+    <string name="bubble_switch_title">抓取悬浮窗</string>
+    <string name="bubble_switch_sub">开启后屏幕常驻小圆钮，广告出现时点一下即抓取，不用下拉通知栏；圆钮可拖动</string>
+    <string name="snapshot_hint">点选下方任一节点生成跳过规则；可点击的节点排在最前。生成后规则立即生效，下次同款广告自动跳过。</string>
+    <string name="snap_saved">快照已保存</string>
+    <string name="snap_failed">快照失败：没找到可抓取的应用窗口</string>
+
+    <string name="section_rules">跳过规则</string>
+    <string name="section_snapshots">快照（点开点选生成规则）</string>
+    <string name="rules_empty">还没有自建规则——用下面的快照功能生成</string>
+    <string name="snapshots_empty">还没有快照——广告在屏上时，下拉通知栏点「抓取快照」</string>
+    <string name="entry_rules">快照与规则 ›</string>
+    <string name="rule_title">跳过规则</string>
+    <string name="rule_kind_node">节点点击</string>
+    <string name="rule_kind_point">坐标点击</string>
+    <string name="rule_by_vid">按控件 ID 生成规则</string>
+    <string name="rule_by_text">按文本生成规则</string>
+    <string name="rule_by_point">按坐标生成规则</string>
+    <string name="rule_saved">规则已保存，立即生效</string>
+    <string name="rule_deleted">规则已删除</string>
+    <string name="rule_delete_confirm">删除这条规则？</string>
+
+    <string name="section_ka_settings">服务保活</string>
+    <string name="section_about">关于 SkipAd</string>
+    <string name="about_version_format">版本 v%1$s</string>
+    <string name="about_intro">安卓开屏广告自动跳过工具（类李跳跳自研版）。无障碍服务监听窗口变化，识别并自动点击「跳过」。</string>
+    <string name="section_about_privacy">隐私红线</string>
+    <string name="about_privacy_text">· 不申请 INTERNET / 存储 / 位置权限，永远\n· 所有识别与点击全部在本机完成，不上传任何数据\n· 权限清单：无障碍服务＝核心功能；通知＝掉线提醒；忽略电池优化＝降低被杀概率；WRITE_SECURE_SETTINGS＝静默复活（signature 级，须电脑 adb 手动授予）</string>
+    <string name="section_about_roadmap">开发路线</string>
+    <string name="about_roadmap_text">✅ M1 通用关键字引擎\n✅ M1.5 无障碍保活（静默复活 / 提醒模式）\n✅ M1.6 统计排行 / 电池优化 / 沉浸式\n→ M2 per-App 规则（viewId + 角落锚定坐标）与规则导入导出\n→ M3 节点快照 + 截屏点选生成规则\n→ M4 社区规则兼容 / OCR</string>
+    <string name="section_about_open">开源信息</string>
+    <string name="about_open_text">GitHub：notEatOranges/SkipAd\n许可证：MIT · 问题反馈请提 Issue\n设计文档见仓库 docs/design.md，变更记录见 CHANGELOG.md</string>
+
+    <string name="section_maintain">应用维护</string>
+    <string name="mem_format">内存占用约 %1$s MB · 数据库 %2$s KB</string>
+    <string name="action_clear_mem_cache">清除内存缓存</string>
+    <string name="action_clear_stats">清空统计数据</string>
+    <string name="clear_mem_cache_done">内存缓存已清除（图标会重新加载，无数据影响）</string>
+    <string name="clear_stats_title">清空统计数据？</string>
+    <string name="clear_stats_msg">将清空全部跳过记录：累计次数、排行榜、最近记录全部归零，且不可恢复。保活日志不受影响。</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_confirm_clear">确认清空</string>
+    <string name="clear_stats_done">统计数据已清空</string>
+
+    <string name="recent_title">最近记录</string>
+    <string name="recent_empty">暂无记录</string>
+
+    <string name="keepalive_title">保活与后台</string>
+    <string name="section_ka_mode">当前保活模式</string>
+    <string name="keepalive_mode_silent">静默复活已就绪：掉线 / 开机 / 升级后自动重新开启</string>
+    <string name="keepalive_mode_notify">提醒模式：掉线时发通知提醒（不自动开启）</string>
+    <string name="ka_mode_explain">静默复活需要电脑 adb 授权一次 WRITE_SECURE_SETTINGS（signature 级权限，正常安装拿不到），授权后本 App 才能把「自己的无障碍服务」写回系统设置并拉起。只保活 SkipAd 自己——无法替其他 App 保活，那些应用的后台存活得靠它们自己的前台服务与厂商白名单机制。</string>
+    <string name="keepalive_adb_hint">电脑连手机执行下面这条命令，升级为静默复活：</string>
+    <string name="keepalive_cmd">adb shell pm grant com.noteatoranges.skipad android.permission.WRITE_SECURE_SETTINGS</string>
+    <string name="action_copy_cmd">复制授权命令</string>
+    <string name="keepalive_copied">已复制，在电脑上执行即可</string>
+
+    <string name="section_system">系统权限</string>
+    <string name="battery_status_on">电池优化：已忽略 ✓（后台不易被杀）</string>
+    <string name="battery_status_off">电池优化：未忽略——建议申请，可显著降低服务被系统回收的概率</string>
+    <string name="action_battery">去申请忽略电池优化</string>
+    <string name="autostart_hint">自启动（荣耀）：系统不提供开关直达，下面按钮进手机管家的「应用启动管理」，找到 SkipAd 允许 自启动 / 关联启动 / 后台活动；找不到就先开一次 SkipAd 再看。</string>
+    <string name="action_autostart">去自启动管理</string>
+    <string name="action_app_info">打开应用信息</string>
+    <string name="notif_status_on">通知权限：已授权（掉线提醒可送达）</string>
+    <string name="notif_status_off">通知权限：未授权——提醒模式下收不到掉线提醒</string>
+    <string name="action_notif">去开启通知</string>
+
+    <string name="section_ka_log">保活日志</string>
+    <string name="ka_log_empty">暂无保活事件</string>
+
+    <string name="ka_scope_note">边界说明：无障碍服务被「一键强停」后 App 进入 stopped 状态，任何保活都失效（系统红线），打开一次本 App 即恢复；用户主动关闭在静默模式下也会被自动拉起，介意请保持提醒模式。</string>
+
+    <string name="ka_channel_name">服务掉线提醒</string>
+    <string name="ka_notify_title">SkipAd 无障碍服务已掉线</string>
+    <string name="ka_notify_text">点按前往无障碍设置重新开启</string>
+    <string name="ka_log_connected">保活：无障碍服务已连接</string>
+    <string name="ka_log_revived">保活：检测到服务掉线，已静默重新开启</string>
+    <string name="ka_log_detected_off">保活：检测到服务掉线（未授权静默，已发通知）</string>
+    <string name="ka_result_running">服务运行中，无需处理</string>
+    <string name="ka_result_cooldown">刚检查过，服务正在恢复中，稍后再试</string>
+    <string name="ka_result_revived">服务已掉线 → 已静默重新开启 ✓</string>
+    <string name="ka_result_notified">服务已掉线 → 未授权静默复活，已发通知提醒</string>
+
+    <string name="accessibility_service_label">SkipAd 开屏跳过</string>
+    <string name="accessibility_service_summary">自动点击开屏广告的“跳过”按钮</string>
+    <string name="accessibility_service_description">SkipAd 监听窗口内容变化，识别并自动点击开屏广告中的“跳过”按钮。本应用不申请网络与存储权限，不读取、不上传任何数据，所有识别均在本地完成。</string>
+
+    <string name="footer_note">内置通用关键字规则（跳过 / Skip / 倒计时）+ 防误触约束。\n路线图：per-App 规则 → 节点快照调试 → 社区规则兼容，详见仓库 docs/design.md</string>
+</resources>
