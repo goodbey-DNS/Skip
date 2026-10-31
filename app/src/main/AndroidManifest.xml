@@ -56,6 +56,17 @@
         <activity android:name=".ui.KeepAliveSettingsActivity" android:exported="false" />
         <activity android:name=".ui.MaintenanceActivity" android:exported="false" />
 
+        <!-- 备份导出：把 zip 通过系统分享面板交给用户（文件管理器 / 微信 / 邮件） -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <service
             android:name=".SkipAccessibilityService"
             android:exported="false"

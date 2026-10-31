@@ -15,7 +15,9 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # 钉死 24.04：ubuntu-latest 将于 2026-10-19 迁到 Ubuntu 26，
+    # 这次迁移会换掉预装的 JDK/SDK 版本组合，钉版本避免构建环境被动变化
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       # 全部 Action 用 node24 版本：node20 已于 2026 年停用，旧版会在日志里刷 deprecation 提示

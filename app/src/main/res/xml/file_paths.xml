@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 备份 zip 放在 getExternalFilesDir(null)/backup/ 下，只暴露这一个目录 -->
+<paths>
+    <external-files-path
+        name="backup"
+        path="backup/" />
+    <files-path
+        name="internal_backup"
+        path="backup/" />
+</paths>
