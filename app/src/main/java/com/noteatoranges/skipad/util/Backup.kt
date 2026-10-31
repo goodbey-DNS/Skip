@@ -113,8 +113,10 @@ object Backup {
                 e = zis.nextEntry
             }
         }
-        // 不是我们的备份就拒绝，别把别的 zip 当数据写进去
-        if (!hasManifest && rules.isEmpty() && keywords.isEmpty() && snaps.isEmpty()) return null
+        // 不是我们的备份就拒绝，别把别的 zip 当数据写进去（表达式函数里不能 return，用抛错走 catch）
+        if (!hasManifest && rules.isEmpty() && keywords.isEmpty() && snaps.isEmpty()) {
+            throw IllegalStateException("not a SkipAd backup")
+        }
 
         var rulesCount = 0
         var kwCount = 0
