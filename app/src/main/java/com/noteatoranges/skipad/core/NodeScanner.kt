@@ -221,6 +221,10 @@ class NodeScanner(
         screenH: Int,
         /** 窗口本身没铺满屏幕（对话框/浮层）：E2 用它代替“节点稀疏”判断 */
         dialogWindow: Boolean = false,
+        /** 用户自建命中词（提高识别）：形如“放弃福利”，仍受尺寸闸约束 */
+        extraClose: List<String> = emptyList(),
+        /** 用户自建排除词（防误点）：命中就整窗放弃，优先级高于所有命中证据 */
+        extraExclude: List<String> = emptyList(),
     ): PopupHit? {
         if (screenW <= 0 || screenH <= 0) return null
         val snaps = collectSnaps(root, screenW, screenH)
@@ -229,9 +233,9 @@ class NodeScanner(
             return null
         }
 
-        // 业务弹窗排除（第一道）：屏幕中央区的业务词。早退，省掉后面的包围盒计算。
+        // 业务弹窗排除（第一道）：屏幕中央区的业务词 + 用户自建排除词。
         // 只看中央区是因为首页常驻的「登录」「银行卡」在四角，不能因此整页放弃
-        businessWordIn(snaps, screenW, screenH, null)?.let {
+        businessWordIn(snaps, screenW, screenH, null, extraExclude)?.let {
             lastPopupDebug = "popup-block 业务弹窗「${it.take(12)}」"
             return null
         }
@@ -257,7 +261,7 @@ class NodeScanner(
         // 业务弹窗排除（第二道）：卡片范围内的业务词。弹窗自己的文案都在卡片里，
         // 这一道能拦住「确认收货 / 开通会员前先绑定手机号」这类不带营销词的业务弹窗
         if (card != null) {
-            businessWordIn(snaps, screenW, screenH, card)?.let {
+            businessWordIn(snaps, screenW, screenH, card, extraExclude)?.let {
                 lastPopupDebug = "popup-block 业务弹窗(卡片内)「${it.take(12)}」"
                 return null
             }
@@ -309,6 +313,15 @@ class NodeScanner(
                 AD_WORDS.any { st.contains(it, ignoreCase = true) }
             ) {
                 consider(2, s, "关闭「$st」", "E5")
+            }
+            // E7：用户自建命中词。用户明确说这是关闭按钮，位置不再限制，
+            // 但仍要求尺寸像按钮（小控件 ≤22% 屏宽，或卡片级按钮 ≤92% 宽 × ≤12% 高）
+            if (st != null && extraClose.isNotEmpty() && st.length <= 10 &&
+                extraClose.any { st.contains(it, ignoreCase = true) } &&
+                (closeSizeOk(s, screenW, screenH) ||
+                    (s.rect.width() <= screenW * 0.92f && s.rect.height() <= screenH * 0.12f))
+            ) {
+                consider(2, s, "命中「$st」", "E7")
             }
             // E4：卡片下沿内的全宽文字按钮。这类按钮高度常超 8% 屏高、宽度接近整卡，
             // 过不了 closeCandidate 的形状闸，但文字本身就是关闭语义，且有卡片做背书
@@ -384,7 +397,7 @@ class NodeScanner(
      * 业务弹窗关键词扫描。card 为 null 时只看屏幕中央区；给了卡片就只看卡片范围。
      * 返回命中的原文（用于日志），没有返回 null。
      */
-    private fun businessWordIn(snaps: List<Snap>, w: Int, h: Int, card: Rect?): String? {
+    private fun businessWordIn(snaps: List<Snap>, w: Int, h: Int, card: Rect?, extra: List<String> = emptyList()): String? {
         for (s in snaps) {
             val t = s.text ?: continue
             val cx = s.rect.exactCenterX()
@@ -395,7 +408,9 @@ class NodeScanner(
                 cx > card.left - w * 0.04f && cx < card.right + w * 0.04f &&
                     cy > card.top - h * 0.02f && cy < card.bottom + h * 0.02f
             }
-            if (inScope && POPUP_BUSINESS_WORDS.any { t.contains(it, ignoreCase = true) }) return t
+            if (!inScope) continue
+            if (POPUP_BUSINESS_WORDS.any { t.contains(it, ignoreCase = true) }) return t
+            if (extra.any { t.contains(it, ignoreCase = true) }) return t
         }
         return null
     }

@@ -11,8 +11,8 @@ android {
         applicationId "com.noteatoranges.skipad"
         minSdk 26
         targetSdk 34
-        versionCode 40
-        versionName "0.12.1"
+        versionCode 41
+        versionName "0.13.0"
     }
 
     // 固定签名：CI 从 GitHub Secrets 还原 keystore 后设这两个环境变量，
