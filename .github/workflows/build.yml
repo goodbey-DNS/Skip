@@ -73,23 +73,40 @@ jobs:
         with:
           cache-cleanup: 'on-success'
 
-      - name: Build debug APK
+      - name: Build release APK
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Verify signature
+      # 出包必须是「已签名 + 不可调试」。以前出的是 assembleDebug，
+      # android:debuggable=true，拿到手机的人可以 run-as 读私有数据、attach 调试器改内存；
+      # 对一个常驻无障碍服务的 App 来说这不是可以留的口子。
+      - name: Verify APK is signed and not debuggable
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
         run: |
+          SRC=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          echo "APK=$SRC"
           APKSH=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | head -1)
-          "$APKSH" verify --print-certs app/build/outputs/apk/debug/*.apk | grep -i 'SHA-256' || true
+          "$APKSH" verify --print-certs "$SRC" | grep -i 'SHA-256'
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::KEYSTORE_B64 未配置，release 包没有签名，停止发布"
+            exit 1
+          fi
+          AAPT=$(ls "$ANDROID_HOME"/build-tools/*/aapt2 | head -1)
+          if "$AAPT" dump badging "$SRC" | grep -q 'application-debuggable'; then
+            echo "::error::产物仍是 debuggable，停止发布"
+            exit 1
+          fi
+          echo "OK: 已签名，非 debuggable"
 
       - name: Rename APK with version
         run: |
           mkdir -p dist
-          SRC=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          SRC=$(ls app/build/outputs/apk/release/*.apk | head -1)
           NAME="SkipAd-${{ github.ref_name }}-${{ github.run_number }}.apk"
           cp "$SRC" "dist/$NAME"
           echo "APK=dist/$NAME" >> "$GITHUB_ENV"
@@ -102,11 +119,13 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
 
-      # 打 v* 标签时自动发 Release，APK 可直接下载安装，不用登录
+      # 推 tag（v*）即自动发 Release：APK 可匿名直接下载，不用登录、不用翻 Actions
       - name: Publish Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
+          name: SkipAd ${{ github.ref_name }}
           files: dist/*.apk
           generate_release_notes: true
           draft: false
+          prerelease: false

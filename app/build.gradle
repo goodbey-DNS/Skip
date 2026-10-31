@@ -11,8 +11,8 @@ android {
         applicationId "com.noteatoranges.skipad"
         minSdk 26
         targetSdk 34
-        versionCode 48
-        versionName "0.16.1"
+        versionCode 49
+        versionName "0.16.2"
     }
 
     // 固定签名：CI 从 GitHub Secrets 还原 keystore 后设这两个环境变量，
@@ -37,8 +37,12 @@ android {
             if (ciStoreB64 && ciStorePwd) signingConfig signingConfigs.ci
         }
         release {
+            // 不混淆：本工程全是自写代码，没有反射/序列化依赖，混淆只会让崩溃栈不可读
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // 出包一律走 release：debug 包的 android:debuggable=true，任何人都能
+            // run-as 读私有数据、attach 调试器改内存。CI 用 release 出包，签名与 debug 同一个
+            // keystore，覆盖安装不受影响。
             if (ciStoreB64 && ciStorePwd) signingConfig signingConfigs.ci
         }
     }

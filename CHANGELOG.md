@@ -2,6 +2,33 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.16.2 - 2026-11-01 · 权限全量审计 + 改出 release 包 + 推 tag 自动发 Release
+
+**改了什么**
+- 权限全量审计（以 `dumpsys package` 的 requested/install/runtime 三段为准，不看源码猜）：实际生效就 5 个，没有第三方库偷偷合并进来的（无 WAKE_LOCK / FOREGROUND_SERVICE / INTERNET）。逐个核对调用点，全部在用，删不掉：
+
+  | 权限 | 实际用途 | 去掉的后果 |
+  |---|---|---|
+  | `RECEIVE_BOOT_COMPLETED` | `keepalive/BootReceiver.kt:18` 开机 / 覆盖安装后立刻尝试复活 | 开机后要等一个 Job 周期（15 分钟）才恢复，升级完无障碍被系统关掉也不会自动拉回 |
+  | `SYSTEM_ALERT_WINDOW` | `util/CaptureBubble.kt:60,87` + `ui/RulesActivity.kt:56-65` 抓取悬浮窗 | 只能下拉通知栏抓快照，广告出现时来不及点 |
+  | `POST_NOTIFICATIONS` | `keepalive/KeepAlive.kt:208` 掉线提醒、`SkipAccessibilityService.kt:818` 抓取完成提示 | 掉线不提醒，静默失效 |
+  | `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | `ui/KeepAliveSettingsActivity.kt:68,91` 一键申请电池白名单 | 只能手动进系统设置翻 |
+  | `WRITE_SECURE_SETTINGS` | `keepalive/KeepAlive.kt:123-140` 静默复活写回无障碍开关 | 静默模式失效（该权限 signature 级，普通安装拿不到，必须电脑 adb 手动给） |
+
+  同时确认没有的：`INTERNET` / `ACCESS_NETWORK_STATE` / 存储读写（备份走 SAF + 应用私有目录）/ `QUERY_ALL_PACKAGES`（`<queries>` 只声明 LAUNCHER 与 HOME 两类 intent）/ `REQUEST_INSTALL_PACKAGES`。
+- **CI 出包从 `assembleDebug` 改为 `assembleRelease`**。以前装到手机上的是 debug 包，`android:debuggable=true`（`dumpsys package` 里 `flags=[ DEBUGGABLE … ]`，`run-as` 直接能进），拿到手机的人可读私有数据、attach 调试器改内存。对一个常驻无障碍服务的 App 这不能留。签名仍是同一个 ci keystore，覆盖安装不受影响。
+- 工作流加「已签名 + 非 debuggable」硬校验：`apksigner verify --print-certs` 输出 SHA-256（原来带 `|| true`，等于没校验）；`KEYSTORE_B64` 缺失直接失败；`aapt2 dump badging` 里出现 `application-debuggable` 直接失败。
+- Release 步骤补 `name` / `prerelease: false`，`draft: false` 保持。推 `v*` tag 即自动发 Release，APK 匿名可下。
+- 版本 0.16.2 / versionCode 49。
+
+**为什么**
+- 用户要求「把 App 内所有权限检查一遍，确保不需要的全部禁用」+「每次推 tag 都用 CI 自动发 Release，APK 可直接匿名下载」。审计结论是没有冗余权限，但发现出的是 debuggable 包，属于比多余权限更实际的口子。
+
+**影响面/备注**
+- 换成 release 包后 `run-as` 不可用，读 `rules.json` 要改用 App 内的备份导出（0.15.0 已有）。
+- 不混淆（`minifyEnabled false`），崩溃栈仍可读。
+- 该 App 至今 Release 停在 v0.10.1，0.11–0.16 都没打 tag，所以「手动下载更新」此前拿不到最新版；本轮补 `v0.16.2` tag。
+
 ## 0.16.1 - 2026-11-01 · 备份导入的容错与认人
 
 **改了什么**
