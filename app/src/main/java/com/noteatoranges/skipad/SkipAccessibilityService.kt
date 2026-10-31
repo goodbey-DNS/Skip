@@ -343,6 +343,14 @@ class SkipAccessibilityService : AccessibilityService() {
         return true
     }
 
+    /** 节点的去重键：按矩形分 8px 桶。坐标抖动 1~2px 不会产生新键 */
+    private fun rectKeyOf(node: AccessibilityNodeInfo): String {
+        val r = Rect()
+        node.getBoundsInScreen(r)
+        return "${r.left / RECT_BUCKET_PX}|${r.top / RECT_BUCKET_PX}|" +
+            "${r.right / RECT_BUCKET_PX}|${r.bottom / RECT_BUCKET_PX}"
+    }
+
     /**
      * 同一个控件位置在本页面里只点一次。
      *
@@ -354,10 +362,7 @@ class SkipAccessibilityService : AccessibilityService() {
      * 只管按节点点击；坐标规则的重试是故意连点，不走这里。
      */
     private fun clickNodeOnce(node: AccessibilityNodeInfo): Boolean {
-        val r = Rect()
-        node.getBoundsInScreen(r)
-        val key = "${r.left / RECT_BUCKET_PX}|${r.top / RECT_BUCKET_PX}|" +
-            "${r.right / RECT_BUCKET_PX}|${r.bottom / RECT_BUCKET_PX}"
+        val key = rectKeyOf(node)
         if (key in clickedRects) {
             Log.v(TAG, "click-dup $key")
             return false
@@ -517,7 +522,6 @@ class SkipAccessibilityService : AccessibilityService() {
             ?: hit.first.viewIdResourceName
             ?: hit.second.id
         Log.d(TAG, "match $pkg ${cost}ms: ${userScanner?.lastDebug ?: builtinScanner?.lastDebug}")
-        dumpTree(root, pkg, "match")
 
         val rule = hit.second
         // 冷却 / 次数上限：拦在这里，误点的代价远大于漏跳
@@ -526,6 +530,13 @@ class SkipAccessibilityService : AccessibilityService() {
             Log.d(TAG, "match-only $pkg 「$detail」 规则=${rule.id}")
             return
         }
+        // 这个位置本轮已经点过了：直接放过。放在 dumpTree 之前——否则每个后续事件
+        // 都会重写一份诊断树，并且走到 action-fail 把自己的日志污染成「点击失败」
+        if (rectKeyOf(hit.first) in clickedRects) {
+            Log.v(TAG, "match-dup $pkg 规则=${rule.id}")
+            return
+        }
+        dumpTree(root, pkg, "match")
         val fired = when (rule.action) {
             SkipRule.ACTION_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
             else -> clickNodeOnce(hit.first)
@@ -612,6 +623,11 @@ class SkipAccessibilityService : AccessibilityService() {
                 continue
             }
             Log.d(TAG, "popup-match $key: ${scanner.lastPopupDebug}")
+            // 同位置本轮已点过：跳过这个窗口，不要重写诊断树
+            if (rectKeyOf(hit.node) in clickedRects) {
+                Log.v(TAG, "popup-dup $pkg")
+                continue
+            }
             dumpTree(root, pkg, "popup")
             if (clickNodeOnce(hit.node)) {
                 lastSkipWindow = key
