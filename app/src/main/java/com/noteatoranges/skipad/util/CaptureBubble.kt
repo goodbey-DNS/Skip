@@ -24,6 +24,9 @@ object CaptureBubble {
     private const val PREF = "capture_bubble"
     private const val SIZE_DP = 48
 
+    /** 按住超过这个时长算长按：执行坐标规则，而不是抓快照 */
+    private const val LONG_PRESS_MS = 600L
+
     @Volatile
     private var view: View? = null
 
@@ -31,6 +34,9 @@ object CaptureBubble {
 
     /** 点击回调（宿主设置；通常 = 隐藏→广播抓取→延时回弹） */
     var onClick: (() -> Unit)? = null
+
+    /** 长按回调：立即执行前台 App 的坐标规则（识别不到的广告手动点一下） */
+    var onLongClick: (() -> Unit)? = null
 
     fun isEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean("on", false)
@@ -91,10 +97,13 @@ object CaptureBubble {
         var downX = 0f
         var downY = 0f
         var moved = false
+        var downAt = 0L
         container.setOnTouchListener { _, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    downX = e.rawX; downY = e.rawY; moved = false; true
+                    downX = e.rawX; downY = e.rawY; moved = false
+                    downAt = System.currentTimeMillis()
+                    true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = e.rawX - downX
@@ -112,7 +121,14 @@ object CaptureBubble {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!moved) onClick?.invoke()
+                    if (!moved) {
+                        val held = System.currentTimeMillis() - downAt
+                        if (held >= LONG_PRESS_MS && onLongClick != null) {
+                            onLongClick?.invoke()
+                        } else {
+                            onClick?.invoke()
+                        }
+                    }
                     true
                 }
                 else -> false

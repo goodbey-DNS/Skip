@@ -72,6 +72,7 @@ class RulesActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         CaptureBubble.onClick = { bubbleClicked() }
+        CaptureBubble.onLongClick = { SkipAccessibilityService.instance?.bubbleLongClicked() }
         renderRules()
         renderSnapshots()
     }

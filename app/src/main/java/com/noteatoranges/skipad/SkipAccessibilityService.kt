@@ -102,6 +102,7 @@ class SkipAccessibilityService : AccessibilityService() {
         if (com.noteatoranges.skipad.util.CaptureBubble.isEnabled(this)) {
             com.noteatoranges.skipad.util.CaptureBubble.apply(this)
             com.noteatoranges.skipad.util.CaptureBubble.onClick = { bubbleClicked() }
+            com.noteatoranges.skipad.util.CaptureBubble.onLongClick = { bubbleLongClicked() }
         }
         if (!snapshotRegistered) {
             registerReceiver(
@@ -140,8 +141,7 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     /** 悬浮窗点击：隐藏圆钮 → 广播抓取（服务同应用接收）→ 弹回 */
-    fun bubbleClicked() {
-        com.noteatoranges.skipad.util.CaptureBubble.hide(this)
+    fun bubbleClicked() {        com.noteatoranges.skipad.util.CaptureBubble.hide(this)
         mainHandler.postDelayed({
             sendBroadcast(Intent(ACTION_TAKE_SNAPSHOT).setPackage(packageName))
         }, 250)
@@ -149,8 +149,48 @@ class SkipAccessibilityService : AccessibilityService() {
             if (com.noteatoranges.skipad.util.CaptureBubble.isEnabled(this)) {
                 com.noteatoranges.skipad.util.CaptureBubble.apply(this)
                 com.noteatoranges.skipad.util.CaptureBubble.onClick = { bubbleClicked() }
+                com.noteatoranges.skipad.util.CaptureBubble.onLongClick = { bubbleLongClicked() }
             }
         }, 1500)
+    }
+
+    /**
+     * 长按悬浮钮：立刻按坐标规则点一次。
+     *
+     * 这是"自动识别不到的应用内广告"的人工兜底——用户看着广告长按一下就能点掉，
+     * 不依赖任何启发式判断，因此零误判。冷启动开屏仍由 [schedulePointTaps] 自动触发。
+     */
+    fun bubbleLongClicked() {
+        val pkg = rootInActiveWindow?.packageName?.toString()
+        if (pkg == null) {
+            bubbleToast("读不到当前页面")
+            return
+        }
+        val rules = RuleStore.pointRules(this).filter { it.app == pkg }
+        if (rules.isEmpty()) {
+            val label = com.noteatoranges.skipad.util.AppLabels.get(this, pkg).label
+            bubbleToast("$label 没有坐标规则")
+            return
+        }
+        val w = resources.displayMetrics.widthPixels
+        val h = resources.displayMetrics.heightPixels
+        var ok = 0
+        rules.forEach { r ->
+            val x = w * (r.xRatio ?: 0.93f)
+            val y = h * (r.yRatio ?: 0.065f)
+            if (clicker?.clickPoint(x, y) == true) ok++
+            Log.d(TAG, "manual-point ${r.id} ${pkg} (${(xRatioOf(r) * 100).toInt()}%,${(yRatioOf(r) * 100).toInt()}%) ok=${ok > 0}")
+        }
+        bubbleToast("已按 ${rules.size} 条坐标规则点击")
+        // 手动点过之后，弹窗通道短时间内不要再来一次，避免同一下点两遍
+        lastPopupClickAt = SystemClock.elapsedRealtime()
+    }
+
+    private fun xRatioOf(r: com.noteatoranges.skipad.db.SkipAppRule): Float = r.xRatio ?: 0.93f
+    private fun yRatioOf(r: com.noteatoranges.skipad.db.SkipAppRule): Float = r.yRatio ?: 0.065f
+
+    private fun bubbleToast(msg: String) {
+        mainHandler.post { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() }
     }
 
     override fun onInterrupt() {}
