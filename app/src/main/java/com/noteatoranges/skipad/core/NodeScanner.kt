@@ -38,6 +38,13 @@ class NodeScanner(rules: List<SkipRule>) {
     var lastDebug: String? = null
         private set
 
+    /** 最近一次弹窗扫描的诊断信息，供真机排查 */
+    var lastPopupDebug: String? = null
+        private set
+
+    /** 弹窗关闭按钮命中结果：node 为待点节点，why 为命中依据（落库展示用） */
+    data class PopupHit(val node: AccessibilityNodeInfo, val why: String)
+
     /** 返回 (可点击目标节点, 命中的规则)；找不到返回 null
      *
      * @param hasAdHint 该窗口里已看到广告标识（"广告"文本 / 广告 SDK viewId），
@@ -170,6 +177,176 @@ class NodeScanner(rules: List<SkipRule>) {
         return best
     }
 
+    /**
+     * 应用内弹窗（不是开屏）的关闭按钮定位。
+     *
+     * 开屏是整个窗口一张广告，跳过按钮在角落；弹窗盖在正常页面上，关闭钮落在屏幕
+     * 中央偏下或卡片右上角，正好被 [findSkipTarget] 的"排除中央区"闸拒掉。
+     *
+     * 三条证据任一成立才返回，宁可漏掉不误点：
+     * - E1 居中卡片（短文本包围盒）边缘 ±12% 内的小可点控件，且卡片内有营销文案；
+     * - E2 节点稀疏（≤60）的窗口里，纵向 60% 以下的小可点图片控件（独立弹窗 Activity）；
+     * - E3 控件文字本身就是"关闭 / close / ×"，且落在屏幕中央偏下——正常页面的
+     *   关闭钮都在角落，中央偏下基本只有弹窗会有。
+     *
+     * 业务型弹窗（登录、支付、授权、隐私）一律不点：点掉会打断用户正在做的事。
+     */
+    fun findPopupCloseTarget(
+        root: AccessibilityNodeInfo,
+        screenW: Int,
+        screenH: Int,
+    ): PopupHit? {
+        if (screenW <= 0 || screenH <= 0) return null
+        val snaps = collectSnaps(root, screenW, screenH)
+        if (snaps.isEmpty()) {
+            lastPopupDebug = "popup-empty"
+            return null
+        }
+
+        // 业务弹窗排除：登录 / 支付 / 授权 / 隐私类弹窗点掉会打断正常操作。
+        // 只看屏幕中央区域内的文本——外侧的“钱包银行卡支付优惠”这类入口文案不算
+        for (s in snaps) {
+            val t = s.text ?: continue
+            val cx = s.rect.exactCenterX()
+            val cy = s.rect.exactCenterY()
+            if (cx > screenW * 0.30f && cx < screenW * 0.70f &&
+                cy > screenH * 0.18f && cy < screenH * 0.88f &&
+                POPUP_BUSINESS_WORDS.any { t.contains(it, ignoreCase = true) }
+            ) {
+                lastPopupDebug = "popup-block 业务弹窗「${t.take(12)}」"
+                return null
+            }
+        }
+
+        // 卡片 = 营销文案的包围盒。没有营销文案的窗口不是营销弹窗，宁可漏掉
+        val texts = snaps.filter { s ->
+            val t = s.text ?: return@filter false
+            val cy = s.rect.exactCenterY()
+            t.length in 2..20 && cy > screenH * 0.10f && cy < screenH * 0.89f &&
+                !NUMBER_ONLY.matches(t)
+        }
+        val marketingTexts = texts.filter { s ->
+            val t = s.text ?: return@filter false
+            MARKETING_WORDS.any { t.contains(it, ignoreCase = true) }
+        }
+        val card = if (marketingTexts.size >= 2) unionRect(marketingTexts.map { it.rect }) else null
+        val cardOk = card != null &&
+            card.width().toFloat() in (screenW * 0.25f)..(screenW * 0.92f) &&
+            card.height().toFloat() in (screenH * 0.12f)..(screenH * 0.62f) &&
+            card.exactCenterX() in (screenW * 0.35f)..(screenW * 0.65f) &&
+            card.exactCenterY() in (screenH * 0.28f)..(screenH * 0.72f)
+
+        for (s in snaps) {
+            if (closeCandidate(s, screenW, screenH) == null) continue
+            val st = s.text
+            // E3：文字就是关闭，且落在屏幕中央偏下——正常页面的关闭钮都在角落
+            if (st != null && st.length in 1..4 &&
+                s.rect.exactCenterX() > screenW * 0.30f && s.rect.exactCenterX() < screenW * 0.70f &&
+                s.rect.exactCenterY() > screenH * 0.55f &&
+                STRONG_CLOSE_WORDS.any { st.contains(it, ignoreCase = true) }
+            ) {
+                lastPopupDebug = "popup-hit E3「$st」"
+                return PopupHit(s.node, "关闭「$st」")
+            }
+            // E1：营销卡片边缘的小控件
+            if (cardOk && card != null && edgeOfCard(s.rect, card, screenW, screenH)) {
+                lastPopupDebug = "popup-hit E1 card=$card"
+                return PopupHit(s.node, "弹窗评论按钮")
+            }
+            // E2：独立弹窗 Activity，节点稀疏，纵向偏下的小图片控件
+            if (snaps.size <= SPARSE_NODES && s.clickable &&
+                s.rect.exactCenterY() > screenH * 0.60f &&
+                s.rect.width() <= screenW * 0.12f
+            ) {
+                lastPopupDebug = "popup-hit E2 nodes=${snaps.size}"
+                return PopupHit(s.node, "弹窗角落按钮")
+            }
+        }
+        lastPopupDebug = "popup-no-match nodes=${snaps.size} texts=${texts.size}" +
+            " card=${if (cardOk) "ok" else "no"} mk=${marketingTexts.size}"
+        return null
+    }
+
+    /** 节点快照：一次 BFS 拿到 rect / 类名 / 文本 / 可点，避免反复跨进程读节点 */
+    private class Snap(
+        val node: AccessibilityNodeInfo,
+        val rect: Rect,
+        val cls: String,
+        val text: String?,
+        val clickable: Boolean,
+    )
+
+    private fun collectSnaps(root: AccessibilityNodeInfo, screenW: Int, screenH: Int): List<Snap> {
+        val out = ArrayList<Snap>(POPUP_SCAN_NODES)
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        while (queue.isNotEmpty() && out.size < POPUP_SCAN_NODES) {
+            val node = queue.removeFirst()
+            val r = Rect()
+            node.getBoundsInScreen(r)
+            // 负宽高（滚动动画里的数码轮）与越界节点（WebView 常用 Integer.MIN_VALUE
+            // 表示"未布局"）直接丢弃，否则会把包围盒拉爆
+            if (!r.isEmpty && r.width() > 0 && r.height() > 0 &&
+                r.left > -screenW && r.right < screenW * 2 &&
+                r.top > -screenH && r.bottom < screenH * 2
+            ) {
+                out.add(
+                    Snap(
+                        node = node,
+                        rect = Rect(r),
+                        cls = node.className?.toString() ?: "",
+                        text = nodeText(node),
+                        clickable = node.isClickable,
+                    )
+                )
+            }
+            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
+        }
+        return out
+    }
+
+    /** 关闭候选的形状与位置校验；返回非空表示形状合格（内容为尺寸描述） */
+    private fun closeCandidate(s: Snap, w: Int, h: Int): String? {
+        val cw = s.rect.width().toFloat()
+        val ch = s.rect.height().toFloat()
+        if (cw <= 0f || ch <= 0f) return null
+        if (cw > w * 0.14f || ch > h * 0.08f) return null
+        if (cw < w * 0.02f || ch < h * 0.008f) return null
+        val cx = s.rect.exactCenterX()
+        val cy = s.rect.exactCenterY()
+        if (cx < w * 0.28f || cx > w * 0.92f) return null
+        if (cy < h * 0.18f || cy > h * 0.88f) return null
+        if (NOT_CLOSE_CLS.any { s.cls.contains(it) }) return null
+        val imageLike = s.cls.contains("ImageView") || s.cls.contains("ImageButton") ||
+            s.cls == "android.view.View" || s.cls.endsWith(".View")
+        val t = s.text
+        val textClose = t != null && CLOSE_WORDS.any { t.contains(it, ignoreCase = true) }
+        if (!s.clickable && !textClose) return null
+        if (!imageLike && !textClose) return null
+        return "${cw.toInt()}x${ch.toInt()}"
+    }
+
+    /** 候选是否贴着卡片边缘：内部控件不点，避免点到卡片里的收藏、加购图标 */
+    private fun edgeOfCard(r: Rect, card: Rect, w: Int, h: Int): Boolean {
+        val cx = r.exactCenterX()
+        val cy = r.exactCenterY()
+        val inRangeX = cx > card.left - w * 0.06f && cx < card.right + w * 0.06f
+        val inRangeY = cy > card.top - h * 0.04f && cy < card.bottom + h * 0.10f
+        if (!inRangeX || !inRangeY) return false
+        val nearEdge = Math.abs(cx - card.left) < w * 0.12f ||
+            Math.abs(cx - card.right) < w * 0.12f ||
+            Math.abs(cy - card.top) < h * 0.12f ||
+            Math.abs(cy - card.bottom) < h * 0.12f
+        return nearEdge
+    }
+
+    private fun unionRect(rects: List<Rect>): Rect? {
+        if (rects.isEmpty()) return null
+        val out = Rect(rects[0])
+        for (i in 1 until rects.size) out.union(rects[i])
+        return out
+    }
+
     private fun firstMatch(
         node: AccessibilityNodeInfo,
         text: String?,
@@ -216,6 +393,44 @@ class NodeScanner(rules: List<SkipRule>) {
         val NEGATIVE_HINTS = listOf(
             "教程", "引导", "新手", "跳过此步", "跳过本",
             "tutorial", "guide", "walkthrough",
+        )
+
+        // ———————— 弹窗（应用内覆盖层） ————————
+
+        const val POPUP_SCAN_NODES = 500
+
+        /** 节点数不超过这个值的窗口才按"独立弹窗 Activity"处理 */
+        const val SPARSE_NODES = 60
+
+        /** 纯数字/符号文本不参与卡片包围盒（价格、倒计时、数码轮） */
+        val NUMBER_ONLY = Regex("^[\\d.\\s¥￥:：]+$")
+
+        /** 关闭类文案：出现即视为按钮文字 */
+        val CLOSE_WORDS = listOf(
+            "关闭", "close", "×", "✕", "✖",
+            "我知道了", "知道了", "以后再说", "下次再说",
+            "暂不", "暂不需要", "先逛逛", "残忍拒绝", "不再提示",
+        )
+
+        /** 强关闭信号：短文本命中即直接点，不再依赖卡片证据 */
+        val STRONG_CLOSE_WORDS = listOf("关闭", "close", "×", "✕", "✖")
+
+        /** 营销文案：卡片里没有这些词，就不是营销弹窗，不点 */
+        val MARKETING_WORDS = listOf(
+            "恭喜", "获得", "已存入", "领取", "开心收下", "签到", "红包",
+            "抽奖", "膨胀", "礼包", "福利", "奖励", "无门槛", "新人专享", "免费领",
+        )
+
+        /** 业务弹窗排除词：登录、支付、授权、隐私这类弹窗点掉会打断正常操作 */
+        val POPUP_BUSINESS_WORDS = listOf(
+            "登录", "注册", "授权", "同意", "隐私", "协议", "密码", "验证码",
+            "支付", "付款", "确认", "删除", "退出", "卸载",
+        )
+
+        /** 这些控件不可能是关闭按钮 */
+        val NOT_CLOSE_CLS = listOf(
+            "EditText", "SeekBar", "ProgressBar", "RecyclerView", "ListView",
+            "ScrollView", "ViewPager", "WebView",
         )
     }
 }

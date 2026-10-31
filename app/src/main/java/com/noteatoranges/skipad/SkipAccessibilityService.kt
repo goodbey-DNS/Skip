@@ -63,11 +63,19 @@ class SkipAccessibilityService : AccessibilityService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pending: PendingSkip? = null
 
+    /** 弹窗通道节流：每次全树扫描有成本，未命中时也不低于这个间隔 */
+    private var lastPopupScanAt = 0L
+
+    /** 弹窗点击冷却：误判的代价是点掉一个正常控件，宁可慢也不连着点 */
+    private var lastPopupClickAt = 0L
+
     private data class PendingSkip(
         val windowKey: String,
         val pkg: String,
         val detail: String,
         var attempts: Int,
+        /** 弹窗只补刀一次：弹窗消失后原坐标已变成广告本身，多点一下就是点广告 */
+        val maxRetry: Int = MAX_RETRY,
     )
 
     /** 每个 App 最近一次"新窗口出现"的时间与前台 Activity 类名 */
@@ -184,19 +192,6 @@ class SkipAccessibilityService : AccessibilityService() {
         val pkg = root.packageName?.toString() ?: event.packageName?.toString() ?: return
         if (pkg in blacklist || pkg == packageName) return
 
-        // 启动窗口闸：只在"新窗口出现后 SPLASH_WINDOW_MS 内"扫描。
-        // 无状态变化记录（服务在该 App 已在前台时才连上/重连）时按"现在"起算，
-        // 否则 now - 0 恒大于闸门，等于这类场景永远不扫描。
-        val stateAt = lastStateChangeAt[pkg] ?: now
-        if (now - stateAt > SPLASH_WINDOW_MS) return
-
-        // 同窗口冷却：刚点过的窗口在冷却期内不再重复匹配（COOLDOWN_MS 此前只定义未使用）
-        if (lastSkipWindow != null && now - lastSkipAt < COOLDOWN_MS &&
-            lastSkipWindow == windowKeyFor(pkg, event, root)
-        ) {
-            return
-        }
-
         // 刷新用户规则扫描器（版本变化才重建）
         val ver = RuleStore.version(this)
         if (ver != userRulesVersionSeen) {
@@ -207,12 +202,32 @@ class SkipAccessibilityService : AccessibilityService() {
 
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
+
+        // 启动窗口闸：只在"新窗口出现后 SPLASH_WINDOW_MS 内"扫描开屏广告。
+        // 无状态变化记录（服务在该 App 已在前台时才连上/重连）时按"现在"起算，
+        // 否则 now - 0 恒大于闸门，等于这类场景永远不扫描。
+        // 闸外不等于放弃：用户点菜单后的弹窗要靠下面的弹窗通道，它有自己的节流。
+        val stateAt = lastStateChangeAt[pkg] ?: now
+        if (now - stateAt > SPLASH_WINDOW_MS) {
+            tryPopupClose(root, pkg, event, now, w, h)
+            return
+        }
+
+        // 同窗口冷却：刚点过的窗口在冷却期内不再重复匹配（COOLDOWN_MS 此前只定义未使用）
+        if (lastSkipWindow != null && now - lastSkipAt < COOLDOWN_MS &&
+            lastSkipWindow == windowKeyFor(pkg, event, root)
+        ) {
+            return
+        }
+
         // 用户规则优先；窗口有"广告"标识时免位置闸
         val adHint = adHintFor(-1, root)
         val hit = userScanner?.findSkipTarget(root, w, h, adHint)
             ?: builtinScanner?.findSkipTarget(root, w, h, adHint)
         if (hit == null) {
             Log.v(TAG, "scan $pkg: ${userScanner?.lastDebug ?: builtinScanner?.lastDebug}")
+            // 开屏窗口期内也可能先浮出营销弹窗，主路径没命中就顺带试一次弹窗通道
+            tryPopupClose(root, pkg, event, now, w, h)
             return
         }
         val detail = hit.first.text?.toString()
@@ -231,6 +246,48 @@ class SkipAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * 应用内弹窗通道：用户点菜单后浮出来的营销卡片。
+     *
+     * 不套启动窗口闸——弹窗出现时距 Activity 切换可能已过几分钟；改用两道自己的节流：
+     * 扫描间隔 [POPUP_SCAN_MS]（未命中也走），点击后 [POPUP_COOLDOWN_MS] 内不再点。
+     * 点完同样进 800ms 验证：弹窗没消失就不记账，且只补刀一次。
+     */
+    private fun tryPopupClose(
+        root: AccessibilityNodeInfo,
+        pkg: String,
+        event: AccessibilityEvent,
+        now: Long,
+        w: Int,
+        h: Int,
+    ) {
+        if (now - lastPopupScanAt < POPUP_SCAN_MS) return
+        lastPopupScanAt = now
+        val scanner = builtinScanner ?: return
+        val hit = scanner.findPopupCloseTarget(root, w, h)
+        if (hit == null) {
+            Log.v(TAG, "popup-none $pkg: ${scanner.lastPopupDebug}")
+            return
+        }
+        if (now - lastPopupClickAt < POPUP_COOLDOWN_MS) {
+            Log.v(TAG, "popup-cool $pkg: ${scanner.lastPopupDebug}")
+            return
+        }
+        lastPopupClickAt = now
+        val key = "popup:$pkg/${event.className ?: root.className ?: ""}"
+        Log.d(TAG, "popup-match $pkg: ${scanner.lastPopupDebug}")
+        dumpTree(root, pkg, "popup")
+        if (clicker?.click(hit.node) == true) {
+            lastSkipWindow = key
+            lastSkipAt = now
+            pending = PendingSkip(key, pkg, "弹窗·${hit.why}", 0, 1)
+            val token = pending
+            mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
+        } else {
+            Log.d(TAG, "popup-click-failed $pkg")
+        }
+    }
+
     private fun windowKeyFor(pkg: String, event: AccessibilityEvent, root: AccessibilityNodeInfo): String =
         "$pkg/${event.className ?: root.className ?: ""}"
 
@@ -245,7 +302,7 @@ class SkipAccessibilityService : AccessibilityService() {
             pending = null
             return
         }
-        if (p.attempts >= MAX_RETRY) {
+        if (p.attempts >= p.maxRetry) {
             Log.d(TAG, "giveup ${p.pkg} 「${p.detail}」广告仍在(${found.second}), 已补刀${p.attempts}次不记账")
             dumpTree(rootInActiveWindow, p.pkg, "giveup")
             pending = null
@@ -274,6 +331,9 @@ class SkipAccessibilityService : AccessibilityService() {
             val hit = userScanner?.findSkipTarget(root, w, h, adHint)
                 ?: builtinScanner?.findSkipTarget(root, w, h, adHint)
             if (hit != null) return Triple(hit.first, wp, "win#${window.id} ${window.type}")
+            // 弹窗通道点下去之后也按同一套核验：弹窗还在说明没点掉，补刀一次
+            val popup = builtinScanner?.findPopupCloseTarget(root, w, h)
+            if (popup != null) return Triple(popup.node, wp, "popup#${window.id}")
             // 纯图片/视频开屏：跳过按钮既无文本也无 skip 类 id，只在开屏类 Activity 上
             // 按"右上/右下角 + 小尺寸"兜底，避免在正常页面误点搜索、更多按钮
             val act = lastActivityClass[wp] ?: ""
@@ -544,6 +604,12 @@ class SkipAccessibilityService : AccessibilityService() {
         private var inst: SkipAccessibilityService? = null
         const val THROTTLE_MS = 150L
         const val COOLDOWN_MS = 4000L
+
+        /** 弹窗通道：未命中时的扫描节流（全树最多 500 节点，别跟着信息流滚动一直扫） */
+        const val POPUP_SCAN_MS = 1200L
+
+        /** 弹窗点击后的冷却：同一 App 20 秒内不再点弹窗关闭钮 */
+        const val POPUP_COOLDOWN_MS = 20000L
         const val UNBIND_RECOVER_DELAY_MS = 1500L
         const val VERIFY_DELAY_MS = 800L
         const val MAX_RETRY = 2
