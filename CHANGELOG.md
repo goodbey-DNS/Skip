@@ -2,6 +2,12 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.10.1 - 2026-10-31 · 服务连接留痕（排障用）
+
+- `onServiceConnected` / `onUnbind` 各打一行日志（`service-connected 0.10.1`），并加 5 秒一次的事件心跳（`event <type> <pkg>`），确认装包后无障碍事件是否真的在进来；`builtinScanner` 未初始化时弹窗通道改为报 W 而不是静默返回。
+- 为什么：0.10.0 装到机器上之后日志一片空白，无法判断是"没收到事件"还是"没命中"；实测根因是 HyperOS 在重新安装后把 `enabled_accessibility_services` 写成同值不触发重绑，需要先删再写才会重新连接（可用 `adb shell settings delete secure enabled_accessibility_services` 后重设，或在系统设置里关再开一次）。
+- 版本 0.10.1 / versionCode 35。
+
 ## 0.10.0 - 2026-10-31 · 规则按 App 页面隔离 + 冷却限次 + 返回键/只匹配 + 相对坐标 + 节点属性缓存
 
 **改了什么**
