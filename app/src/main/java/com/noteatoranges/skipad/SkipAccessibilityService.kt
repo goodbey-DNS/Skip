@@ -90,11 +90,18 @@ class SkipAccessibilityService : AccessibilityService() {
     private val popupClickAt = HashMap<String, Long>()
     private val popupClickCount = HashMap<String, Int>()
 
+    /** 点了三次也没关掉的窗口：静默 30 秒，别反复去点同一个顽固弹窗 */
+    private val popupBlockedUntil = HashMap<String, Long>()
+
     /** 上一次弹窗动作时间：保证两次动作之间隔开一个验证周期 */
     private var lastPopupActionAt = 0L
 
     /** 手动执行坐标规则后的静默期：这段时间内弹窗通道不再动手，避免同一下点两遍 */
     private var popupSuppressUntil = 0L
+
+    /** 弱证据（角落小图 / 图片弹窗）需连续两次命中同一控件才点，单次命中先记账 */
+    private class WeakHit(val key: String, val rect: Rect, val at: Long)
+    private var lastWeakHit: WeakHit? = null
 
     private data class PendingSkip(
         val windowKey: String,
@@ -318,6 +325,8 @@ class SkipAccessibilityService : AccessibilityService() {
         // 弹窗计数跟着页面走：同窗口的冷却记录留着没意义，窗口 id 会换
         popupClickAt.clear()
         popupClickCount.clear()
+        popupBlockedUntil.clear()
+        lastWeakHit = null
         userScannerKey = null
     }
 
@@ -472,13 +481,13 @@ class SkipAccessibilityService : AccessibilityService() {
      * 扫描范围是所有可交互窗口（活动窗口优先，最多 3 个）：浮层弹窗常常是独立窗口，
      * 不在 rootInActiveWindow 里。点完同样进 800ms 验证：没消失就不记账，只补刀一次。
      */
-    private fun tryPopupClose(event: AccessibilityEvent, now: Long) {
+    private fun tryPopupClose(event: AccessibilityEvent, now: Long, force: Boolean = false) {
         val interval = when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> POPUP_SCAN_STATE_MS
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> POPUP_SCAN_WINDOW_MS
             else -> POPUP_SCAN_MS
         }
-        if (now - lastPopupScanAt < interval) return
+        if (!force && now - lastPopupScanAt < interval) return
         lastPopupScanAt = now
         val scanner = builtinScanner ?: run {
             Log.w(TAG, "popup: builtinScanner 未初始化（服务未连上）")
@@ -491,12 +500,36 @@ class SkipAccessibilityService : AccessibilityService() {
             val root = win.root ?: continue
             val pkg = root.packageName?.toString() ?: continue
             scanned++
-            val hit = scanner.findPopupCloseTarget(root, w, h)
+            // 「像弹窗的窗口」：窗口自己没铺满屏幕（对话框/浮层），E2 靠这个放宽节点数限制
+            val rootRect = Rect()
+            root.getBoundsInScreen(rootRect)
+            val dialogWindow = rootRect.width() > 0 &&
+                (rootRect.width() < w * 0.98f || rootRect.height() < h * 0.98f)
+            val hit = scanner.findPopupCloseTarget(root, w, h, dialogWindow)
             if (hit == null) {
                 Log.v(TAG, "popup-none $pkg#${win.id}: ${scanner.lastPopupDebug}")
                 continue
             }
             val key = "$pkg#${win.id}"
+            // 弱证据要看到两次：弹窗刚插入时布局还没稳，单帧的判断不牢靠
+            if (hit.tier >= 5) {
+                val r = Rect()
+                hit.node.getBoundsInScreen(r)
+                val prev = lastWeakHit
+                val same = prev != null && prev.key == key && prev.rect == r && now - prev.at < WEAK_CONFIRM_MS
+                lastWeakHit = WeakHit(key, r, now)
+                if (!same) {
+                    Log.v(TAG, "popup-weak-wait $key: ${scanner.lastPopupDebug}")
+                    // 没有后续事件也要有第二次查看的机会，否则弱证据永远等不到确认
+                    mainHandler.postDelayed(
+                        { tryPopupClose(event, SystemClock.elapsedRealtime(), true) },
+                        WEAK_CONFIRM_DELAY_MS,
+                    )
+                    continue
+                }
+            } else {
+                lastWeakHit = null
+            }
             if (!gatePopup(key, now)) {
                 Log.v(TAG, "popup-cool $key: ${scanner.lastPopupDebug}")
                 continue
@@ -536,6 +569,7 @@ class SkipAccessibilityService : AccessibilityService() {
      */
     private fun gatePopup(key: String, now: Long): Boolean {
         if (now < popupSuppressUntil) return false
+        if (now < (popupBlockedUntil[key] ?: 0L)) return false
         if (now - lastPopupActionAt < POPUP_GLOBAL_MIN_MS) return false
         val last = popupClickAt[key] ?: 0L
         if (last > 0 && now - last < POPUP_WINDOW_COOLDOWN_MS) return false
@@ -564,6 +598,8 @@ class SkipAccessibilityService : AccessibilityService() {
         if (p.attempts >= p.maxRetry) {
             Log.d(TAG, "giveup ${p.pkg} 「${p.detail}」广告仍在(${found.second}), 已补刀${p.attempts}次不记账")
             dumpTree(rootInActiveWindow, p.pkg, "giveup")
+            // 点不掉就暂时别碰这个窗口：反复尝试只会反复误点
+            if (p.detail.startsWith("弹窗")) popupBlockedUntil[p.windowKey] = SystemClock.elapsedRealtime() + POPUP_STUBBORN_MS
             pending = null
             return
         }
@@ -591,7 +627,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 ?: builtinScanner?.findSkipTarget(root, w, h, adHint)
             if (hit != null) return Triple(hit.first, wp, "win#${window.id} ${window.type}")
             // 弹窗通道点下去之后也按同一套核验：弹窗还在说明没点掉，补刀一次
-            val popup = builtinScanner?.findPopupCloseTarget(root, w, h)
+            val popup = builtinScanner?.findPopupCloseTarget(root, w, h, isDialogWindow(root, w, h))
             if (popup != null) return Triple(popup.node, wp, "popup#${window.id}")
             // 纯图片/视频开屏：跳过按钮既无文本也无 skip 类 id，只在开屏类 Activity 上
             // 按"右上/右下角 + 小尺寸"兜底，避免在正常页面误点搜索、更多按钮
@@ -605,6 +641,13 @@ class SkipAccessibilityService : AccessibilityService() {
             }
         }
         return null
+    }
+
+    /** 窗口是否没铺满屏幕（对话框/浮层）：弹窗通道用它放宽“节点稀疏”限制 */
+    private fun isDialogWindow(root: AccessibilityNodeInfo, w: Int, h: Int): Boolean {
+        val r = Rect()
+        root.getBoundsInScreen(r)
+        return r.width() > 0 && (r.width() < w * 0.98f || r.height() < h * 0.98f)
     }
 
     /** 广告标识判定带 1.5 秒缓存：同一次开屏会被反复扫描，别每次都重走 200 个节点 */
@@ -915,6 +958,15 @@ class SkipAccessibilityService : AccessibilityService() {
 
         /** 手动执行坐标规则后的静默期，避免自动通道在同一点上再点一次 */
         const val MANUAL_POINT_SUPPRESS_MS = 8000L
+
+        /** 点了 3 次仍没关掉的窗口，静默这么久再试 */
+        const val POPUP_STUBBORN_MS = 30000L
+
+        /** 弱证据确认窗口：两次命中同一控件且间隔在这么内才算数 */
+        const val WEAK_CONFIRM_MS = 2500L
+
+        /** 弱证据首次命中后多久补一次扫描 */
+        const val WEAK_CONFIRM_DELAY_MS = 450L
         const val UNBIND_RECOVER_DELAY_MS = 1500L
         const val VERIFY_DELAY_MS = 800L
         const val MAX_RETRY = 2

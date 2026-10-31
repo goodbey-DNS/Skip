@@ -56,7 +56,7 @@ class NodeScanner(
         private set
 
     /** 弹窗关闭按钮命中结果：node 为待点节点，why 为命中依据（落库展示用） */
-    data class PopupHit(val node: AccessibilityNodeInfo, val why: String)
+    data class PopupHit(val node: AccessibilityNodeInfo, val why: String, val tier: Int = 4)
 
     /** 返回 (可点击目标节点, 命中的规则)；找不到返回 null
      *
@@ -219,6 +219,8 @@ class NodeScanner(
         root: AccessibilityNodeInfo,
         screenW: Int,
         screenH: Int,
+        /** 窗口本身没铺满屏幕（对话框/浮层）：E2 用它代替“节点稀疏”判断 */
+        dialogWindow: Boolean = false,
     ): PopupHit? {
         if (screenW <= 0 || screenH <= 0) return null
         val snaps = collectSnaps(root, screenW, screenH)
@@ -261,6 +263,31 @@ class NodeScanner(
             }
         }
 
+        // 候选按证据强度打分，不再「谁先被 BFS 到就点谁」：
+        // 1=E3（文字就是关闭且在中下）2=E5（关闭某活动）3=E4（卡片全宽按钮）
+        // 4=E1（卡片边缘小控件）5=E2（稀疏窗口角落小图）6=E6（图片弹窗唯一小控件）
+        // 弱证据（5/6）出现多个候选时直接放弃——歧义状态下点错的代价更大
+        var best: PopupHit? = null
+        var bestTier = Int.MAX_VALUE
+        var bestArea = Long.MAX_VALUE
+        var bestTag = ""
+        var weakCount = 0
+
+        fun consider(tier: Int, s: Snap, why: String, tag: String) {
+            if (tier >= 5) weakCount++
+            val area = s.rect.width().toLong() * s.rect.height()
+            if (tier < bestTier || (tier == bestTier && area < bestArea)) {
+                bestTier = tier
+                bestArea = area
+                best = PopupHit(s.node, why, tier)
+                bestTag = tag
+            }
+        }
+
+        // 「像弹窗的窗口」：节点少，或窗口本身没铺满屏幕（对话框/浮层）
+        val sparse = snaps.size <= SPARSE_NODES
+        val dialogish = sparse || dialogWindow
+
         for (s in snaps) {
             val st = s.text
             val shapeOk = closeCandidate(s, screenW, screenH) != null
@@ -272,8 +299,7 @@ class NodeScanner(
                 s.rect.exactCenterX() > screenW * 0.30f && s.rect.exactCenterX() < screenW * 0.70f &&
                 s.rect.exactCenterY() > screenH * 0.55f
             ) {
-                lastPopupDebug = "popup-hit E3「$st」"
-                return PopupHit(s.node, "关闭「$st」")
+                consider(1, s, "关闭「$st」", "E3")
             }
             // E5：文字明说是「关闭某活动/广告/浮层」。这类控件就是关广告的，
             // 不套位置闸——京东首页那个「关闭浮层活动」贴在屏幕右缘（中心 x≈94%），
@@ -282,8 +308,7 @@ class NodeScanner(
                 STRONG_CLOSE_WORDS.any { st.startsWith(it, ignoreCase = true) } &&
                 AD_WORDS.any { st.contains(it, ignoreCase = true) }
             ) {
-                lastPopupDebug = "popup-hit E5「$st」"
-                return PopupHit(s.node, "关闭「$st」")
+                consider(2, s, "关闭「$st」", "E5")
             }
             // E4：卡片下沿内的全宽文字按钮。这类按钮高度常超 8% 屏高、宽度接近整卡，
             // 过不了 closeCandidate 的形状闸，但文字本身就是关闭语义，且有卡片做背书
@@ -295,27 +320,64 @@ class NodeScanner(
                 s.rect.exactCenterY() > card.bottom - screenH * 0.16f &&
                 s.rect.exactCenterY() < card.bottom + screenH * 0.06f
             ) {
-                lastPopupDebug = "popup-hit E4「$st」"
-                return PopupHit(s.node, "关闭「$st」")
+                consider(3, s, "关闭「$st」", "E4")
             }
             if (!shapeOk) continue
             // E1：营销卡片边缘的小控件
             if (cardOk && card != null && edgeOfCard(s.rect, card, screenW, screenH)) {
-                lastPopupDebug = "popup-hit E1 card=$card"
-                return PopupHit(s.node, "弹窗评论按钮")
+                consider(4, s, "弹窗评论按钮", "E1")
             }
-            // E2：独立弹窗 Activity，节点稀疏，纵向偏下的小图片控件
-            if (snaps.size <= SPARSE_NODES && s.clickable &&
+            // E2：独立弹窗窗口（节点稀疏或窗口不满屏），纵向偏下的小图控件
+            if (dialogish && s.clickable &&
                 s.rect.exactCenterY() > screenH * 0.60f &&
                 s.rect.width() <= screenW * 0.12f
             ) {
-                lastPopupDebug = "popup-hit E2 nodes=${snaps.size}"
-                return PopupHit(s.node, "弹窗角落按钮")
+                consider(5, s, "弹窗角落按钮", "E2")
             }
+        }
+
+        // E6：无营销文案的纯图片弹窗——整窗只有一个居中大卡片，
+        // 且它下沿只有一个小可点控件。卡片多于一个说明是信息流，不是弹窗
+        if (best == null && card == null) {
+            val cards = snaps.filter { looksLikeDialogCard(it, screenW, screenH) }
+            if (cards.size == 1) {
+                val box = cards[0].rect
+                val near = snaps.filter { s ->
+                    closeSizeOk(s, screenW, screenH) && s.clickable &&
+                        s.rect.exactCenterX() > box.left - screenW * 0.06f &&
+                        s.rect.exactCenterX() < box.right + screenW * 0.06f &&
+                        s.rect.exactCenterY() > box.bottom - screenH * 0.10f &&
+                        s.rect.exactCenterY() < box.bottom + screenH * 0.05f
+                }
+                if (near.size == 1) consider(6, near[0], "图片弹窗关闭钮", "E6")
+            }
+        }
+
+        val hit = best
+        if (hit != null && bestTier >= 5 && weakCount > 1) {
+            lastPopupDebug = "popup-ambiguous nodes=${snaps.size} weak=$weakCount"
+            return null
+        }
+        if (hit != null) {
+            lastPopupDebug = "popup-hit $bestTag「${hit.why}」nodes=${snaps.size} weak=$weakCount"
+            return hit
         }
         lastPopupDebug = "popup-no-match nodes=${snaps.size} texts=${texts.size}" +
             " card=${if (cardOk) "ok" else "no"} mk=${marketingTexts.size}"
         return null
+    }
+
+    /** 像对话框的卡片：不铺满屏、居中、面积 8%~55%，且自身不可点 */
+    private fun looksLikeDialogCard(s: Snap, w: Int, h: Int): Boolean {
+        if (s.clickable) return false
+        val r = s.rect
+        if (r.width() <= 0 || r.height() <= 0) return false
+        val area = r.width().toFloat() * r.height() / (w.toFloat() * h)
+        return area in 0.08f..0.55f &&
+            r.width() >= w * 0.30f && r.width() <= w * 0.92f &&
+            r.height() >= h * 0.12f && r.height() <= h * 0.55f &&
+            r.exactCenterX() in (w * 0.30f)..(w * 0.70f) &&
+            r.exactCenterY() in (h * 0.25f)..(h * 0.78f)
     }
 
     /**
