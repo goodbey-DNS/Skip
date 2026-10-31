@@ -239,11 +239,11 @@ class NodeScanner(rules: List<SkipRule>) {
         for (s in snaps) {
             if (closeCandidate(s, screenW, screenH) == null) continue
             val st = s.text
-            // E3：文字就是"关闭"本身，且落在屏幕中央偏下——正常页面的关闭钮都在角落。
-            // 必须精确等于：淘宝页面大量图标无障碍描述是"关闭按钮""返回按钮"，
-            // 用包含匹配会把页面上的悬浮提示关掉，这是实测踩过的坑
-            if (st != null && st.length <= 5 &&
-                STRONG_CLOSE_WORDS.any { st.equals(it, ignoreCase = true) } &&
+            // E3：文字以"关闭"开头（淘宝 poplayer 的按钮描述就叫"关闭按钮"），
+            // 且落在屏幕中央偏下——正常页面的关闭钮都在角落。
+            // 用 startsWith 而不是 contains：只排除正文里顺带提到"关闭"的句子
+            if (st != null && st.length <= 6 &&
+                STRONG_CLOSE_WORDS.any { st.startsWith(it, ignoreCase = true) } &&
                 s.rect.exactCenterX() > screenW * 0.30f && s.rect.exactCenterX() < screenW * 0.70f &&
                 s.rect.exactCenterY() > screenH * 0.55f
             ) {
