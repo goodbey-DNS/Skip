@@ -2,6 +2,29 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.16.1 - 2026-11-01 · 备份导入的容错与认人
+
+**改了什么**
+- `RuleStore.read()` / `KeywordStore.read()` 改成逐条解析（`parseOne` + `parseAll`）。以前 `getString("id")` / `getString("app")` / `getString("kind")` 是必填，**一条残缺就把整份读成空列表**，界面上看着像规则全没了；更糟的是此时随手点一下开关或删除，`write(context, read().filter{…})` 会把空列表写回磁盘，原数据真丢。现在缺 app / kind 的单条丢弃并计数（不知道作用域，留着反而会变成全局规则），缺 id 的补 `legacy-<位置>-<createdAt>` 稳定 id，其余照常加载。
+- `RuleStore.importFrom` / `KeywordStore.importFrom` 改成「解析成对象 → 规范化 write → 返回真实可用条数」。原来是整份合法 JSON 数组就原样写回，残缺条目能骗过校验：提示恢复 5 条，实读 0 条。
+- `Backup.restore` 真读 `manifest.json` 的 `app` / `version`。原来只判断文件是否存在，任何带 manifest.json 的 zip 都能过闸；现在 app 写了但不是 SkipAd 直接拒。三块数据各自 `runCatching`，某块坏了不连累另外两块（原来一处抛错整份恢复归零）。
+- `RuleStore.write` / `KeywordStore.write` 改原子写（先写 `.tmp` 再 rename）。直接 `writeText` 若中途被杀会留下半截 JSON，那份文件连合法数组都不是。
+- `SnapshotStore.loadNodes` / `loadMeta` 同样改 opt 取值 + 逐条兜；缺 `pkg` 时从目录名 `<ts>_<pkg>` 兜底。
+- 恢复结果从 Toast 改成对话框，把「跳过 N 条」「哪一块文件损坏」「备份来源版本」都写清楚。
+- 版本 0.16.1 / versionCode 48。
+
+**为什么**
+- 用户问「导入没做版本兼容处理是否需要现在完善」。核查结论：加字段那类兼容本来就有（读取全部走 `optXxx`，缺字段走默认值），不需要另立版本号；真正的坑是坏条目连带整份归零、以及 manifest 闸门形同虚设。
+
+**影响面/备注**
+- 真机实测（Redmi 22081212C / Android 15 / 0.16.1）：
+  - 5 条规则（1 条缺 app、1 条缺 kind、1 条缺 id、1 条正常、1 条非对象）→ 规则页显示 3 条、不崩；改动作后文件被规范化写回，坏条目被清掉，缺 id 补成 `legacy-4-1761954700000`。
+  - `bad-mixed.zip` 导入 → 「规则 2 条、关键字 2 条、快照 0 份 / 规则跳过 3 条 / 关键字跳过 1 条 / 来自 0.12.0」，落盘 JSON 规范。
+  - `foreign.zip`（manifest app=OtherApp）→ 「恢复失败：不是可识别的备份」，原规则未被覆盖。
+  - `broken-json.zip`（规则文件截断）→ 「规则文件不是合法 JSON，原有规则未被改动」，原 2 条规则完好。
+- 未验证：规则页「删除」按钮用 adb 点不动（`clickable=true`、bounds 正确，`input tap` / 同点 swipe / `input touchscreen tap` 三种都无响应，也无确认框弹出），判断是该 TextView 在 row 里的触摸区域问题，早于本次改动就存在；`write` 写路径已由「改动作」实测覆盖。
+- 测试数据已清理：`rules.json` / `keywords.json` 还原为 `[]`，`backup/` 下测试期间生成的 zip 全部删除。
+
 ## 0.16.0 - 2026-11-01 · 备份恢复（导入）
 
 **改了什么**
