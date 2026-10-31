@@ -120,7 +120,8 @@ class SkipAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         // 连接留痕：装了新包之后服务是否真的起来了，只能靠这一行判断
-        Log.i(TAG, "service-connected 0.10.1")
+        val ver = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()
+        Log.i(TAG, "service-connected $ver")
         builtinScanner = NodeScanner(BuiltinRules.defaults(), factsCache).also {
             it.verbose = Log.isLoggable(TAG, Log.VERBOSE)
         }

@@ -275,6 +275,16 @@ class NodeScanner(
                 lastPopupDebug = "popup-hit E3「$st」"
                 return PopupHit(s.node, "关闭「$st」")
             }
+            // E5：文字明说是「关闭某活动/广告/浮层」。这类控件就是关广告的，
+            // 不套「屏幕中央偏下」的位置闸——京东首页顶部的「关闭浮层活动」就在顶部，
+            // 但语义已经足够确定，且仍受小控件形状闸约束
+            if (shapeOk && st != null && st.length in 2..10 &&
+                STRONG_CLOSE_WORDS.any { st.startsWith(it, ignoreCase = true) } &&
+                AD_WORDS.any { st.contains(it, ignoreCase = true) }
+            ) {
+                lastPopupDebug = "popup-hit E5「$st」"
+                return PopupHit(s.node, "关闭「$st」")
+            }
             // E4：卡片下沿内的全宽文字按钮。这类按钮高度常超 8% 屏高、宽度接近整卡，
             // 过不了 closeCandidate 的形状闸，但文字本身就是关闭语义，且有卡片做背书
             if (cardOk && card != null && st != null && st.length in 2..10 &&
@@ -479,6 +489,9 @@ class NodeScanner(
             "恭喜", "获得", "已存入", "领取", "开心收下", "签到", "红包",
             "抽奖", "膨胀", "礼包", "福利", "奖励", "无门槛", "新人专享", "免费领",
         )
+
+        /** E5 用：关闭词后面跟着这几个词，说明关的是广告类浮层而不是业务控件 */
+        val AD_WORDS = listOf("活动", "广告", "浮层", "弹窗", "推荐", "推广", "营销")
 
         /** 业务弹窗排除词：登录、支付、授权、隐私、订单这类弹窗点掉会打断正常操作。
          *  业务词优先于营销词——命中就整窗放弃 */

@@ -2,6 +2,17 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.11.1 - 2026-10-31 · E5 关闭广告浮层 + 工作流升到 node24 Action
+
+**改了什么**
+- **E5 证据**：文字以「关闭」开头且含「活动/广告/浮层/弹窗/推荐/推广/营销」时直接命中，不再要求落在屏幕中央偏下。京东首页顶部的「关闭浮层活动」就是这么漏掉的（`startsWith("关闭")` 成立，但 top 区域被位置闸挡下，且页面营销文案分散、卡片包围盒不成立）。
+- **服务连接日志**改成读 `PackageInfo.versionName`，不再写死版本号（0.11.0 装上去还打着 `service-connected 0.10.1`）。
+- **工作流**：`actions/checkout@v7`、`actions/setup-java@v6`、`gradle/actions/setup-gradle@v6`、`actions/upload-artifact@v7`、`softprops/action-gh-release@v3`，全部 node24 运行时，消掉 Node 20 停用提示；Setup Gradle 加 `continue-on-error`，GitHub 缓存服务偶发 5xx 时只影响速度、不标红（日志里那条 “Our services aren’t available” 就是缓存服务抖动，构建本身是成功的）。
+- 版本 0.11.1 / versionCode 37。
+
+**影响面/备注**
+- E5 放宽了位置，但仍是「小控件形状 + 明确关闭语义 + 广告词」三重条件，且业务词排除在前；风险面是某些 App 的「关闭活动面板」会被点掉（本就要关）。
+
 ## 0.11.0 - 2026-10-31 · 弹窗通道提覆盖：按窗口冷却、全宽关闭按钮、卡片内业务词、新增窗口触发
 
 **改了什么**
