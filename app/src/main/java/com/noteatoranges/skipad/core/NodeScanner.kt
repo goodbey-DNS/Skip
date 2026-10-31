@@ -81,31 +81,35 @@ class NodeScanner(rules: List<SkipRule>) {
                 } else if (!byViewId && text == null) {
                     reject = "「${vid?.take(12)}」无文本且非 viewId 命中"
                 } else {
-                    val clickable = clickableAncestor(node)
-                    when {
-                        clickable == null ->
-                            reject = "「${(text ?: vid)?.take(12)}」无可点击祖先(6级内)"
-                        !clickable.isVisibleToUser ->
-                            reject = "「${(text ?: vid)?.take(12)}」祖先不可见"
-                        else -> {
-                            val rect = Rect()
-                            clickable.getBoundsInScreen(rect)
-                            val area = rect.width().toFloat() * rect.height()
-                            val pct = (area / screenArea * 100).toInt()
-                            // 右上角锚定闸：只约束"文本命中"（页面正文的跳过xxx 多在中部）；
-                            // viewId 命中的就是跳过按钮本体，免位置闸
-                            val cx = rect.exactCenterX()
-                            val cy = rect.exactCenterY()
-                            val inCorner = cx >= screenW * 0.4f && cy <= screenH * 0.6f
-                            if (!byViewId && !inCorner) {
-                                reject = "「${text?.take(12)}」不在顶部右侧(cx=${cx.toInt()},cy=${cy.toInt()})"
-                            } else if (area in 1f..screenArea * matched.rule.maxAreaRatio) {
-                                lastDebug = "HIT「${(text ?: vid)?.take(20)}」面积${pct}% 规则=${matched.rule.id}" +
-                                    if (byViewId) "(viewId)" else ""
-                                return clickable to matched.rule
-                            } else {
-                                reject = "「${(text ?: vid)?.take(12)}」祖先面积${pct}%超限"
-                            }
+                    // 找不到可点击祖先时退回节点本身：ClickPerformer 会先试 performAction，
+                    // 失败再按节点中心坐标点。微博开屏的"跳过"是纯 TextView（clickable=false、
+                    // 祖先也不可点），只有这条路能点掉
+                    val cand = clickableAncestor(node) ?: node
+                    if (!cand.isVisibleToUser) {
+                        reject = "「${(text ?: vid)?.take(12)}」不可见"
+                    } else {
+                        val rect = Rect()
+                        cand.getBoundsInScreen(rect)
+                        val area = rect.width().toFloat() * rect.height()
+                        val pct = (area / screenArea * 100).toInt()
+                        // 位置闸：广告跳过按钮可以出现在任意角落（微博在右下角 95%），
+                        // 只排除屏幕中央主体区，那里出现"跳过"基本是正文而不是按钮。
+                        // viewId 命中的是按钮本体，免此闸。
+                        val cx = rect.exactCenterX()
+                        val cy = rect.exactCenterY()
+                        val inCenter = cx > screenW * 0.3f && cx < screenW * 0.7f &&
+                            cy > screenH * 0.2f && cy < screenH * 0.8f
+                        if (!byViewId && inCenter) {
+                            reject = "「${text?.take(12)}」在中央区域(cx=${cx.toInt()},cy=${cy.toInt()})"
+                        } else if (area in 1f..screenArea * matched.rule.maxAreaRatio) {
+                            lastDebug = "HIT「${(text ?: vid)?.take(20)}」面积${pct}% 规则=${matched.rule.id}" +
+                                if (byViewId) "(viewId)" else ""
+                            return cand to matched.rule
+                        } else {
+                            reject = "「${text?.take(12)}」区域面积${pct}%超限"
+                        }
+                    }
+                }
                         }
                     }
                 }
