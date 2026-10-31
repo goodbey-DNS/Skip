@@ -22,6 +22,9 @@ import java.util.zip.ZipOutputStream
  */
 object Backup {
 
+    /** 备份包标识：manifest.json 里的 app 字段必须等于它，否则不认 */
+    private const val APP_NAME = "SkipAd"
+
     /** 导出的 zip 落在外部私有目录 backup/ 下，返回 null 表示失败 */
     fun export(context: Context): File? = try {
         val root = context.getExternalFilesDir(null) ?: context.filesDir
@@ -58,7 +61,7 @@ object Backup {
                 context.packageManager.getPackageInfo(context.packageName, 0).versionName
             }.getOrNull() ?: ""
             val manifest = JSONObject().apply {
-                put("app", "SkipAd")
+                put("app", APP_NAME)
                 put("version", ver)
                 put("createdAt", System.currentTimeMillis())
                 put("fileCount", count)
@@ -71,8 +74,17 @@ object Backup {
         null
     }
 
-    /** 恢复结果：各恢复了几条 */
-    data class Restored(val rules: Int, val keywords: Int, val snapshots: Int)
+    /** 恢复结果：各恢复了几条 + 跳过的坏条目数 + 备份来源版本 */
+    data class Restored(
+        val rules: Int,
+        val keywords: Int,
+        val snapshots: Int,
+        val rulesSkipped: Int = 0,
+        val keywordsSkipped: Int = 0,
+        val rulesInvalid: Boolean = false,
+        val keywordsInvalid: Boolean = false,
+        val fromVersion: String = "",
+    )
 
     /** backup 目录里最新的一份 zip（按修改时间） */
     fun latestBackup(context: Context): File? {
@@ -94,6 +106,8 @@ object Backup {
         val keywords = ArrayList<ByteArray>()
         val snaps = HashMap<String, ByteArray>() // "dir/file" -> bytes
         var hasManifest = false
+        var manifestApp = ""
+        var manifestVersion = ""
 
         ZipInputStream(input.buffered()).use { zis ->
             var e: ZipEntry? = zis.nextEntry
@@ -102,7 +116,16 @@ object Backup {
                 if (!e.isDirectory) {
                     val bytes = zis.readBytes()
                     when {
-                        name == "manifest.json" -> hasManifest = true
+                        name == "manifest.json" -> {
+                            hasManifest = true
+                            // 以前只判断「有这个文件」，等于闸门形同虚设：任何带 manifest.json
+                            // 的 zip 都能过。现在把 app / version 真读出来做认人。
+                            runCatching {
+                                val j = JSONObject(String(bytes, Charsets.UTF_8))
+                                manifestApp = j.optString("app")
+                                manifestVersion = j.optString("version")
+                            }
+                        }
                         name == "rules.json" -> rules.add(bytes)
                         name == "keywords.json" -> keywords.add(bytes)
                         name.startsWith("snapshots/") && (name.endsWith("/meta.json") || name.endsWith("/tree.json")) ->
@@ -117,11 +140,29 @@ object Backup {
         if (!hasManifest && rules.isEmpty() && keywords.isEmpty() && snaps.isEmpty()) {
             throw IllegalStateException("not a SkipAd backup")
         }
+        // manifest 写了 app 但不是 SkipAd：明确认错备份
+        if (manifestApp.isNotBlank() && manifestApp != APP_NAME) {
+            throw IllegalStateException("not a SkipAd backup")
+        }
 
+        // 三块各自独立兼容：某一块坏了不拖累另外两块（以前一处抛错整份恢复归零）
         var rulesCount = 0
+        var rulesSkipped = 0
+        var rulesInvalid = false
+        rules.firstOrNull()?.let {
+            runCatching { com.noteatoranges.skipad.db.RuleStore.importFrom(context, it) }
+                .onSuccess { r -> rulesCount = r.ok; rulesSkipped = r.skipped }
+                .onFailure { rulesInvalid = true }
+        }
+
         var kwCount = 0
-        rules.firstOrNull()?.let { rulesCount = com.noteatoranges.skipad.db.RuleStore.importFrom(context, it) }
-        keywords.firstOrNull()?.let { kwCount = com.noteatoranges.skipad.db.KeywordStore.importFrom(context, it) }
+        var kwSkipped = 0
+        var kwInvalid = false
+        keywords.firstOrNull()?.let {
+            runCatching { com.noteatoranges.skipad.db.KeywordStore.importFrom(context, it) }
+                .onSuccess { r -> kwCount = r.ok; kwSkipped = r.skipped }
+                .onFailure { kwInvalid = true }
+        }
 
         val snapRoot = File(context.filesDir, "snapshots").apply { mkdirs() }
         var snapCount = 0
@@ -138,7 +179,7 @@ object Backup {
             }
             if (wrote) snapCount++
         }
-        Restored(rulesCount, kwCount, snapCount)
+        Restored(rulesCount, kwCount, snapCount, rulesSkipped, kwSkipped, rulesInvalid, kwInvalid, manifestVersion)
     } catch (e: Exception) {
         null
     }

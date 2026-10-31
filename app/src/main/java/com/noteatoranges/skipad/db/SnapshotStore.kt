@@ -91,19 +91,25 @@ object SnapshotStore {
         File(context.filesDir, "snapshots").listFiles()?.filter { it.isDirectory }
             ?.sortedByDescending { it.name } ?: emptyList()
 
-    fun loadMeta(dir: File): Meta? = try {
-        val j = JSONObject(File(dir, "meta.json").readText())
-        Meta(
-            j.getString("pkg"),
-            j.optString("activity"),
-            j.getLong("time"),
-            j.optInt("nodeCount", 0),
-            j.optString("name"),
-            j.optInt("screenW", 0),
-            j.optInt("screenH", 0),
-        )
-    } catch (e: Exception) {
-        null
+    fun loadMeta(dir: File): Meta? {
+        return try {
+            val j = JSONObject(File(dir, "meta.json").readText())
+            // pkg 缺失时从目录名（<ts>_<pkg>）兜底，别因为一个字段让整份快照在列表里消失
+            val pkg = j.optString("pkg").takeIf { it.isNotBlank() }
+                ?: dir.name.substringAfter('_', "").takeIf { it.isNotBlank() }
+                ?: return null
+            Meta(
+                pkg,
+                j.optString("activity"),
+                j.optLong("time", dir.lastModified()),
+                j.optInt("nodeCount", 0),
+                j.optString("name"),
+                j.optInt("screenW", 0),
+                j.optInt("screenH", 0),
+            )
+        } catch (e: Exception) {
+            null
+        }
     }
 
     /** 重命名快照：只改 meta.json 里的 name，不动图片和节点树 */
@@ -117,19 +123,29 @@ object SnapshotStore {
         false
     }
 
+    /**
+     * 读节点树。逐条兜：坐标或用 idx 缺失的条目跳过，不因一条坏把整份快照读成空。
+     * （全部用 opt 取值，历史备份缺 path/winId 时走默认值即可）
+     */
     fun loadNodes(dir: File): List<Node> = try {
         val arr = JSONArray(File(dir, "tree.json").readText())
-        (0 until arr.length()).map { i ->
-            val j = arr.getJSONObject(i)
-            Node(
-                idx = j.getInt("idx"), cls = j.getString("cls"),
-                text = j.optString("text"), desc = j.optString("desc"),
-                vid = j.optString("vid"), clickable = j.optBoolean("clickable"),
-                l = j.getInt("l"), t = j.getInt("t"), r = j.getInt("r"), b = j.getInt("b"),
-                path = j.optString("path"),
-                winId = j.optInt("winId", 0),
+        val out = ArrayList<Node>(arr.length())
+        for (i in 0 until arr.length()) {
+            val j = runCatching { arr.getJSONObject(i) }.getOrNull() ?: continue
+            val cls = j.optString("cls")
+            if (!j.has("l") || !j.has("t") || !j.has("r") || !j.has("b")) continue
+            out.add(
+                Node(
+                    idx = j.optInt("idx", i), cls = cls,
+                    text = j.optString("text"), desc = j.optString("desc"),
+                    vid = j.optString("vid"), clickable = j.optBoolean("clickable"),
+                    l = j.optInt("l"), t = j.optInt("t"), r = j.optInt("r"), b = j.optInt("b"),
+                    path = j.optString("path"),
+                    winId = j.optInt("winId", 0),
+                )
             )
         }
+        out
     } catch (e: Exception) {
         emptyList()
     }

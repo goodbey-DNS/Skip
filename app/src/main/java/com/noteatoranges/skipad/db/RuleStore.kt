@@ -74,41 +74,72 @@ object RuleStore {
 
     private fun file(context: Context): File = File(context.filesDir, FILE)
 
-    private fun read(context: Context): MutableList<SkipAppRule> = try {
-        val arr = JSONArray(file(context).takeIf { it.exists() }?.readText() ?: "[]")
-        (0 until arr.length()).map { o ->
-            val j = arr.getJSONObject(o)
-            SkipAppRule(
-                id = j.getString("id"),
-                app = j.getString("app"),
-                appLabel = j.optString("appLabel", j.getString("app")),
-                kind = j.getString("kind"),
-                viewId = j.optString("viewId").takeIf { it.isNotEmpty() },
-                textContains = j.optString("textContains").takeIf { it.isNotEmpty() },
-                xRatio = if (j.has("xRatio")) j.getDouble("xRatio").toFloat() else null,
-                yRatio = if (j.has("yRatio")) j.getDouble("yRatio").toFloat() else null,
-                delayMs = j.optLong("delayMs", 900L),
-                enabled = j.optBoolean("enabled", true),
-                createdAt = j.optLong("createdAt", 0L),
-                activity = j.optString("activity").takeIf { it.isNotEmpty() },
-                action = j.optString("action").takeIf { it.isNotEmpty() } ?: SkipRule.ACTION_CLICK,
-                cooldownMs = j.optLong("cooldownMs", 1000L),
-                maxCount = j.optInt("maxCount", 0),
-                anchorVid = j.optString("anchorVid").takeIf { it.isNotEmpty() },
-                anchorText = j.optString("anchorText").takeIf { it.isNotEmpty() },
-                dxDp = if (j.has("dxDp")) j.getInt("dxDp") else null,
-                dyDp = if (j.has("dyDp")) j.getInt("dyDp") else null,
-                nodePath = j.optString("nodePath").takeIf { it.isNotEmpty() },
-                nodeWinId = j.optInt("nodeWinId", 0),
-                nodeCls = j.optString("nodeCls").takeIf { it.isNotEmpty() },
-                nodeWDp = if (j.has("nodeWDp")) j.getInt("nodeWDp") else null,
-                nodeHDp = if (j.has("nodeHDp")) j.getInt("nodeHDp") else null,
-                dpX = if (j.has("dpX")) j.getDouble("dpX").toFloat() else null,
-                dpY = if (j.has("dpY")) j.getDouble("dpY").toFloat() else null,
-            )
-        }.toMutableList()
-    } catch (e: Exception) {
-        mutableListOf()
+    /**
+     * 解析单条规则。返回 null 表示该条目残缺到无法归类。
+     *
+     * 为什么不用 getString 硬取：以前只要有一条缺 id/app/kind，就会抛异常被外层
+     * catch 吞掉，整份文件读成空列表 —— 界面上看起来「规则全没了」，此后用户随手点
+     * 一下开关（setEnabled 会 write(read().filter{})）就把空列表写回磁盘，原数据真丢。
+     * 现在逐条兜：缺 app 或 kind 的丢（不知道该作用于哪个 App，留着反而会变成全局规则），
+     * 缺 id 的现场补一个由位置+创建时间构成的稳定 id（同一份文件反复读结果一致）。
+     */
+    private fun parseOne(j: JSONObject, fallbackId: String): SkipAppRule? {
+        val app = j.optString("app").takeIf { it.isNotBlank() } ?: return null
+        val kind = j.optString("kind").takeIf { it.isNotBlank() } ?: return null
+        return SkipAppRule(
+            id = j.optString("id").takeIf { it.isNotBlank() } ?: fallbackId,
+            app = app,
+            appLabel = j.optString("appLabel").takeIf { it.isNotBlank() } ?: app,
+            kind = kind,
+            viewId = j.optString("viewId").takeIf { it.isNotEmpty() },
+            textContains = j.optString("textContains").takeIf { it.isNotEmpty() },
+            xRatio = if (j.has("xRatio")) j.optDouble("xRatio").toFloat() else null,
+            yRatio = if (j.has("yRatio")) j.optDouble("yRatio").toFloat() else null,
+            delayMs = j.optLong("delayMs", 900L),
+            enabled = j.optBoolean("enabled", true),
+            createdAt = j.optLong("createdAt", 0L),
+            activity = j.optString("activity").takeIf { it.isNotEmpty() },
+            action = j.optString("action").takeIf { it.isNotEmpty() } ?: SkipRule.ACTION_CLICK,
+            cooldownMs = j.optLong("cooldownMs", 1000L),
+            maxCount = j.optInt("maxCount", 0),
+            anchorVid = j.optString("anchorVid").takeIf { it.isNotEmpty() },
+            anchorText = j.optString("anchorText").takeIf { it.isNotEmpty() },
+            dxDp = if (j.has("dxDp")) j.optInt("dxDp") else null,
+            dyDp = if (j.has("dyDp")) j.optInt("dyDp") else null,
+            nodePath = j.optString("nodePath").takeIf { it.isNotEmpty() },
+            nodeWinId = j.optInt("nodeWinId", 0),
+            nodeCls = j.optString("nodeCls").takeIf { it.isNotEmpty() },
+            nodeWDp = if (j.has("nodeWDp")) j.optInt("nodeWDp") else null,
+            nodeHDp = if (j.has("nodeHDp")) j.optInt("nodeHDp") else null,
+            dpX = if (j.has("dpX")) j.optDouble("dpX").toFloat() else null,
+            dpY = if (j.has("dpY")) j.optDouble("dpY").toFloat() else null,
+        )
+    }
+
+    /** 逐条解析整份数组，坏条目跳过并计数，绝不因一条坏全盘归零 */
+    private fun parseAll(arr: JSONArray): Pair<MutableList<SkipAppRule>, Int> {
+        val out = ArrayList<SkipAppRule>(arr.length())
+        var skipped = 0
+        for (i in 0 until arr.length()) {
+            val j = runCatching { arr.getJSONObject(i) }.getOrNull()
+            if (j == null) { skipped++; continue }
+            val rule = parseOne(j, "legacy-$i-${j.optLong("createdAt", 0L)}")
+            if (rule == null) skipped++ else out.add(rule)
+        }
+        return out to skipped
+    }
+
+    private fun read(context: Context): MutableList<SkipAppRule> {
+        val f = file(context)
+        if (!f.exists()) return mutableListOf()
+        return try {
+            val text = f.readText().trim()
+            if (text.isEmpty()) return mutableListOf()
+            parseAll(JSONArray(text)).first
+        } catch (e: Exception) {
+            // 整份不是合法 JSON 数组：只能当作没有，但不再连带其它逻辑出错
+            mutableListOf()
+        }
     }
 
     private fun write(context: Context, rules: List<SkipAppRule>) {
@@ -143,7 +174,15 @@ object RuleStore {
                 r.dpY?.let { put("dpY", it.toDouble()) }
             })
         }
-        file(context).writeText(arr.toString())
+        // 原子写：先落临时文件再改名。直接 writeText 若中途被杀，会留下半截 JSON，
+        // 那份文件连「合法数组」都不是，等于规则全丢且无从恢复。
+        val f = file(context)
+        val tmp = File(f.parentFile, "$FILE.tmp")
+        tmp.writeText(arr.toString())
+        if (!tmp.renameTo(f)) {
+            f.delete()
+            tmp.renameTo(f)
+        }
         bumpVersion(context)
     }
 
@@ -165,13 +204,22 @@ object RuleStore {
         write(context, read(context).filter { it.id != id })
     }
 
-    /** 从备份恢复：JSON 不合法直接抛错（调用方兜），合法才整份覆盖并让服务重建扫描器 */
-    fun importFrom(context: Context, bytes: ByteArray): Int {
+    /** 导入结果：可用条数 + 被跳过的坏条目数 */
+    data class ImportOutcome(val ok: Int, val skipped: Int)
+
+    /**
+     * 从备份恢复：解析后按当前格式规范化落盘，返回真实可用条数。
+     *
+     * 以前是「校验是 JSON 数组就原样写回」，于是残缺条目能骗过校验：提示恢复 5 条，
+     * 实际读出来 0 条。现在先解析成对象再 write，坏条目当场丢掉并计数告诉用户，
+     * 下一次读到的就是干净数据。
+     */
+    fun importFrom(context: Context, bytes: ByteArray): ImportOutcome {
         val text = String(bytes, Charsets.UTF_8).trim()
         val arr = JSONArray(text)
-        file(context).writeText(text)
-        bumpVersion(context)
-        return arr.length()
+        val (parsed, skipped) = parseAll(arr)
+        write(context, parsed)
+        return ImportOutcome(parsed.size, skipped)
     }
 
     fun setEnabled(context: Context, id: String, enabled: Boolean) {

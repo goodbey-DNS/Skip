@@ -58,29 +58,55 @@ object KeywordStore {
 
     fun parseWords(raw: String): List<String> = splitWords(raw)
 
-    private fun read(context: Context): List<KeywordRule> = try {
-        val f = file(context)
-        if (!f.exists()) emptyList() else {
-            val arr = JSONArray(f.readText())
-            (0 until arr.length()).map { i ->
-                val j = arr.getJSONObject(i)
-                KeywordRule(
-                    id = j.getString("id"),
-                    app = j.optString("app", KeywordRule.GLOBAL_APP),
-                    appLabel = j.optString("appLabel", ""),
-                    hits = j.optJSONArray("hits")?.let { a ->
-                        (0 until a.length()).map { a.optString(it) }.filter { it.isNotEmpty() }
-                    } ?: emptyList(),
-                    excludes = j.optJSONArray("excludes")?.let { a ->
-                        (0 until a.length()).map { a.optString(it) }.filter { it.isNotEmpty() }
-                    } ?: emptyList(),
-                    enabled = j.optBoolean("enabled", true),
-                    createdAt = j.optLong("createdAt", 0),
-                )
-            }
+    /** 导入结果：可用条数 + 被跳过的坏条目数 */
+    data class ImportOutcome(val ok: Int, val skipped: Int)
+
+    /**
+     * 解析单条。返回 null 表示该条无任何词可生效。
+     * 同 RuleStore：以前 getString("id") 硬取，一条残缺就把整份读成空列表。
+     */
+    private fun parseOne(j: JSONObject, fallbackId: String): KeywordRule? {
+        val hits = j.optJSONArray("hits")?.let { a ->
+            (0 until a.length()).map { a.optString(it) }.filter { it.isNotEmpty() }
+        } ?: emptyList()
+        val excludes = j.optJSONArray("excludes")?.let { a ->
+            (0 until a.length()).map { a.optString(it) }.filter { it.isNotEmpty() }
+        } ?: emptyList()
+        // 两边都为空的条目起不了任何作用，留着只会在界面上占一行
+        if (hits.isEmpty() && excludes.isEmpty()) return null
+        return KeywordRule(
+            id = j.optString("id").takeIf { it.isNotBlank() } ?: fallbackId,
+            app = j.optString("app").takeIf { it.isNotBlank() } ?: KeywordRule.GLOBAL_APP,
+            appLabel = j.optString("appLabel", ""),
+            hits = hits,
+            excludes = excludes,
+            enabled = j.optBoolean("enabled", true),
+            createdAt = j.optLong("createdAt", 0),
+        )
+    }
+
+    private fun parseAll(arr: JSONArray): Pair<List<KeywordRule>, Int> {
+        val out = ArrayList<KeywordRule>(arr.length())
+        var skipped = 0
+        for (i in 0 until arr.length()) {
+            val j = runCatching { arr.getJSONObject(i) }.getOrNull()
+            if (j == null) { skipped++; continue }
+            val rule = parseOne(j, "legacy-$i-${j.optLong("createdAt", 0L)}")
+            if (rule == null) skipped++ else out.add(rule)
         }
-    } catch (e: Exception) {
-        emptyList()
+        return out to skipped
+    }
+
+    private fun read(context: Context): List<KeywordRule> {
+        val f = file(context)
+        if (!f.exists()) return emptyList()
+        return try {
+            val text = f.readText().trim()
+            if (text.isEmpty()) return emptyList()
+            parseAll(JSONArray(text)).first
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     private fun write(context: Context, rules: List<KeywordRule>) {
@@ -96,7 +122,14 @@ object KeywordStore {
                 put("createdAt", r.createdAt)
             })
         }
-        file(context).writeText(arr.toString())
+        // 原子写：同 RuleStore.write，避免半截文件把整份词表读废
+        val f = file(context)
+        val tmp = File(f.parentFile, "$FILE.tmp")
+        tmp.writeText(arr.toString())
+        if (!tmp.renameTo(f)) {
+            f.delete()
+            tmp.renameTo(f)
+        }
         val v = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("v", 0) + 1
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt("v", v).apply()
     }
@@ -115,14 +148,13 @@ object KeywordStore {
         write(context, read(context).filter { it.id != id })
     }
 
-    /** 从备份恢复：合法 JSON 才覆盖，并让服务重新取词 */
-    fun importFrom(context: Context, bytes: ByteArray): Int {
+    /** 从备份恢复：解析后规范化落盘（坏条目丢弃并计数），并让服务重新取词 */
+    fun importFrom(context: Context, bytes: ByteArray): ImportOutcome {
         val text = String(bytes, Charsets.UTF_8).trim()
         val arr = JSONArray(text)
-        file(context).writeText(text)
-        val v = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("v", 0) + 1
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt("v", v).apply()
-        return arr.length()
+        val (parsed, skipped) = parseAll(arr)
+        write(context, parsed)
+        return ImportOutcome(parsed.size, skipped)
     }
 
     fun setEnabled(context: Context, id: String, enabled: Boolean) {

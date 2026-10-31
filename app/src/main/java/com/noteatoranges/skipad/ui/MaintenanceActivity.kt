@@ -107,12 +107,37 @@ class MaintenanceActivity : AppCompatActivity() {
                 Toast.makeText(this, "恢复失败：不是可识别的 SkipAd 备份", Toast.LENGTH_LONG).show()
                 return@runOnUiThread
             }
-            val safeText = safe?.let { "；当前数据已备份为 ${it.name}" } ?: ""
-            Toast.makeText(
-                this,
-                "已恢复：规则 ${res.rules} 条、关键字 ${res.keywords} 条、快照 ${res.snapshots} 份$safeText",
-                Toast.LENGTH_LONG,
-            ).show()
+            val sb = StringBuilder()
+            sb.append("已恢复：规则 ").append(res.rules).append(" 条、关键字 ").append(res.keywords)
+                .append(" 条、快照 ").append(res.snapshots).append(" 份")
+
+            // 跳过与失败必须让用户看见：静默丢掉等于骗他说「全恢复了」
+            if (res.rulesSkipped > 0) {
+                sb.append("\n\n规则跳过 ").append(res.rulesSkipped).append(" 条：缺 App 包名或规则类型，无法确定作用范围，已丢弃。")
+            }
+            if (res.keywordsSkipped > 0) {
+                sb.append("\n\n关键字跳过 ").append(res.keywordsSkipped).append(" 条：命中词与排除词都为空，留着也不会生效。")
+            }
+            if (res.rulesInvalid) {
+                sb.append("\n\n规则文件不是合法 JSON，原有规则未被改动。")
+            }
+            if (res.keywordsInvalid) {
+                sb.append("\n\n关键字文件不是合法 JSON，原有词表未被改动。")
+            }
+
+            val cur = runCatching {
+                packageManager.getPackageInfo(packageName, 0).versionName
+            }.getOrNull().orEmpty()
+            if (res.fromVersion.isNotBlank() && cur.isNotBlank() && res.fromVersion != cur) {
+                sb.append("\n\n这份备份来自 ").append(res.fromVersion).append("，已按当前版本格式整理。")
+            }
+            safe?.let { sb.append("\n\n当前数据已备份为 ").append(it.name) }
+
+            AlertDialog.Builder(this)
+                .setTitle("恢复完成")
+                .setMessage(sb.toString())
+                .setPositiveButton("好", null)
+                .show()
         }
     }
 
