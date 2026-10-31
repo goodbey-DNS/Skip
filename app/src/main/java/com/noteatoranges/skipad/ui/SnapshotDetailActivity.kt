@@ -33,6 +33,8 @@ class SnapshotDetailActivity : AppCompatActivity() {
     private lateinit var infoText: TextView
     private lateinit var genButton: Button
     private lateinit var nodeContainer: LinearLayout
+    private lateinit var scroll: android.widget.ScrollView
+    private lateinit var infoCard: View
     private var nodes: List<SnapshotStore.Node> = emptyList()
     private var selected: SnapshotStore.Node? = null
     private var selectedRow: View? = null
@@ -60,6 +62,8 @@ class SnapshotDetailActivity : AppCompatActivity() {
         infoText = findViewById(R.id.node_info_text)
         genButton = findViewById(R.id.gen_button)
         nodeContainer = findViewById(R.id.node_container)
+        scroll = findViewById(R.id.scroll)
+        infoCard = findViewById(R.id.node_info_card)
 
         findViewById<TextView>(R.id.back_button).setOnClickListener { finish() }
         findViewById<TextView>(R.id.detail_title).text = AppLabels.get(this, meta.pkg).label
@@ -101,8 +105,9 @@ class SnapshotDetailActivity : AppCompatActivity() {
                 if (row.tag == node) getColor(R.color.status_on) else Color.TRANSPARENT
             )
         }
-        // 滚回顶部看高亮
-        findViewById<android.widget.ScrollView>(R.id.scroll).smoothScrollTo(0, 0)
+        // 滚到信息卡片：选完节点就要能直接看到「生成跳过规则」按钮。
+        // 之前是滚回顶部，截图占满屏时按钮又被推到视野外，等于白选
+        scroll.post { scroll.smoothScrollTo(0, (infoCard.top - dp(80)).coerceAtLeast(0)) }
     }
 
     private fun renderNodes() {
@@ -124,7 +129,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply { topMargin = dp(8) }
                 tag = n
-                setOnClickListener { selectNode(n); findViewById<android.widget.ScrollView>(R.id.scroll).smoothScrollTo(0, 0) }
+                setOnClickListener { selectNode(n) }
             }
             row.addView(TextView(this).apply {
                 text = buildString {
