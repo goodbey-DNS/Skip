@@ -3,7 +3,11 @@ name: Build APK
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 concurrency:
   group: build-${{ github.ref }}
@@ -24,7 +28,7 @@ jobs:
           java-version: '17'
 
       # ubuntu-latest 自带 Android SDK（platform-tools / build-tools / platforms 若干），
-      # 不再用 setup-android 去下载 cmdline-tools（那一步在 runner 上会失败），缺什么补什么
+      # 不用 setup-android 去下载 cmdline-tools（那一步在 runner 上会失败），缺什么补什么
       - name: Ensure Android platform 34
         run: |
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
@@ -56,9 +60,27 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Upload APK
+      - name: Rename APK with version
+        run: |
+          mkdir -p dist
+          SRC=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          NAME="SkipAd-${{ github.ref_name }}-${{ github.run_number }}.apk"
+          cp "$SRC" "dist/$NAME"
+          echo "APK=dist/$NAME" >> "$GITHUB_ENV"
+          ls -lh dist
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SkipAd-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: SkipAd-apk-${{ github.run_number }}
+          path: dist/*.apk
           if-no-files-found: error
+
+      # 打 v* 标签时自动发 Release，APK 可直接下载安装，不用登录
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.apk
+          generate_release_notes: true
+          draft: false
