@@ -133,6 +133,9 @@ class SkipAccessibilityService : AccessibilityService() {
     private val lastStateChangeAt = HashMap<String, Long>()
     private val lastActivityClass = HashMap<String, String>()
 
+    /** 本页面已点过的控件矩形（分桶后的键），换页面清空。见 [clickNodeOnce] */
+    private val clickedRects = HashSet<String>()
+
     private val mainExecutor = Executor { mainHandler.post(it) }
 
     private val snapshotReceiver = object : BroadcastReceiver() {
@@ -340,6 +343,31 @@ class SkipAccessibilityService : AccessibilityService() {
         return true
     }
 
+    /**
+     * 同一个控件位置在本页面里只点一次。
+     *
+     * [gate] 的冷却按「规则」记账，可两条不同规则（内置 + 用户自建、开屏通道 + 弹窗通道）
+     * 命中同一个控件时会各点一次；第二下落在已经跳转后的页面上，就是实打实的误点。
+     * 这里按实际矩形再兜一层。矩形分桶是因为无障碍的 bounds 在相邻两帧间会有 1~2px 抖动，
+     * 精确相等去不掉重复。
+     *
+     * 只管按节点点击；坐标规则的重试是故意连点，不走这里。
+     */
+    private fun clickNodeOnce(node: AccessibilityNodeInfo): Boolean {
+        val r = Rect()
+        node.getBoundsInScreen(r)
+        val key = "${r.left / RECT_BUCKET_PX}|${r.top / RECT_BUCKET_PX}|" +
+            "${r.right / RECT_BUCKET_PX}|${r.bottom / RECT_BUCKET_PX}"
+        if (key in clickedRects) {
+            Log.v(TAG, "click-dup $key")
+            return false
+        }
+        val ok = clicker?.click(node) == true
+        // 只在真正点出去之后才记：点失败（节点失效等）还应该允许下次再试
+        if (ok) clickedRects.add(key)
+        return ok
+    }
+
     /** 换 App / 换页面：清节点属性缓存与规则计数，并强制重建扫描器 */
     private fun onPageChanged(pkg: String, activity: String) {
         if (stateActivity[pkg] == activity) return
@@ -353,6 +381,8 @@ class SkipAccessibilityService : AccessibilityService() {
         popupBlockedUntil.clear()
         lastWeakHit = null
         userScannerKey = null
+        // 同页面重复 WSC 会在上面 early return，这里清空只在真的换页面时发生
+        clickedRects.clear()
     }
 
     private fun bubbleToast(msg: String) {
@@ -374,8 +404,13 @@ class SkipAccessibilityService : AccessibilityService() {
                 if (lastStateChangeAt.size > 50) lastStateChangeAt.clear()
                 val freshSwitch = lastFgPkg != ep && ep !in blacklist
                 lastStateChangeAt[ep] = SystemClock.elapsedRealtime()
-                val act = event.className?.toString() ?: lastActivityClass[ep].orEmpty()
-                event.className?.toString()?.let { lastActivityClass[ep] = it }
+                // className 不一定就是 Activity：弹浮层 / 列表刷新时 WSC 事件报的是
+                // android.widget.PopupWindow、androidx...RecyclerView 这类系统控件类名。
+                // 直接记下来会让「页面限定」的规则永远失配（activityMatches 按类名后缀比）
+                val cn = event.className?.toString()
+                val realCn = cn?.takeIf { it.isNotBlank() && !isSystemUiClass(it) }
+                val act = realCn ?: lastActivityClass[ep].orEmpty()
+                realCn?.let { lastActivityClass[ep] = it }
                 // 换页：清属性缓存、清规则计数、下次事件重建扫描器
                 onPageChanged(ep, act)
                 if (freshSwitch && ep !in blacklist) {
@@ -465,10 +500,14 @@ class SkipAccessibilityService : AccessibilityService() {
 
         // 用户规则优先；窗口有"广告"标识时免位置闸
         val adHint = adHintFor(-1, root)
+        val t0 = SystemClock.elapsedRealtime()
         val hit = userScanner?.findSkipTarget(root, w, h, adHint)
             ?: builtinScanner?.findSkipTarget(root, w, h, adHint)
+        // 扫描耗时：决定要不要给「每 App 事件次数」加预算时必须看这个数，
+        // 不能凭感觉（上限是 TRAVERSE_TIMEOUT_MS=400ms）
+        val cost = SystemClock.elapsedRealtime() - t0
         if (hit == null) {
-            Log.v(TAG, "scan $pkg: ${userScanner?.lastDebug ?: builtinScanner?.lastDebug}")
+            Log.v(TAG, "scan $pkg ${cost}ms: ${userScanner?.lastDebug ?: builtinScanner?.lastDebug}")
             // 开屏窗口期内也可能先浮出营销弹窗，主路径没命中就顺带试一次弹窗通道
             tryPopupClose(event, now)
             return
@@ -477,7 +516,7 @@ class SkipAccessibilityService : AccessibilityService() {
             ?: hit.first.contentDescription?.toString()
             ?: hit.first.viewIdResourceName
             ?: hit.second.id
-        Log.d(TAG, "match $pkg: ${userScanner?.lastDebug ?: builtinScanner?.lastDebug}")
+        Log.d(TAG, "match $pkg ${cost}ms: ${userScanner?.lastDebug ?: builtinScanner?.lastDebug}")
         dumpTree(root, pkg, "match")
 
         val rule = hit.second
@@ -489,7 +528,7 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         val fired = when (rule.action) {
             SkipRule.ACTION_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
-            else -> clicker?.click(hit.first) == true
+            else -> clickNodeOnce(hit.first)
         }
         if (!fired) {
             Log.d(TAG, "action-fail $pkg ${rule.action} 规则=${rule.id}")
@@ -574,7 +613,7 @@ class SkipAccessibilityService : AccessibilityService() {
             }
             Log.d(TAG, "popup-match $key: ${scanner.lastPopupDebug}")
             dumpTree(root, pkg, "popup")
-            if (clicker?.click(hit.node) == true) {
+            if (clickNodeOnce(hit.node)) {
                 lastSkipWindow = key
                 lastSkipAt = now
                 pending = PendingSkip(key, pkg, "弹窗·${hit.why}", 0, 1)
@@ -699,6 +738,18 @@ class SkipAccessibilityService : AccessibilityService() {
         adHintCache[windowId] = now to v
         return v
     }
+
+    /**
+     * 系统控件类名不是 Activity。
+     *
+     * WSC 事件的 className 在弹浮层 / 列表刷新时会报 android.widget.PopupWindow、
+     * androidx.recyclerview.widget.RecyclerView 这类类名。把它当成当前页面记下来，
+     * 页面限定的规则就再也匹配不上了。用前缀判断而不是反射 Class.forName——
+     * 跨进程加载不到对方的类，反射只会抛异常还慢。
+     */
+    private fun isSystemUiClass(cn: String): Boolean =
+        cn.startsWith("android.") || cn.startsWith("androidx.") ||
+            cn.startsWith("com.android.internal.")
 
     /** 开屏类 Activity：决定能不能用"角落小按钮"兜底 */
     private fun isSplashLike(act: String): Boolean {
@@ -1067,7 +1118,7 @@ class SkipAccessibilityService : AccessibilityService() {
             }
             val fired = when (r.action) {
                 SkipRule.ACTION_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
-                else -> clicker?.click(node) == true
+                else -> clickNodeOnce(node)
             }
             Log.d(TAG, "path-rule ${r.id} path=${r.nodePath} $pkg ok=$fired")
             if (!fired) continue
@@ -1188,6 +1239,9 @@ class SkipAccessibilityService : AccessibilityService() {
 
         /** 盲点时间盒：窗口出现超过这个时长就不再按坐标点（正常开屏早该过去了） */
         const val POINT_MAX_WINDOW_AGE_MS = 8000L
+
+        /** 节点矩形去重的分桶宽度（px）：相邻两帧的 bounds 会抖 1~2px，精确相等去不掉重复 */
+        const val RECT_BUCKET_PX = 8
 
         /** 系统包与噪声大户：直接跳过节点遍历（李跳跳同款"先粗筛再遍历"思路） */
         val PACKAGE_BLACKLIST = setOf(

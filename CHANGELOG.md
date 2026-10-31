@@ -2,6 +2,21 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.16.4 - 2026-11-01 · Activity 类名过滤 + 节点点击去重 + 扫描耗时日志
+
+**改了什么**
+- **Activity 类名过滤系统控件**（`isSystemUiClass`）。WSC 事件的 `className` 不一定是 Activity：弹浮层、列表刷新时可能是 `android.widget.PopupWindow`、`androidx.recyclerview.widget.RecyclerView`。以前直接记进 `lastActivityClass`，`activityMatches` 按类名后缀比对，导致「页面限定」的规则一直失配（漏跳）。现在只接受非 `android.*` / `androidx.*` / `com.android.internal.*` 的类名，且空串不覆盖已有值。用前缀判断而不是 `Class.forName` 反射：跨进程加载不到对方的类，反射只会抛异常还慢。参考 GuoXiCheng/SKIP 的 `getActivityName`。
+- **节点点击按矩形去重**（`clickNodeOnce`）。`gate` 的冷却是按「规则」记账，两条不同规则（内置 + 用户自建、开屏通道 + 弹窗通道）命中同一控件时会各点一次，第二下落在已跳转的页面上就是误点。现在按节点实际矩形分 8px 桶做键，同页面内已点过就不再点；只在点击真正成功后才记账（失败允许重试）；换页面时清空。参考 SKIP 的 `clickedRect`。坐标规则的重试是故意连点，不走这条路。
+- **扫描耗时写进日志**：`scan $pkg 37ms: ...`。用来决定要不要给「每 App 事件次数」加预算——上限是 `TRAVERSE_TIMEOUT_MS=400ms`，不看实测数字就是拍脑袋。
+- 版本 0.16.4 / versionCode 51。
+
+**为什么**
+- 用户要求检查 GuoXiCheng/SKIP 是否有可借鉴处。核对后确认两处是真实缺陷（Activity 类名未过滤、节点矩形未去重），一处需要先测再定（事件次数预算）。
+
+**影响面/备注**
+- 未采纳：云端规则下发、MediaProjection 录屏采集、精确矩形 ±1px 规则（跨机型不可迁移）、音量键触发采集（已有悬浮窗抓取）。
+- 节点树用 `parentId`/`nodeId` 而非路径字符串更健壮（中间节点取不到时路径会错位），但要改 `tree.json` 格式并影响已有快照，未在本轮做。
+
 ## 0.16.3 - 2026-11-01 · 关键字的相对长度闸 + 分隔符归一化 + 坐标重试
 
 **改了什么**
