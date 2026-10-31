@@ -92,7 +92,9 @@ class SkipAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        builtinScanner = NodeScanner(BuiltinRules.defaults())
+        builtinScanner = NodeScanner(BuiltinRules.defaults()).also {
+            it.verbose = Log.isLoggable(TAG, Log.VERBOSE)
+        }
         clicker = ClickPerformer(this)
         blacklist = PACKAGE_BLACKLIST + findHomePackages()
         KeepAlive.scheduleJob(this)
@@ -237,7 +239,9 @@ class SkipAccessibilityService : AccessibilityService() {
         if (ver != userRulesVersionSeen) {
             userRulesVersionSeen = ver
             val nodeRules = RuleStore.nodeRulesAsScannerRules(this)
-            userScanner = if (nodeRules.isEmpty()) null else NodeScanner(nodeRules)
+            userScanner = if (nodeRules.isEmpty()) null else NodeScanner(nodeRules).also {
+                it.verbose = Log.isLoggable(TAG, Log.VERBOSE)
+            }
         }
 
         val w = resources.displayMetrics.widthPixels
@@ -301,7 +305,14 @@ class SkipAccessibilityService : AccessibilityService() {
         w: Int,
         h: Int,
     ) {
-        if (now - lastPopupScanAt < POPUP_SCAN_MS) return
+        // 窗口切换（新 Activity / Dialog）时弹窗可能刚出现，用更短的间隔；
+        // 信息流的内容变化事件一秒几十个，没必要跟着全速扫
+        val interval = if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            POPUP_SCAN_STATE_MS
+        } else {
+            POPUP_SCAN_MS
+        }
+        if (now - lastPopupScanAt < interval) return
         lastPopupScanAt = now
         val scanner = builtinScanner ?: return
         val hit = scanner.findPopupCloseTarget(root, w, h)
@@ -647,11 +658,15 @@ class SkipAccessibilityService : AccessibilityService() {
 
         @Volatile
         private var inst: SkipAccessibilityService? = null
-        const val THROTTLE_MS = 150L
+        /** 事件节流：信息流一次滑动会发几十个内容变化事件，150ms 太密 */
+        const val THROTTLE_MS = 300L
         const val COOLDOWN_MS = 4000L
 
         /** 弹窗通道：未命中时的扫描节流（全树最多 500 节点，别跟着信息流滚动一直扫） */
-        const val POPUP_SCAN_MS = 1200L
+        const val POPUP_SCAN_MS = 1800L
+
+        /** 窗口切换时弹窗可能刚出现，用更短的间隔 */
+        const val POPUP_SCAN_STATE_MS = 500L
 
         /** 弹窗点击后的冷却：同一 App 20 秒内不再点弹窗关闭钮 */
         const val POPUP_COOLDOWN_MS = 20000L

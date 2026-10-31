@@ -38,6 +38,12 @@ class NodeScanner(rules: List<SkipRule>) {
     var lastDebug: String? = null
         private set
 
+    /**
+     * 诊断字符串开关。拼接采样文本是每次扫描都要做的，信息流里一秒扫十几次，
+     * 不输出日志时这部分是纯浪费，默认关掉
+     */
+    var verbose = false
+
     /** 最近一次弹窗扫描的诊断信息，供真机排查 */
     var lastPopupDebug: String? = null
         private set
@@ -68,7 +74,11 @@ class NodeScanner(rules: List<SkipRule>) {
 
         while (queue.isNotEmpty()) {
             if (visited++ > MAX_NODES || System.currentTimeMillis() > deadline) {
-                lastDebug = "ABORT nodes=$visited texts=${samples.joinToString("|").take(180)}"
+                lastDebug = if (verbose) {
+                    "ABORT nodes=$visited texts=${samples.joinToString("|").take(180)}"
+                } else {
+                    "ABORT nodes=$visited"
+                }
                 return null
             }
             val node = queue.removeFirst()
@@ -128,8 +138,12 @@ class NodeScanner(rules: List<SkipRule>) {
                 node.getChild(i)?.let(queue::add)
             }
         }
-        lastDebug = "no-match nodes=$visited texts=[${samples.joinToString("|").take(180)}]" +
-            (reject?.let { " reject=$it" } ?: "")
+        lastDebug = if (verbose) {
+            "no-match nodes=$visited texts=[${samples.joinToString("|").take(180)}]" +
+                (reject?.let { " reject=$it" } ?: "")
+        } else {
+            "no-match nodes=$visited"
+        }
         return null
     }
 
@@ -280,10 +294,10 @@ class NodeScanner(rules: List<SkipRule>) {
 
     private fun collectSnaps(root: AccessibilityNodeInfo, screenW: Int, screenH: Int): List<Snap> {
         val out = ArrayList<Snap>(POPUP_SCAN_NODES)
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
+        val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
+        queue.add(root to 0)
         while (queue.isNotEmpty() && out.size < POPUP_SCAN_NODES) {
-            val node = queue.removeFirst()
+            val (node, depth) = queue.removeFirst()
             val r = Rect()
             node.getBoundsInScreen(r)
             // 负宽高（滚动动画里的数码轮）与越界节点（WebView 常用 Integer.MIN_VALUE
@@ -302,7 +316,11 @@ class NodeScanner(rules: List<SkipRule>) {
                     )
                 )
             }
-            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
+            // 超过 MAX_DEPTH 不再往下钻：信息流列表嵌套极深，
+            // 每多一层就是一轮跨进程读属性，而弹窗关闭钮不会埋在十几层以下
+            if (depth < MAX_DEPTH) {
+                for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it to depth + 1) }
+            }
         }
         return out
     }
@@ -400,6 +418,9 @@ class NodeScanner(rules: List<SkipRule>) {
         // ———————— 弹窗（应用内覆盖层） ————————
 
         const val POPUP_SCAN_NODES = 500
+
+        /** 遍历深度上限，控制每次扫描的跨进程调用次数 */
+        const val MAX_DEPTH = 14
 
         /** 节点数不超过这个值的窗口才按"独立弹窗 Activity"处理 */
         const val SPARSE_NODES = 60
