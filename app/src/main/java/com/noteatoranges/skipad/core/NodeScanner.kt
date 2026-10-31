@@ -276,9 +276,9 @@ class NodeScanner(
                 return PopupHit(s.node, "关闭「$st」")
             }
             // E5：文字明说是「关闭某活动/广告/浮层」。这类控件就是关广告的，
-            // 不套「屏幕中央偏下」的位置闸——京东首页顶部的「关闭浮层活动」就在顶部，
-            // 但语义已经足够确定，且仍受小控件形状闸约束
-            if (shapeOk && st != null && st.length in 2..10 &&
+            // 不套位置闸——京东首页那个「关闭浮层活动」贴在屏幕右缘（中心 x≈94%），
+            // 按普通关闭钮的 92% 上限会被挡掉；尺寸闸也放宽到 22% 屏宽
+            if (closeSizeOk(s, screenW, screenH) && st != null && st.length in 2..10 &&
                 STRONG_CLOSE_WORDS.any { st.startsWith(it, ignoreCase = true) } &&
                 AD_WORDS.any { st.contains(it, ignoreCase = true) }
             ) {
@@ -399,6 +399,20 @@ class NodeScanner(
         if (!s.clickable && !textClose) return null
         if (!imageLike && !textClose) return null
         return "${cw.toInt()}x${ch.toInt()}"
+    }
+
+    /**
+     * 只做尺寸/类名闸（不看位置）：给 E5 用。
+     * 关闭“浮层活动”类按钮常贴在屏幕右缘或顶部，用普通关闭钮的位置闸会漏掉。
+     */
+    private fun closeSizeOk(s: Snap, w: Int, h: Int): Boolean {
+        val cw = s.rect.width().toFloat()
+        val ch = s.rect.height().toFloat()
+        if (cw <= 0f || ch <= 0f) return false
+        if (cw > w * 0.22f || ch > h * 0.09f) return false
+        if (cw < w * 0.02f || ch < h * 0.008f) return false
+        if (NOT_CLOSE_CLS.any { s.cls.contains(it) }) return false
+        return true
     }
 
     /** 候选是否贴着卡片边缘：内部控件不点，避免点到卡片里的收藏、加购图标 */
