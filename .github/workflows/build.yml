@@ -23,11 +23,19 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install platform and build-tools
-        run: sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+      # ubuntu-latest 自带 Android SDK（platform-tools / build-tools / platforms 若干），
+      # 不再用 setup-android 去下载 cmdline-tools（那一步在 runner 上会失败），缺什么补什么
+      - name: Ensure Android platform 34
+        run: |
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          echo "ANDROID SDK = $SDK"
+          ls "$SDK/platforms" 2>/dev/null || true
+          if [ ! -d "$SDK/platforms/android-34" ]; then
+            SDKM=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+            echo "sdkmanager = $SDKM"
+            yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+            "$SDKM" "platforms;android-34" "build-tools;34.0.0"
+          fi
 
       # runner 在海外：把国内镜像换成官方源，避免 130MB 发行包拉取超时
       - name: Use official Gradle distribution
