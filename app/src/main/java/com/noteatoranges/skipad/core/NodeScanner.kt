@@ -32,6 +32,14 @@ class NodeScanner(
         val viewIds: List<String>,
     )
 
+    /**
+     * 命中详情。
+     *
+     * hitLen 是命中短语的长度，用来做「相对长度闸」：命中词越短，允许的额外字数越少。
+     * viewId / 正则命中没有确定短语，hitLen=0、byText=false，仍用规则的绝对上限。
+     */
+    private data class Match(val node: Compiled, val hitLen: Int, val byText: Boolean)
+
     private val compiled: List<Compiled> = rules.filter { it.enabled }.map { r ->
         Compiled(
             rule = r,
@@ -98,8 +106,9 @@ class NodeScanner(
 
             val matched = firstMatch(node, text, vid)
             if (matched != null) {
-                val byViewId = vid != null && matched.viewIds.any { vid.contains(it) }
-                val tooLong = text != null && text.length > matched.rule.maxTextLength
+                val byViewId = vid != null && matched.node.viewIds.any { vid.contains(it) }
+                val limit = allowedLen(matched)
+                val tooLong = text != null && text.length > limit
                 // 负向闸：教程 / 引导 / 新手 这类"跳过"不是广告按钮（"跳过教程""Skip tutorial"）
                 if (text != null && NEGATIVE_HINTS.any { text.contains(it, ignoreCase = true) }) {
                     reject = "「${text.take(12)}」疑似教程/引导，非广告"
@@ -107,7 +116,7 @@ class NodeScanner(
                     // 文本长度闸对 viewId 命中同样生效：原先 viewId 命中完全绕过此闸，
                     // 长文本控件（正文里提到 skip）也会被点。无文本的 viewId 命中仍放行，
                     // 那是穿山甲等广告 SDK 跳过按钮的正常形态（只有 id 没有 text）。
-                    reject = "「${text.take(12)}」文本超长(${text.length})"
+                    reject = "「${text.take(12)}」文本超长(${text.length}>$limit)"
                 } else if (!byViewId && text == null) {
                     reject = "「${vid?.take(12)}」无文本且非 viewId 命中"
                 } else {
@@ -131,10 +140,10 @@ class NodeScanner(
                             cy > screenH * 0.2f && cy < screenH * 0.8f
                         if (!byViewId && !hasAdHint && inCenter) {
                             reject = "「${text?.take(12)}」在中央区域(cx=${cx.toInt()},cy=${cy.toInt()})"
-                        } else if (area in 1f..screenArea * matched.rule.maxAreaRatio) {
-                            lastDebug = "HIT「${(text ?: vid)?.take(20)}」面积${pct}% 规则=${matched.rule.id}" +
+                        } else if (area in 1f..screenArea * matched.node.rule.maxAreaRatio) {
+                            lastDebug = "HIT「${(text ?: vid)?.take(20)}」面积${pct}% 规则=${matched.node.rule.id}" +
                                 if (byViewId) "(viewId)" else ""
-                            return cand to matched.rule
+                            return cand to matched.node.rule
                         } else {
                             reject = "「${text?.take(12)}」区域面积${pct}%超限"
                         }
@@ -294,12 +303,14 @@ class NodeScanner(
 
         for (s in snaps) {
             val st = s.text
+            // 归一化文本只用于匹配，显示仍用原文（「关 闭」显示出来还能认出问题）
+            val stn = st?.let { normalizeForMatch(it) }
             val shapeOk = closeCandidate(s, screenW, screenH) != null
             // E3：文字以"关闭"开头（淘宝 poplayer 的按钮描述就叫"关闭按钮"），
             // 且落在屏幕中央偏下——正常页面的关闭钮都在角落。
             // 用 startsWith 而不是 contains：只排除正文里顺带提到"关闭"的句子
-            if (shapeOk && st != null && st.length <= 6 &&
-                STRONG_CLOSE_WORDS.any { st.startsWith(it, ignoreCase = true) } &&
+            if (shapeOk && stn != null && stn.length <= 6 &&
+                STRONG_CLOSE_WORDS.any { stn.startsWith(it, ignoreCase = true) } &&
                 s.rect.exactCenterX() > screenW * 0.30f && s.rect.exactCenterX() < screenW * 0.70f &&
                 s.rect.exactCenterY() > screenH * 0.55f
             ) {
@@ -308,16 +319,16 @@ class NodeScanner(
             // E5：文字明说是「关闭某活动/广告/浮层」。这类控件就是关广告的，
             // 不套位置闸——京东首页那个「关闭浮层活动」贴在屏幕右缘（中心 x≈94%），
             // 按普通关闭钮的 92% 上限会被挡掉；尺寸闸也放宽到 22% 屏宽
-            if (closeSizeOk(s, screenW, screenH) && st != null && st.length in 2..10 &&
-                STRONG_CLOSE_WORDS.any { st.startsWith(it, ignoreCase = true) } &&
-                AD_WORDS.any { st.contains(it, ignoreCase = true) }
+            if (closeSizeOk(s, screenW, screenH) && stn != null && stn.length in 2..10 &&
+                STRONG_CLOSE_WORDS.any { stn.startsWith(it, ignoreCase = true) } &&
+                AD_WORDS.any { stn.contains(it, ignoreCase = true) }
             ) {
                 consider(2, s, "关闭「$st」", "E5")
             }
             // E7：用户自建命中词。用户明确说这是关闭按钮，位置不再限制，
             // 但仍要求尺寸像按钮（小控件 ≤22% 屏宽，或卡片级按钮 ≤92% 宽 × ≤12% 高）
-            if (st != null && extraClose.isNotEmpty() && st.length <= 10 &&
-                extraClose.any { st.contains(it, ignoreCase = true) } &&
+            if (stn != null && extraClose.isNotEmpty() && stn.length <= 10 &&
+                extraClose.any { stn.contains(it, ignoreCase = true) } &&
                 (closeSizeOk(s, screenW, screenH) ||
                     (s.rect.width() <= screenW * 0.92f && s.rect.height() <= screenH * 0.12f))
             ) {
@@ -325,8 +336,8 @@ class NodeScanner(
             }
             // E4：卡片下沿内的全宽文字按钮。这类按钮高度常超 8% 屏高、宽度接近整卡，
             // 过不了 closeCandidate 的形状闸，但文字本身就是关闭语义，且有卡片做背书
-            if (cardOk && card != null && st != null && st.length in 2..10 &&
-                CLOSE_WORDS.any { st.startsWith(it, ignoreCase = true) } &&
+            if (cardOk && card != null && stn != null && stn.length in 2..10 &&
+                CLOSE_WORDS.any { stn.startsWith(it, ignoreCase = true) } &&
                 s.rect.width() <= screenW * 0.92f && s.rect.height() <= screenH * 0.12f &&
                 s.rect.exactCenterX() > card.left - screenW * 0.06f &&
                 s.rect.exactCenterX() < card.right + screenW * 0.06f &&
@@ -513,18 +524,46 @@ class NodeScanner(
         return out
     }
 
+    /**
+     * 分隔符归一化再匹配。
+     *
+     * 广告里的跳过按钮常写成「跳 过」「[跳过]」「跳·过」「跳\n过」，原样 contains 一个都
+     * 命中不了。归一化只去掉分隔符，不改变字序，所以不会把两段不相干文字拼成命中。
+     */
+    private fun normalizeForMatch(s: String): String = s.replace(SEPARATOR_RE, "")
+
+    /**
+     * 文本长度上限（相对闸）。
+     *
+     * 原来是固定 24 字（[SkipRule.maxTextLength]）。对「跳过」这种两个字的词，24 字等于
+     * 放进来一整句广告语——正文里提到"跳过"的句子也能过闸，这是误点最集中的地方。
+     * 改成「命中短语长度 + [TEXT_SLACK]」，同时不超过规则的绝对上限。
+     */
+    private fun allowedLen(m: Match): Int {
+        val abs = m.node.rule.maxTextLength
+        if (!m.byText || m.hitLen <= 0) return abs
+        return minOf(abs, m.hitLen + TEXT_SLACK)
+    }
+
     private fun firstMatch(
         node: AccessibilityNodeInfo,
         text: String?,
         vid: String?,
-    ): Compiled? {
+    ): Match? {
         val lower = text?.lowercase(Locale.ROOT)
+        val norm = lower?.let { normalizeForMatch(it) }
         for (c in compiled) {
             if (text != null) {
-                if (c.regexes.any { it.containsMatchIn(text) }) return c
-                if (c.keywords.any { lower!!.contains(it) }) return c
+                if (c.regexes.any { it.containsMatchIn(text) }) return Match(c, 0, true)
+                c.keywords.firstOrNull { lower!!.contains(it) }
+                    ?.let { return Match(c, it.length, true) }
+                // 归一化后再试一次：「跳 过」「[跳过]」「跳·过」
+                if (norm != null && norm.isNotEmpty() && norm != lower) {
+                    c.keywords.firstOrNull { norm.contains(it) }
+                        ?.let { return Match(c, it.length, true) }
+                }
             }
-            if (vid != null && c.viewIds.any { vid.contains(it) }) return c
+            if (vid != null && c.viewIds.any { vid.contains(it) }) return Match(c, 0, false)
         }
         return null
     }
@@ -545,6 +584,22 @@ class NodeScanner(
         const val TRAVERSE_TIMEOUT_MS = 400L
         const val ANCESTOR_HOPS = 6
         const val CORNER_SCAN_NODES = 400
+
+        /**
+         * 相对长度闸的余量。命中「跳过」时允许节点文字最多 10 字。
+         *
+         * 不是照搬参考实现的 6：开屏按钮常见「跳过 5s」「跳过广告，进入APP」（9 字）
+         * 这类带倒计时或引导语的写法，6 字会误杀；而 24（原绝对上限）对两字词又等于没闸，
+         * 「跳过广告可以领取新人红包」这种 12 字正文也放得进来。
+         */
+        const val TEXT_SLACK = 8
+
+        /**
+         * 分隔符正则：空白、零宽字符、全角空格、中点、常见括号与竖线。
+         * 广告里的跳过按钮常写成「跳 过」「[跳过]」「跳·过」，原样 contains 匹配不到。
+         */
+        val SEPARATOR_RE =
+            Regex("[\\s\\u200B-\\u200D\\uFEFF\\p{Z}·\\-_|/•\\[\\]()（）【】]+")
 
         /** 负向关键词：出现即判定不是广告跳过按钮（宁可少点，不能误点引导页） */
         val NEGATIVE_HINTS = listOf(

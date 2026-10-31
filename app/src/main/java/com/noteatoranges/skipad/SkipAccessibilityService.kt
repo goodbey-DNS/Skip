@@ -711,13 +711,38 @@ class SkipAccessibilityService : AccessibilityService() {
     // ———————— 坐标点按 ————————
 
     private fun schedulePointTaps(pkg: String, r: com.noteatoranges.skipad.db.SkipAppRule) {
-        // 开屏窗口里 root 常常还是旧窗口，落点必须在真正要点的时刻算，不能提前算好
-        listOf(r.delayMs, r.delayMs + 1000).forEach { d ->
+        // 开屏窗口里 root 常常还是旧窗口，落点必须在真正要点的时刻算，不能提前算好。
+        //
+        // 点 4 次而不是 1 次：广告出现时界面还没就绪，第一下常落在入场动画或骨架屏上，
+        // 落空之后再没有第二次机会。参考 Android-Touch-Helper 的做法
+        // （300ms 起、每 500ms 一次、共 6 次），这里取 0/600/1200/1800 四拍。
+        // 闸门只在第一拍记一次账，后三拍是同一轮重试，不该被冷却挡掉。
+        var gateOpened = false
+        var aborted = false
+        POINT_RETRY_OFFSETS.forEachIndexed { i, off ->
             mainHandler.postDelayed({
+                if (aborted) return@postDelayed
                 val root = rootInActiveWindow ?: return@postDelayed
                 if (root.packageName?.toString() != pkg) return@postDelayed
                 val now = SystemClock.elapsedRealtime()
-                if (!gate("$pkg|${r.id}", r.cooldownMs, r.maxCount, now)) return@postDelayed
+                // 盲点时间盒：窗口出现超过 8 秒还在按坐标点，说明早就不是开屏了，
+                // 这时候点下去是拿用户的操作界面赌运气。只作用于坐标规则——
+                // 按文字/控件匹配的规则有自己的形状闸，不需要这层
+                val born = lastStateChangeAt[pkg]
+                if (born != null && now - born > POINT_MAX_WINDOW_AGE_MS) {
+                    Log.d(TAG, "point-skip ${r.id} $pkg 窗口已 ${now - born}ms，超过盲点时间盒")
+                    aborted = true
+                    return@postDelayed
+                }
+                if (i == 0) {
+                    if (!gate("$pkg|${r.id}", r.cooldownMs, r.maxCount, now)) {
+                        aborted = true
+                        return@postDelayed
+                    }
+                    gateOpened = true
+                } else if (!gateOpened) {
+                    return@postDelayed
+                }
                 val point = resolvePoint(root, r) ?: return@postDelayed
                 val fired = when (r.action) {
                     SkipRule.ACTION_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
@@ -729,11 +754,11 @@ class SkipAccessibilityService : AccessibilityService() {
                 }
                 Log.d(
                     TAG,
-                    "point ${r.id} ${r.actionLabel} $pkg ok=$fired" +
+                    "point#${i + 1} ${r.id} ${r.actionLabel} $pkg ok=$fired" +
                         " (${(point.first / resources.displayMetrics.widthPixels * 100).toInt()}%," +
                         "${(point.second / resources.displayMetrics.heightPixels * 100).toInt()}%)",
                 )
-            }, d)
+            }, r.delayMs + off)
         }
     }
 
@@ -1157,6 +1182,12 @@ class SkipAccessibilityService : AccessibilityService() {
         val AD_TEXT_HINTS = listOf("广告", "Sponsored")
         const val AD_SIGNATURE_SCAN_NODES = 200
         const val AD_HINT_TTL_MS = 1500L
+
+        /** 坐标规则的重试节拍（相对 delayMs）：一次落空不等于失败，再补三拍 */
+        val POINT_RETRY_OFFSETS = longArrayOf(0L, 600L, 1200L, 1800L)
+
+        /** 盲点时间盒：窗口出现超过这个时长就不再按坐标点（正常开屏早该过去了） */
+        const val POINT_MAX_WINDOW_AGE_MS = 8000L
 
         /** 系统包与噪声大户：直接跳过节点遍历（李跳跳同款"先粗筛再遍历"思路） */
         val PACKAGE_BLACKLIST = setOf(
