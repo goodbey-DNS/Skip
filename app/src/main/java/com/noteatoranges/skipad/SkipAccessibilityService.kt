@@ -581,6 +581,11 @@ class SkipAccessibilityService : AccessibilityService() {
             )
             for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
         }
+        // 系统界面、加载中的空白页只能抓到一两个节点，存下来是垃圾，直接提示重抓
+        if (nodes.size < 3) {
+            Toast.makeText(this, "这个页面没抓到内容，换个页面再试", Toast.LENGTH_SHORT).show()
+            return
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor,
                 object : TakeScreenshotCallback() {

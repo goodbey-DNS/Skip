@@ -28,7 +28,14 @@ object SnapshotStore {
         val h: Int get() = b - t
     }
 
-    data class Meta(val pkg: String, val activity: String, val time: Long, val nodeCount: Int)
+    data class Meta(
+        val pkg: String,
+        val activity: String,
+        val time: Long,
+        val nodeCount: Int,
+        /** 用户自定义名字，空则列表显示应用名 + 时间 */
+        val name: String = "",
+    )
 
     fun save(
         context: Context,
@@ -60,6 +67,7 @@ object SnapshotStore {
                 put("activity", activity)
                 put("time", System.currentTimeMillis())
                 put("nodeCount", nodes.size)
+                put("name", "")
             }.toString()
         )
         prune(context)
@@ -72,9 +80,26 @@ object SnapshotStore {
 
     fun loadMeta(dir: File): Meta? = try {
         val j = JSONObject(File(dir, "meta.json").readText())
-        Meta(j.getString("pkg"), j.optString("activity"), j.getLong("time"), j.optInt("nodeCount", 0))
+        Meta(
+            j.getString("pkg"),
+            j.optString("activity"),
+            j.getLong("time"),
+            j.optInt("nodeCount", 0),
+            j.optString("name"),
+        )
     } catch (e: Exception) {
         null
+    }
+
+    /** 重命名快照：只改 meta.json 里的 name，不动图片和节点树 */
+    fun rename(dir: File, name: String): Boolean = try {
+        val f = File(dir, "meta.json")
+        val j = JSONObject(f.readText())
+        j.put("name", name.trim())
+        f.writeText(j.toString())
+        true
+    } catch (e: Exception) {
+        false
     }
 
     fun loadNodes(dir: File): List<Node> = try {

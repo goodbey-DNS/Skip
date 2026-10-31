@@ -145,6 +145,8 @@ class RulesActivity : AppCompatActivity() {
         snaps.forEach { dir ->
             val meta = SnapshotStore.loadMeta(dir)
             val info = AppLabels.get(this, meta?.pkg ?: "")
+            val custom = meta?.name?.trim().orEmpty()
+            val title = custom.ifEmpty { info.label }
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(0, dp(8), 0, dp(8))
@@ -159,7 +161,7 @@ class RulesActivity : AppCompatActivity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = android.view.Gravity.CENTER_VERTICAL
                 addView(TextView(this@RulesActivity).apply {
-                    text = info.label
+                    text = title
                     textSize = 14f
                     setTextColor(getColor(R.color.text_primary))
                     paint.isFakeBoldText = true
@@ -172,29 +174,64 @@ class RulesActivity : AppCompatActivity() {
                 })
             })
             row.addView(TextView(this).apply {
-                text = "${info.label}（${meta?.pkg}）· ${meta?.nodeCount ?: 0} 节点"
+                text = buildString {
+                    if (custom.isNotEmpty()) append("${info.label} · ")
+                    append(meta?.pkg ?: "")
+                    append(" · ${meta?.nodeCount ?: 0} 节点")
+                }
                 textSize = 12f
                 setTextColor(getColor(R.color.text_secondary))
             })
             snapContainer.addView(row)
-            // 删除
-            snapContainer.addView(TextView(this).apply {
-                text = "删除此快照"
-                textSize = 12f
-                setTextColor(getColor(R.color.status_off))
-                setPadding(0, 0, 0, dp(6))
-                setOnClickListener {
-                    AlertDialog.Builder(this@RulesActivity)
-                        .setMessage("删除这条快照？")
-                        .setNegativeButton(R.string.action_cancel, null)
-                        .setPositiveButton(R.string.action_confirm_clear) { _, _ ->
-                            SnapshotStore.remove(this@RulesActivity, dir)
-                            renderSnapshots()
-                        }
-                        .show()
-                }
+
+            // 改名 / 删除
+            snapContainer.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(TextView(this@RulesActivity).apply {
+                    text = "改名"
+                    textSize = 12f
+                    setTextColor(getColor(R.color.status_on))
+                    setPadding(0, 0, dp(16), dp(6))
+                    setOnClickListener { showRenameDialog(dir, meta) }
+                })
+                addView(TextView(this@RulesActivity).apply {
+                    text = "删除此快照"
+                    textSize = 12f
+                    setTextColor(getColor(R.color.status_off))
+                    setPadding(0, 0, 0, dp(6))
+                    setOnClickListener {
+                        AlertDialog.Builder(this@RulesActivity)
+                            .setMessage("删除这条快照？")
+                            .setNegativeButton(R.string.action_cancel, null)
+                            .setPositiveButton(R.string.action_confirm_clear) { _, _ ->
+                                SnapshotStore.remove(this@RulesActivity, dir)
+                                renderSnapshots()
+                            }
+                            .show()
+                    }
+                })
             })
         }
+    }
+
+    /** 快照改名：只动备注，不影响截图和节点树 */
+    private fun showRenameDialog(dir: java.io.File, meta: SnapshotStore.Meta?) {
+        val input = android.widget.EditText(this).apply {
+            setText(meta?.name?.trim().orEmpty())
+            setSelection(text.length)
+            hint = "比如：淘宝红包弹窗"
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("重命名快照")
+            .setMessage("留空则显示应用名和时间")
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                SnapshotStore.rename(dir, input.text.toString())
+                renderSnapshots()
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
