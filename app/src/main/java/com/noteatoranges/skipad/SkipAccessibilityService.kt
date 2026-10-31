@@ -58,10 +58,21 @@ class SkipAccessibilityService : AccessibilityService() {
     /** 扫描器重建的键（规则版本 + 包名 + 页面）：换 App / 换页面都要重建，否则规则会跨页生效 */
     private var userScannerKey: String? = null
 
-    /** 用户自建关键字（命中词 / 排除词），当前 App 生效的那份 */
-    private var kwHits: List<String> = emptyList()
-    private var kwExcludes: List<String> = emptyList()
-    private var kwKey: String? = null
+    /**
+     * 用户自建关键字缓存：**按包名**存，弹窗通道扫哪个窗口就取哪个包的那份；
+     * 关键字版本号一变整份清掉（用户改词无需重启服务）。
+     */
+    private var kwVerSeen = -1
+    private val kwCache = HashMap<String, Pair<List<String>, List<String>>>()
+
+    private fun keywordsFor(pkg: String): Pair<List<String>, List<String>> {
+        val ver = KeywordStore.version(this)
+        if (ver != kwVerSeen) {
+            kwVerSeen = ver
+            kwCache.clear()
+        }
+        return kwCache.getOrPut(pkg) { KeywordStore.forApp(this, pkg) }
+    }
 
     /** 每条规则的运行态：上次动作时间与累计次数（换页面清零） */
     private class RuleRun(var lastAt: Long = 0L, var count: Int = 0)
@@ -417,18 +428,8 @@ class SkipAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 关键字表按 App 刷新：用户改了关键字不用重装，下一次事件就生效
-        val kwVer = KeywordStore.version(this)
-        val kwK = "$kwVer|$pkg"
-        if (kwK != kwKey) {
-            kwKey = kwK
-            val (h, e) = KeywordStore.forApp(this, pkg)
-            kwHits = h
-            kwExcludes = e
-            if (h.isNotEmpty() || e.isNotEmpty()) {
-                Log.d(TAG, "keywords $pkg hits=${h.size} excludes=${e.size}")
-            }
-        }
+        // 关键字不再在事件入口统一加载：弹窗通道会扫多个窗口，
+        // 每个窗口按自己的包名取词（见 keywordsFor），避免跨应用误伤
 
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
@@ -524,7 +525,13 @@ class SkipAccessibilityService : AccessibilityService() {
             root.getBoundsInScreen(rootRect)
             val dialogWindow = rootRect.width() > 0 &&
                 (rootRect.width() < w * 0.98f || rootRect.height() < h * 0.98f)
-            val hit = scanner.findPopupCloseTarget(root, w, h, dialogWindow, kwHits, kwExcludes)
+            // 关键字严格按「这个窗口属于哪个包」取：弹窗通道会扫多个窗口，
+            // 拿前台 App 的词去扫别的 App 的窗口就是跨应用误伤
+            val (kh, ke) = keywordsFor(pkg)
+            if (kh.isNotEmpty() || ke.isNotEmpty()) {
+                Log.v(TAG, "kw $pkg#${win.id} hits=${kh.size} excludes=${ke.size}")
+            }
+            val hit = scanner.findPopupCloseTarget(root, w, h, dialogWindow, kh, ke)
             if (hit == null) {
                 Log.v(TAG, "popup-none $pkg#${win.id}: ${scanner.lastPopupDebug}")
                 continue
@@ -646,8 +653,9 @@ class SkipAccessibilityService : AccessibilityService() {
                 ?: builtinScanner?.findSkipTarget(root, w, h, adHint)
             if (hit != null) return Triple(hit.first, wp, "win#${window.id} ${window.type}")
             // 弹窗通道点下去之后也按同一套核验：弹窗还在说明没点掉，补刀一次
+            val kw = keywordsFor(wp)
             val popup = builtinScanner?.findPopupCloseTarget(
-                root, w, h, isDialogWindow(root, w, h), kwHits, kwExcludes,
+                root, w, h, isDialogWindow(root, w, h), kw.first, kw.second,
             )
             if (popup != null) return Triple(popup.node, wp, "popup#${window.id}")
             // 纯图片/视频开屏：跳过按钮既无文本也无 skip 类 id，只在开屏类 Activity 上
