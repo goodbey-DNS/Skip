@@ -73,6 +73,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
         nodes = SnapshotStore.loadNodes(dir)
         overlay.setContent(bmp, nodes)
         overlay.onNodeTapped = { node -> selectNode(node) }
+        overlay.onLongTapped = { x, y -> askLongPressPoint(x, y) }
         genButton.setOnClickListener {
             selected?.let { showGenerateDialog(it) }
         }
