@@ -23,6 +23,10 @@ object SnapshotStore {
         val t: Int,
         val r: Int,
         val b: Int,
+        /** 从窗口根到该节点的子索引路径（如 "0/3/1"）：纯图标按钮没有 vid/文字，靠它定位 */
+        val path: String = "",
+        /** 节点所属窗口 id：同一个 App 的主窗口与浮层窗口要分开算路径 */
+        val winId: Int = 0,
     ) {
         val w: Int get() = r - l
         val h: Int get() = b - t
@@ -35,6 +39,9 @@ object SnapshotStore {
         val nodeCount: Int,
         /** 用户自定义名字，空则列表显示应用名 + 时间 */
         val name: String = "",
+        /** 抓取时的屏幕像素：长按取点的 dp 换算要用 */
+        val screenW: Int = 0,
+        val screenH: Int = 0,
     )
 
     fun save(
@@ -43,6 +50,8 @@ object SnapshotStore {
         activity: String,
         nodes: List<Node>,
         screen: Bitmap?,
+        screenW: Int = 0,
+        screenH: Int = 0,
     ): File {
         val dir = File(File(context.filesDir, "snapshots"), "${System.currentTimeMillis()}_$pkg")
         dir.mkdirs()
@@ -58,6 +67,8 @@ object SnapshotStore {
                 put("clickable", n.clickable)
                 put("l", n.l); put("t", n.t); put("r", n.r); put("b", n.b)
                 put("w", n.w); put("h", n.h)
+                if (n.path.isNotEmpty()) put("path", n.path)
+                if (n.winId != 0) put("winId", n.winId)
             })
         }
         File(dir, "tree.json").writeText(arr.toString())
@@ -68,6 +79,8 @@ object SnapshotStore {
                 put("time", System.currentTimeMillis())
                 put("nodeCount", nodes.size)
                 put("name", "")
+                put("screenW", screenW)
+                put("screenH", screenH)
             }.toString()
         )
         prune(context)
@@ -86,6 +99,8 @@ object SnapshotStore {
             j.getLong("time"),
             j.optInt("nodeCount", 0),
             j.optString("name"),
+            j.optInt("screenW", 0),
+            j.optInt("screenH", 0),
         )
     } catch (e: Exception) {
         null
@@ -111,6 +126,8 @@ object SnapshotStore {
                 text = j.optString("text"), desc = j.optString("desc"),
                 vid = j.optString("vid"), clickable = j.optBoolean("clickable"),
                 l = j.getInt("l"), t = j.getInt("t"), r = j.getInt("r"), b = j.getInt("b"),
+                path = j.optString("path"),
+                winId = j.optInt("winId", 0),
             )
         }
     } catch (e: Exception) {

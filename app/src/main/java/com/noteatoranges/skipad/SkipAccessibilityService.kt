@@ -258,6 +258,8 @@ class SkipAccessibilityService : AccessibilityService() {
     /** 1dp 对应的像素，锚点偏移用 */
     private fun dp(v: Int): Float = v * resources.displayMetrics.density
 
+    private fun dpF(v: Float): Float = v * resources.displayMetrics.density
+
     /**
      * 解析坐标规则的落点。
      *
@@ -266,6 +268,12 @@ class SkipAccessibilityService : AccessibilityService() {
      * 锚点找不到（页面变了）才退回屏幕比例，两者都没有就放弃本次。
      */
     private fun resolvePoint(root: AccessibilityNodeInfo?, r: com.noteatoranges.skipad.db.SkipAppRule): Pair<Float, Float>? {
+        // 自由取点：存的是「相对屏幕中心的 dp」，换分辨率/密度都能换算回正确位置
+        if (r.hasDpPoint) {
+            val dm = resources.displayMetrics
+            return (dm.widthPixels / 2f + dpF(r.dpX ?: 0f)) to
+                (dm.heightPixels / 2f + dpF(r.dpY ?: 0f))
+        }
         if (r.hasAnchor) {
             val anchor = findAnchorRect(root, r)
             if (anchor != null) {
@@ -430,6 +438,10 @@ class SkipAccessibilityService : AccessibilityService() {
 
         // 关键字不再在事件入口统一加载：弹窗通道会扫多个窗口，
         // 每个窗口按自己的包名取词（见 keywordsFor），避免跨应用误伤
+
+        // 结构路径规则最精确（用户从快照里点选的那个控件本身），先试一次；
+        // 命中就不必再全树扫描。页面/冷却/次数闸在 tryPathRule 内部按规则判断
+        if (tryPathRule(root, pkg, act, now)) return
 
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
@@ -837,24 +849,48 @@ class SkipAccessibilityService : AccessibilityService() {
         val act = lastActivityClass[pkg] ?: ""
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
-        val nodes = ArrayList<SnapshotStore.Node>(400)
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
+
+        // 同一个 App 可能有多个窗口（主窗口 + 浮层 / 对话框），全都抓：
+        // 应用内弹窗的关闭钮经常就在独立浮层窗口里，只抓活动窗口会漏掉它。
+        // 只收本 App 的窗口，避免把输入法、别的 App 的悬浮窗混进来。
+        val windowRoots = ArrayList<Pair<Int, AccessibilityNodeInfo>>(3)
+        runCatching {
+            windows?.toList().orEmpty()
+                .sortedByDescending { it.isActive }
+                .forEach { win ->
+                    val r = win.root ?: return@forEach
+                    if (r.packageName?.toString() == pkg) windowRoots.add(win.id to r)
+                }
+        }
+        if (windowRoots.isEmpty()) windowRoots.add(0 to root)
+
+        val nodes = ArrayList<SnapshotStore.Node>(SNAPSHOT_MAX_NODES)
         var idx = 0
-        while (queue.isNotEmpty() && idx < 400) {
-            val node = queue.removeFirst()
-            idx++
-            val r = Rect()
-            node.getBoundsInScreen(r)
-            nodes.add(
-                SnapshotStore.Node(
-                    idx, node.className?.toString() ?: "",
-                    node.text?.toString() ?: "", node.contentDescription?.toString() ?: "",
-                    node.viewIdResourceName ?: "", node.isClickable,
-                    r.left, r.top, r.right, r.bottom,
+        for ((winId, wroot) in windowRoots) {
+            if (nodes.size >= SNAPSHOT_MAX_NODES) break
+            val queue = ArrayDeque<Pair<AccessibilityNodeInfo, String>>()
+            queue.add(wroot to "")
+            var perWin = 0
+            while (queue.isNotEmpty() && nodes.size < SNAPSHOT_MAX_NODES && perWin < SNAPSHOT_MAX_PER_WINDOW) {
+                val (node, path) = queue.removeFirst()
+                perWin++
+                idx++
+                val r = Rect()
+                node.getBoundsInScreen(r)
+                nodes.add(
+                    SnapshotStore.Node(
+                        idx, node.className?.toString() ?: "",
+                        node.text?.toString() ?: "", node.contentDescription?.toString() ?: "",
+                        node.viewIdResourceName ?: "", node.isClickable,
+                        r.left, r.top, r.right, r.bottom,
+                        path, winId,
+                    )
                 )
-            )
-            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
+                for (i in 0 until node.childCount) {
+                    val child = node.getChild(i) ?: continue
+                    queue.add(child to if (path.isEmpty()) "$i" else "$path/$i")
+                }
+            }
         }
         // 系统界面、加载中的空白页只能抓到一两个节点，存下来是垃圾，直接提示重抓
         if (nodes.size < 3) {
@@ -868,12 +904,12 @@ class SkipAccessibilityService : AccessibilityService() {
                         val appCtx = applicationContext
                         val nodeCount = nodes.size
                         Io.run("snapshot-save") {
-                            val dir = SnapshotStore.save(appCtx, pkg, act, nodes, bitmap)
+                            val dir = SnapshotStore.save(appCtx, pkg, act, nodes, bitmap, w, h)
                             // 全屏图 1220×2712 一张 13MB，compress 完就没人用了，
                             // 不主动回收会一直压在 native heap，抓几次就积几十 MB
                             bitmap?.recycle()
                             StatsStore.logEvent(appCtx, "快照已保存：$pkg（$nodeCount 节点）")
-                            Log.d(TAG, "snapshot saved ${dir.path}")
+                            Log.d(TAG, "snapshot saved ${dir.path} nodes=$nodeCount")
                         }
                         Toast.makeText(appCtx, R.string.snap_saved, Toast.LENGTH_SHORT).show()
                     }
@@ -882,7 +918,7 @@ class SkipAccessibilityService : AccessibilityService() {
             val appCtx = applicationContext
             val nodeCount = nodes.size
             Io.run("snapshot-save") {
-                SnapshotStore.save(appCtx, pkg, act, nodes, null)
+                SnapshotStore.save(appCtx, pkg, act, nodes, null, w, h)
                 StatsStore.logEvent(appCtx, "快照已保存：$pkg（$nodeCount 节点，无截图）")
             }
             Toast.makeText(appCtx, R.string.snap_saved, Toast.LENGTH_SHORT).show()
@@ -947,6 +983,91 @@ class SkipAccessibilityService : AccessibilityService() {
         }
     }
 
+    // ———————— 结构路径规则（纯图标按钮的精确落点）————————
+
+    /** 按结构路径在「本 App 的任一窗口」里找节点：纯图标按钮没有文字/ID 时的主路径 */
+    private fun findByPathAnyWindow(pkg: String, path: String): AccessibilityNodeInfo? {
+        val roots = ArrayList<AccessibilityNodeInfo>(3)
+        rootInActiveWindow?.let { if (it.packageName?.toString() == pkg) roots.add(it) }
+        runCatching {
+            windows?.forEach { w ->
+                val r = w.root ?: return@forEach
+                if (r.packageName?.toString() == pkg) roots.add(r)
+            }
+        }
+        for (r in roots) findByPath(r, path)?.let { return it }
+        return null
+    }
+
+    /** 沿子索引路径下钻，末端节点要有有效矩形才算命中 */
+    private fun findByPath(root: AccessibilityNodeInfo, path: String): AccessibilityNodeInfo? {
+        var cur: AccessibilityNodeInfo = root
+        for (seg in path.split('/')) {
+            val i = seg.toIntOrNull() ?: return null
+            cur = cur.getChild(i) ?: return null
+        }
+        val r = Rect()
+        cur.getBoundsInScreen(r)
+        return if (r.width() > 0 && r.height() > 0) cur else null
+    }
+
+    /**
+     * 结构路径规则：先于文字/ID 规则尝试。
+     * 纯图标关闭钮（ImageButton，无 text/desc/viewId）关键字和扫描器都拿它没办法，
+     * 但快照里记下的「窗口根 → 子索引」路径能精确落回同一个控件。
+     */
+    private fun tryPathRule(root: AccessibilityNodeInfo, pkg: String, act: String, now: Long): Boolean {
+        val rules = RuleStore.pathRules(this, pkg, act)
+        if (rules.isEmpty()) return false
+        for (r in rules) {
+            val node = findByPathAnyWindow(pkg, r.nodePath ?: continue) ?: continue
+            // 类名/尺寸校验：页面改版后同一条路径可能指向别的控件，宁可不错
+            if (!nodeMatches(r, node)) {
+                Log.v(TAG, "path-skip ${r.id} 控件已变（${node.className}）")
+                continue
+            }
+            if (!gate("$pkg|${r.id}", r.cooldownMs, r.maxCount, now)) continue
+            if (r.action == SkipRule.ACTION_NONE) {
+                Log.d(TAG, "path-match-only ${r.id} path=${r.nodePath} $pkg")
+                continue
+            }
+            val fired = when (r.action) {
+                SkipRule.ACTION_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
+                else -> clicker?.click(node) == true
+            }
+            Log.d(TAG, "path-rule ${r.id} path=${r.nodePath} $pkg ok=$fired")
+            if (!fired) continue
+            val key = "$pkg#path/${r.nodePath}"
+            lastSkipWindow = key
+            lastSkipAt = now
+            pending = PendingSkip(key, pkg, "路径·${r.nodePath}", 0, 1)
+            val token = pending
+            mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
+            return true
+        }
+        return false
+    }
+
+    /** 路径解析出来的节点是不是当初记录的那个：类名一致 + 尺寸偏差 ≤40% */
+    private fun nodeMatches(r: com.noteatoranges.skipad.db.SkipAppRule, node: AccessibilityNodeInfo): Boolean {
+        val want = r.nodeCls
+        if (!want.isNullOrBlank()) {
+            val got = node.className?.toString() ?: ""
+            if (got != want) return false
+        }
+        val wDp = r.nodeWDp
+        val hDp = r.nodeHDp
+        if (wDp != null && hDp != null && wDp > 0 && hDp > 0) {
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            val d = resources.displayMetrics.density
+            val cw = rect.width() / d
+            val ch = rect.height() / d
+            if (Math.abs(cw - wDp) > wDp * 0.4f || Math.abs(ch - hDp) > hDp * 0.4f) return false
+        }
+        return true
+    }
+
     companion object {
         const val TAG = "SkipAdEngine"
 
@@ -977,6 +1098,12 @@ class SkipAccessibilityService : AccessibilityService() {
 
         /** 找锚点控件的遍历上限：锚点通常就在弹窗里，不用扫全树 */
         const val ANCHOR_SCAN_NODES = 600
+
+        /** 快照总节点上限（改多窗口后从 400 提到 1500，避免大页面被截断） */
+        const val SNAPSHOT_MAX_NODES = 1500
+
+        /** 单个窗口的节点上限：防止一个超大窗口把额度吃光，浮层窗口就没机会了 */
+        const val SNAPSHOT_MAX_PER_WINDOW = 800
 
         /** 弹窗冷却改为按窗口：同窗口 4 秒内不重复点，最多 3 次（此前整 App 20 秒） */
         const val POPUP_WINDOW_COOLDOWN_MS = 4000L

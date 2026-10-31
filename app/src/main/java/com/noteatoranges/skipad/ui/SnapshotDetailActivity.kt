@@ -163,6 +163,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
         val opts = ArrayList<String>()
         if (n.text.isNotEmpty() || n.desc.isNotEmpty()) opts.add(OPT_TEXT)
         if (n.vid.isNotEmpty()) opts.add(OPT_VID)
+        if (n.path.isNotEmpty()) opts.add(OPT_PATH)
         opts.add(OPT_POINT)
         // 无文字的图片按钮唯一的稳定定位：挂在它自己（或旁边卡片）的控件引用上，
         // 偏移用 dp 而不是屏幕百分比，换机型/分屏/弹窗变高都不会偏
@@ -173,6 +174,14 @@ class SnapshotDetailActivity : AppCompatActivity() {
                 when (opts[which]) {
                     OPT_TEXT -> askText(n)
                     OPT_VID -> confirm("node", viewId = n.vid)
+                    OPT_PATH -> confirm(
+                        "node",
+                        nodePath = n.path,
+                        nodeWinId = n.winId,
+                        nodeCls = n.cls,
+                        nodeWDp = (n.w / resources.displayMetrics.density).toInt(),
+                        nodeHDp = (n.h / resources.displayMetrics.density).toInt(),
+                    )
                     OPT_RELATIVE -> askRelative(n)
                     else -> {
                         val dm = resources.displayMetrics
@@ -184,6 +193,41 @@ class SnapshotDetailActivity : AppCompatActivity() {
                     }
                 }
             }
+            .show()
+    }
+
+    /**
+     * 长按截图取点：不依赖节点树（H5 / 自绘控件根本没节点），
+     * 存成「相对屏幕中心的 dp」，回放时按当前屏幕密度换算。
+     */
+    private fun askLongPressPoint(x: Int, y: Int) {
+        val dm = resources.displayMetrics
+        val srcW = if (meta.screenW > 0) meta.screenW else dm.widthPixels
+        val srcH = if (meta.screenH > 0) meta.screenH else dm.heightPixels
+        // 抓快照时的密度未必等于当前密度，按抓取尺寸比例换算成 dp 更稳
+        val srcDensity = dm.density * (srcW.toFloat() / dm.widthPixels)
+        val dpX = (x - srcW / 2f) / srcDensity
+        val dpY = (y - srcH / 2f) / srcDensity
+        val input = EditText(this).apply {
+            setText("%.0f, %.0f".format(dpX, dpY))
+            setSelection(text.length)
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("长按取点")
+            .setMessage(
+                "点已取：屏幕中心偏移 ${dpX.toInt()}, ${dpY.toInt()} dp。\n" +
+                    "格式：dx, dy（dp，右下为正）。可直接改数值微调。\n" +
+                    "存的是 dp 不是百分比，换分辨率也不会偏。"
+            )
+            .setView(input)
+            .setPositiveButton("生成规则") { _, _ ->
+                val parts = input.text.toString().split(",", "，")
+                val dx = parts.getOrNull(0)?.trim()?.toFloatOrNull() ?: dpX
+                val dy = parts.getOrNull(1)?.trim()?.toFloatOrNull() ?: dpY
+                confirm("point", dpX = dx, dpY = dy)
+            }
+            .setNegativeButton("取消", null)
             .show()
     }
 
@@ -266,11 +310,21 @@ class SnapshotDetailActivity : AppCompatActivity() {
         anchorText: String? = null,
         dxDp: Int? = null,
         dyDp: Int? = null,
+        nodePath: String? = null,
+        nodeWinId: Int = 0,
+        nodeCls: String? = null,
+        nodeWDp: Int? = null,
+        nodeHDp: Int? = null,
+        dpX: Float? = null,
+        dpY: Float? = null,
     ) {
         AlertDialog.Builder(this)
             .setTitle("确认生成")
             .setMessage(
-                preview(viewId, textContains, xRatio, yRatio, anchorVid, anchorText, dxDp, dyDp) +
+                preview(
+                    viewId, textContains, xRatio, yRatio, anchorVid, anchorText, dxDp, dyDp,
+                    nodePath, dpX, dpY,
+                ) +
                     "\n\n只在「${meta.activity.substringAfterLast('.').ifEmpty { "本页面" }}」生效。" +
                     "动作默认点击，可在规则页改成返回键。"
             )
@@ -287,6 +341,13 @@ class SnapshotDetailActivity : AppCompatActivity() {
                         anchorText = anchorText,
                         dxDp = dxDp,
                         dyDp = dyDp,
+                        nodePath = nodePath,
+                        nodeWinId = nodeWinId,
+                        nodeCls = nodeCls,
+                        nodeWDp = nodeWDp,
+                        nodeHDp = nodeHDp,
+                        dpX = dpX,
+                        dpY = dpY,
                     ),
                 )
                 Toast.makeText(this, R.string.rule_saved, Toast.LENGTH_SHORT).show()
@@ -304,9 +365,46 @@ class SnapshotDetailActivity : AppCompatActivity() {
         anchorText: String? = null,
         dxDp: Int? = null,
         dyDp: Int? = null,
+        nodePath: String? = null,
+        dpX: Float? = null,
+        dpY: Float? = null,
     ): String {
         val sb = StringBuilder()
         when {
+            nodePath != null -> {
+                sb.append("方式：结构路径 $nodePath\n\n")
+                val hit = nodes.firstOrNull { it.path == nodePath }
+                if (hit == null) {
+                    sb.append("⚠ 本帧没有这个路径，规则可能不生效")
+                } else {
+                    sb.append("本帧命中：#${hit.idx} ${hit.cls.substringAfterLast('.')}")
+                    if (hit.text.isNotEmpty() || hit.desc.isNotEmpty()) {
+                        sb.append("「${hit.text.ifEmpty { hit.desc }.take(16)}」")
+                    }
+                    sb.append("\n位置 (${hit.l},${hit.t}) ${hit.w}×${hit.h}")
+                    if (hit.vid.isEmpty() && hit.text.isEmpty() && hit.desc.isEmpty()) {
+                        sb.append("\n这是纯图标控件，没有 id/文字——路径定位正是为它准备的")
+                    }
+                    sb.append("\n路径跟随控件层级：App 改版后可能失效，失效时重抓快照")
+                }
+            }
+            dpX != null && dpY != null -> {
+                sb.append("方式：屏幕中心偏移 ${dpX.toInt()}, ${dpY.toInt()} dp\n\n")
+                val dm = resources.displayMetrics
+                val ax = dm.widthPixels / 2f + dpX * dm.density
+                val ay = dm.heightPixels / 2f + dpY * dm.density
+                sb.append("换算到当前屏幕：(${ax.toInt()}, ${ay.toInt()})\n")
+                val under = nodes.filter {
+                    it.w > 0 && it.h > 0 && ax >= it.l && ax <= it.r && ay >= it.t && ay <= it.b
+                }.minByOrNull { it.w.toLong() * it.h }
+                sb.append("落点：")
+                if (under != null) {
+                    sb.append("#${under.idx} ${under.cls.substringAfterLast('.')}")
+                    if (under.text.isNotEmpty()) sb.append("「${under.text.take(16)}」")
+                } else {
+                    sb.append("没有落在任何节点上（可能落在图片内部，仍可点）")
+                }
+            }
             anchorVid != null || anchorText != null -> {
                 sb.append("方式：相对控件（锚点")
                 sb.append(if (anchorVid != null) " id=$anchorVid" else " 文字「${anchorText?.take(16)}」")
@@ -389,6 +487,13 @@ class SnapshotDetailActivity : AppCompatActivity() {
         anchorText: String? = null,
         dxDp: Int? = null,
         dyDp: Int? = null,
+        nodePath: String? = null,
+        nodeWinId: Int = 0,
+        nodeCls: String? = null,
+        nodeWDp: Int? = null,
+        nodeHDp: Int? = null,
+        dpX: Float? = null,
+        dpY: Float? = null,
     ) = SkipAppRule(
         id = UUID.randomUUID().toString(),
         app = meta.pkg,
@@ -406,6 +511,13 @@ class SnapshotDetailActivity : AppCompatActivity() {
         anchorText = anchorText,
         dxDp = dxDp,
         dyDp = dyDp,
+        nodePath = nodePath,
+        nodeWinId = nodeWinId,
+        nodeCls = nodeCls,
+        nodeWDp = nodeWDp,
+        nodeHDp = nodeHDp,
+        dpX = dpX,
+        dpY = dpY,
     )
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
@@ -422,6 +534,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
     private companion object {
         const val OPT_TEXT = "按文字"
         const val OPT_VID = "按控件 ID"
+        const val OPT_PATH = "按结构路径（图标按钮推荐）"
         const val OPT_POINT = "按坐标（屏幕比例）"
         const val OPT_RELATIVE = "相对此控件（推荐无文字按钮）"
 

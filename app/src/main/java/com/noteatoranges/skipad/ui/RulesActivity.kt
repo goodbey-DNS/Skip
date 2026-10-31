@@ -229,10 +229,13 @@ class RulesActivity : AppCompatActivity() {
                     "node" -> listOfNotNull(
                         r.viewId?.let { "id=$it" },
                         r.textContains?.let { "文本=$it" },
+                        r.nodePath?.let { "路径=$it" },
                         "动作=${r.actionLabel}",
                     ).joinToString(" / ")
                     else -> buildString {
-                        if (r.hasAnchor) {
+                        if (r.hasDpPoint) {
+                            append("屏幕中心偏移 ${r.dpX?.toInt()},${r.dpY?.toInt()}dp")
+                        } else if (r.hasAnchor) {
                             append("锚点=${r.anchorVid?.substringAfterLast('/') ?: r.anchorText}")
                             append(" 偏移(${r.dxDp ?: 0},${r.dyDp ?: 0})dp")
                         } else {

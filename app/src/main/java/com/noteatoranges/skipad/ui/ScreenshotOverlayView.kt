@@ -25,6 +25,27 @@ class ScreenshotOverlayView @JvmOverloads constructor(
     private var nodes: List<SnapshotStore.Node> = emptyList()
     private var selected: SnapshotStore.Node? = null
     private var scale = 1f
+    private var longFired = false
+    private var pickX = -1f
+    private var pickY = -1f
+
+    private val gesture = android.view.GestureDetector(
+        context,
+        object : android.view.GestureDetector.SimpleOnGestureListener() {
+            override fun onLongPress(e: android.view.MotionEvent) {
+                val s = scale
+                if (s <= 0f) return
+                longFired = true
+                pickX = e.x / s
+                pickY = e.y / s
+                invalidate()
+                onLongTapped?.invoke(pickX.toInt(), pickY.toInt())
+            }
+        },
+    )
+
+    /** 长按截图：回传图片像素坐标（换算成 dp 交给规则层） */
+    var onLongTapped: ((x: Int, y: Int) -> Unit)? = null
 
     private val viewPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -84,19 +105,36 @@ class ScreenshotOverlayView @JvmOverloads constructor(
             canvas.drawRect(rf, selFill)
             canvas.drawRect(rf, selStroke)
         }
+        // 长按取点标记：十字星，让用户确认落点
+        if (pickX >= 0f) {
+            val px = pickX * s
+            val py = pickY * s
+            val arm = 12f * resources.displayMetrics.density
+            canvas.drawCircle(px, py, 9f * resources.displayMetrics.density, selStroke)
+            canvas.drawLine(px - arm, py, px + arm, py, selStroke)
+            canvas.drawLine(px, py - arm, px, py + arm, selStroke)
+        }
     }
 
     override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
+        if (e.action == android.view.MotionEvent.ACTION_DOWN) longFired = false
+        gesture.onTouchEvent(e)
         val s = scale
         val bx = e.x / s
         val by = e.y / s
-        if (e.action == android.view.MotionEvent.ACTION_UP && bx >= 0 && by >= 0) {
-            val cands = nodes.filter { bx >= it.l && bx <= it.r && by >= it.t && by <= it.b }
-            val pick = cands.minByOrNull { it.w * it.h } ?: cands.firstOrNull()
-            selected = pick
-            invalidate()
-            onNodeTapped?.invoke(pick)
-            performClick()
+        if (e.action == android.view.MotionEvent.ACTION_UP) {
+            if (longFired) {
+                longFired = false
+                return true
+            }
+            if (bx >= 0 && by >= 0) {
+                val cands = nodes.filter { bx >= it.l && bx <= it.r && by >= it.t && by <= it.b }
+                val pick = cands.minByOrNull { it.w * it.h } ?: cands.firstOrNull()
+                selected = pick
+                invalidate()
+                onNodeTapped?.invoke(pick)
+                performClick()
+            }
         }
         return true
     }

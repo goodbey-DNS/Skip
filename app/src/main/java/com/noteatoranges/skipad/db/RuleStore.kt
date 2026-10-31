@@ -42,8 +42,22 @@ data class SkipAppRule(
     val dxDp: Int? = null,
     /** 相对锚点底边的垂直偏移（dp） */
     val dyDp: Int? = null,
+    /** 结构路径锚点（如 "0/3/1"）：纯图标按钮没有 vid/文字时的定位手段 */
+    val nodePath: String? = null,
+    /** 路径锚点所属窗口 id（抓取时记录，对不上就让路） */
+    val nodeWinId: Int = 0,
+    /** 路径锚点记录时的控件类名：回放时类名不符就不点（防页面变动后路径指向别的控件） */
+    val nodeCls: String? = null,
+    /** 路径锚点记录时的大致尺寸（dp）：偏差超 40% 视为已不是同一个控件 */
+    val nodeWDp: Int? = null,
+    val nodeHDp: Int? = null,
+    /** 屏幕中心偏移（dp）：自由取点的存储方式，换分辨率不偏 */
+    val dpX: Float? = null,
+    val dpY: Float? = null,
 ) {
     val hasAnchor: Boolean get() = !anchorVid.isNullOrBlank() || !anchorText.isNullOrBlank()
+    val hasPath: Boolean get() = !nodePath.isNullOrBlank()
+    val hasDpPoint: Boolean get() = dpX != null && dpY != null
 
     /** 动作的中文名，UI 与日志共用 */
     val actionLabel: String
@@ -84,6 +98,13 @@ object RuleStore {
                 anchorText = j.optString("anchorText").takeIf { it.isNotEmpty() },
                 dxDp = if (j.has("dxDp")) j.getInt("dxDp") else null,
                 dyDp = if (j.has("dyDp")) j.getInt("dyDp") else null,
+                nodePath = j.optString("nodePath").takeIf { it.isNotEmpty() },
+                nodeWinId = j.optInt("nodeWinId", 0),
+                nodeCls = j.optString("nodeCls").takeIf { it.isNotEmpty() },
+                nodeWDp = if (j.has("nodeWDp")) j.getInt("nodeWDp") else null,
+                nodeHDp = if (j.has("nodeHDp")) j.getInt("nodeHDp") else null,
+                dpX = if (j.has("dpX")) j.getDouble("dpX").toFloat() else null,
+                dpY = if (j.has("dpY")) j.getDouble("dpY").toFloat() else null,
             )
         }.toMutableList()
     } catch (e: Exception) {
@@ -113,6 +134,13 @@ object RuleStore {
                 r.anchorText?.let { put("anchorText", it) }
                 r.dxDp?.let { put("dxDp", it) }
                 r.dyDp?.let { put("dyDp", it) }
+                r.nodePath?.let { put("nodePath", it) }
+                if (r.nodeWinId != 0) put("nodeWinId", r.nodeWinId)
+                r.nodeCls?.let { put("nodeCls", it) }
+                r.nodeWDp?.let { put("nodeWDp", it) }
+                r.nodeHDp?.let { put("nodeHDp", it) }
+                r.dpX?.let { put("dpX", it.toDouble()) }
+                r.dpY?.let { put("dpY", it.toDouble()) }
             })
         }
         file(context).writeText(arr.toString())
@@ -184,11 +212,14 @@ object RuleStore {
     fun forApp(context: Context, app: String, activity: String?): List<SkipAppRule> =
         read(context).filter { it.enabled && it.app == app && activityMatches(it.activity, activity) }
 
-    /** 节点类规则转内置扫描规则（引擎复用 NodeScanner），已按包名与页面过滤 */
+    /** 节点类规则转内置扫描规则（引擎复用 NodeScanner），已按包名与页面过滤。
+     *  带结构路径的规则由服务单独按路径解析，不交给扫描器
+     */
     fun nodeRulesAsScannerRules(context: Context, app: String, activity: String?): List<SkipRule> =
         read(context)
             .filter {
                 it.enabled && it.kind == "node" && it.app == app &&
+                    it.nodePath.isNullOrBlank() &&
                     activityMatches(it.activity, activity)
             }
             .map { r ->
@@ -207,6 +238,14 @@ object RuleStore {
     fun pointRules(context: Context, app: String, activity: String?): List<SkipAppRule> =
         read(context).filter {
             it.enabled && it.kind == "point" && it.app == app &&
+                activityMatches(it.activity, activity)
+        }
+
+    /** 带结构路径的节点规则：服务按「窗口根 → 子索引」直接定位，不靠文字/ID */
+    fun pathRules(context: Context, app: String, activity: String?): List<SkipAppRule> =
+        read(context).filter {
+            it.enabled && it.kind == "node" && it.app == app &&
+                !it.nodePath.isNullOrBlank() &&
                 activityMatches(it.activity, activity)
         }
 
