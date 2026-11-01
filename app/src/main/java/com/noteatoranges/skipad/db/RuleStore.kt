@@ -129,17 +129,35 @@ object RuleStore {
         return out to skipped
     }
 
+    /**
+     * 内存缓存：版本号 + 解析结果。
+     *
+     * 规则查询在无障碍回调里是热路径（每个事件都要取一次路径规则、页面规则），
+     * 而 read() 是「读盘 + 解析 JSON」。信息流滑动时事件一秒十几个，每次都来一遍
+     * 就是在主线程上反复卡顿。每次 write 都会让 version 自增，所以缓存失效是精确的。
+     */
+    @Volatile
+    private var cache: List<SkipAppRule> = emptyList()
+
+    @Volatile
+    private var cacheVer: Int = -1
+
     private fun read(context: Context): MutableList<SkipAppRule> {
+        val v = version(context)
+        if (v == cacheVer) return cache.toMutableList()
         val f = file(context)
-        if (!f.exists()) return mutableListOf()
-        return try {
+        val parsed: MutableList<SkipAppRule> = if (!f.exists()) {
+            mutableListOf()
+        } else try {
             val text = f.readText().trim()
-            if (text.isEmpty()) return mutableListOf()
-            parseAll(JSONArray(text)).first
+            if (text.isEmpty()) mutableListOf() else parseAll(JSONArray(text)).first
         } catch (e: Exception) {
             // 整份不是合法 JSON 数组：只能当作没有，但不再连带其它逻辑出错
             mutableListOf()
         }
+        cache = parsed
+        cacheVer = v
+        return parsed.toMutableList()
     }
 
     private fun write(context: Context, rules: List<SkipAppRule>) {
@@ -191,14 +209,26 @@ object RuleStore {
     /** 只保留一条：同 App 同匹配条件的重复规则没有意义 */
     fun add(context: Context, rule: SkipAppRule) {
         val rules = read(context)
-        rules.removeAll {
-            it.app == rule.app && it.kind == rule.kind &&
-                it.viewId == rule.viewId && it.textContains == rule.textContains &&
-                it.activity == rule.activity
-        }
+        rules.removeAll { sameMatcher(it, rule) }
         rules.add(rule)
         write(context, rules)
     }
+
+    /**
+     * 两条规则是不是「同一个匹配条件」。
+     *
+     * 以前只比 app/kind/viewId/textContains/activity，而坐标规则和层级规则这几个字段
+     * 都是空的，于是在同一页建第二条时会被当成重复，把前一条覆盖掉——用户在同一页
+     * 给两个按钮建规则，最后只剩后建的那一个。锚点、偏移、路径、落点都要参与比较。
+     */
+    private fun sameMatcher(a: SkipAppRule, b: SkipAppRule): Boolean =
+        a.app == b.app && a.kind == b.kind && a.activity == b.activity &&
+            a.viewId == b.viewId && a.textContains == b.textContains &&
+            a.nodePath == b.nodePath &&
+            a.anchorVid == b.anchorVid && a.anchorText == b.anchorText &&
+            a.dxDp == b.dxDp && a.dyDp == b.dyDp &&
+            a.dpX == b.dpX && a.dpY == b.dpY &&
+            a.xRatio == b.xRatio && a.yRatio == b.yRatio
 
     fun remove(context: Context, id: String) {
         write(context, read(context).filter { it.id != id })

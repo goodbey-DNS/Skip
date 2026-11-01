@@ -298,7 +298,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
             .setMessage(
                 "参照物：${anchor.take(24)}\n\n" +
                     "填「往右多少, 往下多少」，单位约一根手指宽；负数就是往左/往上。\n" +
-                    "0, 0 = 就点这个参照物本身。\n" +
+                    "0, 0 = 点这个参照物的下边缘正中间（不是它的中心）。\n" +
                     "例：叉号在弹窗右上角，先选弹窗里的标题，再填 130, -60。"
             )
             .setView(input)
@@ -462,6 +462,8 @@ class SnapshotDetailActivity : AppCompatActivity() {
                 }
             }
             anchorVid != null || anchorText != null -> {
+                // 偏移是 dp，节点矩形是像素：不换算会把「往右 130」显示成 130px
+                val d = resources.displayMetrics.density
                 sb.append("方式：挨着一个参照物点，往右/往下偏移\n")
                 sb.append(if (anchorVid != null) "参照物编号 $anchorVid" else "参照物文字「${anchorText?.take(16)}」")
                 sb.append("，偏移 ${dxDp ?: 0}, ${dyDp ?: 0}\n\n")
@@ -475,7 +477,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
                 } else {
                     val a = hits.first()
                     sb.append("这一帧找到 ${hits.size} 个，取面积最小：#${a.idx} ${a.cls.substringAfterLast('.')}")
-                    sb.append("\n落点约 (${a.l + a.w / 2 + (dxDp ?: 0)}, ${a.b + (dyDp ?: 0)})")
+                    sb.append("\n落点约 (${(a.l + a.w / 2 + (dxDp ?: 0) * d).toInt()}, ${(a.b + (dyDp ?: 0) * d).toInt()})")
                 }
             }
             viewId != null -> {

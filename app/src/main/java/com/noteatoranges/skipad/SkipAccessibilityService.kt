@@ -110,10 +110,46 @@ class SkipAccessibilityService : AccessibilityService() {
         var attempts: Int,
         /** 补刀上限：目标没消失才补，弹窗/路径类只补一次 */
         val maxRetry: Int = MAX_RETRY,
+        /**
+         * 结构路径规则的路径。
+         *
+         * 路径规则不在扫描器的规则集里（[RuleStore.nodeRulesAsScannerRules] 把它们排除了），
+         * 核验若走 findUserTargetInAnyWindow 会永远拿不到节点，于是每次都当成「已点掉」，
+         * 补刀永远不会发生。带上路径就能按路径本身复核。
+         */
+        val path: String? = null,
+        /** 触发这次动作的规则 id：核验只看同一条规则，别把新页面上另一条规则当成「还在」 */
+        val ruleId: String = "",
     )
 
     /** 每个 App 最近一次"新窗口出现"的时间与前台 Activity 类名 */
     private val lastStateChangeAt = HashMap<String, Long>()
+
+    /**
+     * 桌面包名集合。
+     *
+     * 桌面也算「一次真正的切 App」：从桌面点图标进来时，只有前一个出现的是桌面，
+     * 才能判成「刚切到这个 App」，开屏窗口才打得开。
+     */
+    private var homePkgs: Set<String> = emptySet()
+
+    /**
+     * 能被当成「用户切到了这个 App」的包名缓存。
+     *
+     * 输入法、系统权限弹窗、某些系统浮层都会发 WINDOW_STATE_CHANGED，且包名是它自己的。
+     * 不筛掉的话：在聊天页弹出键盘 → lastShownPkg 变成输入法 → 键盘收起后 App 的下一
+     * 个事件又被当成「刚切进来」→ 开屏窗口（词表扫描）在聊天页重开 4 秒，那正是误点的来源。
+     * 判据用「有没有启动图标」：输入法和弹窗都没有，真 App 都有。
+     */
+    private val realAppCache = HashMap<String, Boolean>()
+
+    private fun isRealApp(pkg: String): Boolean = realAppCache.getOrPut(pkg) {
+        runCatching { packageManager.getLaunchIntentForPackage(pkg) != null }.getOrDefault(false)
+    }
+
+    /** 这个包名能不能代表「用户此刻在前台一个真正的应用里」 */
+    private fun countsAsForeground(pkg: String): Boolean =
+        pkg in homePkgs || isRealApp(pkg)
 
     /**
      * 本轮开屏已经点掉的时间点。
@@ -123,6 +159,9 @@ class SkipAccessibilityService : AccessibilityService() {
      * 所以这里不需要清理。
      */
     private val splashClosedAt = HashMap<String, Long>()
+
+    /** 每个 App 上一次记录的开屏窗口状态：只在翻转时打日志，避免每个事件刷屏 */
+    private val splashState = HashMap<String, Boolean>()
     private val lastActivityClass = HashMap<String, String>()
 
     /** 本页面已点过的控件矩形（分桶后的键），换页面清空。见 [clickNodeOnce] */
@@ -142,7 +181,8 @@ class SkipAccessibilityService : AccessibilityService() {
         val ver = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()
         Log.i(TAG, "service-connected $ver")
         clicker = ClickPerformer(this)
-        blacklist = PACKAGE_BLACKLIST + findHomePackages()
+        homePkgs = findHomePackages()
+        blacklist = PACKAGE_BLACKLIST + homePkgs
         KeepAlive.scheduleJob(this)
         StatsStore.logEvent(this, getString(R.string.ka_log_connected))
         KeepAlive.markConnected(this)
@@ -234,9 +274,12 @@ class SkipAccessibilityService : AccessibilityService() {
      * 不依赖任何启发式判断，因此零误判。冷启动开屏仍由 [schedulePointTaps] 自动触发。
      */
     fun bubbleLongClicked() {
-        val root = rootInActiveWindow
-        val pkg = root?.packageName?.toString()
-        if (pkg == null || root == null) {
+        // 优先取「不是自己」的窗口：悬浮钮本身也是一个窗口，rootInActiveWindow 有可能
+        // 指向它自己的 overlay。顺便和主扫描链路共用 activeWindowRoot 的兜底，
+        // 部分 ROM 上 rootInActiveWindow 恒为 null，只用它等于长按完全没反应
+        val root = activeWindowRoot(lastFgPkg) ?: runCatching { rootInActiveWindow }.getOrNull()
+        val pkg = root?.packageName?.toString() ?: lastFgPkg
+        if (root == null || pkg == null) {
             bubbleToast("读不到当前页面")
             return
         }
@@ -406,6 +449,19 @@ class SkipAccessibilityService : AccessibilityService() {
         return ok
     }
 
+    /**
+     * 真的切到某个 App：新的一轮开始。
+     *
+     * [onPageChanged] 按 Activity 判换页，单 Activity 应用（开屏和主界面同一个类名）
+     * 第二次冷启动时判不出来，点击记录会一直留着。这里按「切 App」再清一次。
+     * 只归零次数、不动冷却时间——切出去看一眼通知栏再回来，不该立刻又获得一次点击机会。
+     */
+    private fun onAppSwitched(pkg: String) {
+        clickedRects.clear()
+        val prefix = "$pkg|"
+        ruleState.keys.filter { it.startsWith(prefix) }.forEach { ruleState[it]?.count = 0 }
+    }
+
     /** 换 App / 换页面：清节点属性缓存与规则计数，并强制重建扫描器 */
     private fun onPageChanged(pkg: String, activity: String) {
         if (stateActivity[pkg] == activity) return
@@ -450,7 +506,8 @@ class SkipAccessibilityService : AccessibilityService() {
         //    此路径只写 map，零开销，不做时间节流（切换事件常在 4ms 内连发）——
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val ep = event.packageName?.toString()
-            if (ep != null && ep != packageName) {
+            // countsAsForeground：输入法 / 系统权限弹窗的窗口事件不算「切到某个 App」
+            if (ep != null && ep != packageName && countsAsForeground(ep)) {
                 if (lastStateChangeAt.size > 50) lastStateChangeAt.clear()
                 val prevShown = lastShownPkg
                 // 「切到这个 App」：前一个出现在屏幕上的是别的包（含桌面）就算
@@ -458,7 +515,14 @@ class SkipAccessibilityService : AccessibilityService() {
                 lastShownPkg = ep
                 // 开屏窗口只从「真的切到这个 App 的那一刻」起算：开屏页跳主界面会再来一个
                 // WSC，若每次都刷新，主界面前 6 秒也会被当成开屏——那正是误点的来源
-                if (freshSwitch) lastStateChangeAt[ep] = SystemClock.elapsedRealtime()
+                if (freshSwitch) {
+                    lastStateChangeAt[ep] = SystemClock.elapsedRealtime()
+                    // 真的切到这个 App = 新的一轮：清掉「本页已点过」的矩形记录。
+                    // 不清的话，微博、淘宝这类单 Activity 应用第二次冷启动时开屏页
+                    // 还是同一个 Activity，onPageChanged 会提前返回，记录一直留着，
+                    // 那个跳过按钮会被当成重复点击直接放过——服务不重启就永远点不动
+                    onAppSwitched(ep)
+                }
                 // className 不一定就是 Activity：弹浮层 / 列表刷新时 WSC 事件报的是
                 // android.widget.PopupWindow、androidx...RecyclerView 这类系统控件类名。
                 // 直接记下来会让「页面限定」的规则永远失配（activityMatches 按类名后缀比）
@@ -486,7 +550,7 @@ class SkipAccessibilityService : AccessibilityService() {
         // 只看 WSC 的话它的开屏窗口永远打不开
         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val ep = event.packageName?.toString()
-            if (ep != null && ep != packageName && ep != SYSTEM_UI_PKG) {
+            if (ep != null && ep != packageName && ep != SYSTEM_UI_PKG && countsAsForeground(ep)) {
                 lastFgPkg = ep
                 if (ep != lastShownPkg && ep !in blacklist) {
                     lastShownPkg = ep
@@ -519,6 +583,13 @@ class SkipAccessibilityService : AccessibilityService() {
         val splash = sinceSwitch != null &&
             now - sinceSwitch <= SPLASH_WINDOW_MS &&
             sinceSwitch > (splashClosedAt[pkg] ?: 0L)
+        // 开屏窗口的开合各记一次（只在翻转时打）：排查「为什么没触发」时，
+        // 第一件事就是看这一刻窗口到底是开的还是关的
+        if (splashState[pkg] != splash) {
+            if (splashState.size > 50) splashState.clear()
+            splashState[pkg] = splash
+            Log.v(TAG, "splash-window $pkg ${if (splash) "open" else "closed"}")
+        }
 
         // 刷新用户规则扫描器（规则版本 / 包名 / 页面任一变化就重建）
         val ver = RuleStore.version(this)
@@ -597,7 +668,7 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         lastSkipWindow = windowKeyFor(pkg, event, root)
         lastSkipAt = now
-        pending = PendingSkip(lastSkipWindow ?: "", pkg, detail, 0)
+        pending = PendingSkip(lastSkipWindow ?: "", pkg, detail, 0, ruleId = rule.id)
         val token = pending
         mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
     }
@@ -613,7 +684,11 @@ class SkipAccessibilityService : AccessibilityService() {
      */
     private fun verifySkip() {
         val p = pending ?: return
-        val found = findUserTargetInAnyWindow(p.pkg)
+        val found = if (p.path != null) {
+            findByPathAnyWindow(p.pkg, p.path, 0)?.let { Triple(it, p.pkg, "path") }
+        } else {
+            findUserTargetInAnyWindow(p.pkg, p.ruleId)
+        }
         if (found == null) {
             val appCtx = applicationContext
             Io.run("stats-insert") { StatsDb.get(appCtx).insert(p.pkg, p.detail) }
@@ -637,6 +712,13 @@ class SkipAccessibilityService : AccessibilityService() {
             Log.d(TAG, "retry#${p.attempts} ${p.pkg} gesture ok=$ok win=${found.second}")
         }
         mainHandler.postDelayed({ if (pending === p) verifySkip() }, VERIFY_DELAY_MS)
+    }
+
+    /** 某个包名的可用窗口根：活动窗口优先，取不到再走窗口列表兜底 */
+    private fun currentRootOf(pkg: String): AccessibilityNodeInfo? {
+        val r = runCatching { rootInActiveWindow }.getOrNull()
+        if (r != null && r.packageName?.toString() == pkg) return r
+        return activeWindowRoot(pkg)
     }
 
     /**
@@ -705,7 +787,7 @@ class SkipAccessibilityService : AccessibilityService() {
      * 没有该 App 的节点规则（点击来自结构路径或坐标规则）时直接返回 null，
      * 不拿别的规则去凑——凑出来的那个控件没人要，补刀点下去就是误点。
      */
-    private fun findUserTargetInAnyWindow(pkg: String): Triple<AccessibilityNodeInfo, String, String>? {
+    private fun findUserTargetInAnyWindow(pkg: String, ruleId: String? = null): Triple<AccessibilityNodeInfo, String, String>? {
         val scanner = userScanner?.takeIf { userScannerPkg == pkg } ?: return null
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
@@ -715,6 +797,9 @@ class SkipAccessibilityService : AccessibilityService() {
             val root = window.root ?: continue
             if (root.packageName?.toString() != pkg) continue
             val hit = scanner.findSkipTarget(root, w, h) ?: continue
+            // 只认触发本次动作的那条规则：点完跳到新页面后，扫描器已换成新页面的规则，
+            // 拿新规则去「核验」会命中一个新目标然后补刀——那是实打实的跨页误点
+            if (ruleId != null && hit.second.id != ruleId) continue
             return Triple(hit.first, pkg, "win#${window.id}")
         }
         return null
@@ -746,8 +831,9 @@ class SkipAccessibilityService : AccessibilityService() {
         POINT_RETRY_OFFSETS.forEachIndexed { i, off ->
             mainHandler.postDelayed({
                 if (aborted) return@postDelayed
-                val root = rootInActiveWindow ?: return@postDelayed
-                if (root.packageName?.toString() != pkg) return@postDelayed
+                // 必须和主扫描链路用同一套 root 兜底：部分 ROM 上 rootInActiveWindow 恒为
+                // null，只认它的话坐标规则在那些机器上一次都不会触发（0.17.4 修的是同一个坑）
+                val root = currentRootOf(pkg) ?: return@postDelayed
                 val now = SystemClock.elapsedRealtime()
                 // 盲点时间盒：窗口出现超过 8 秒还在按坐标点，说明早就不是开屏了，
                 // 这时候点下去是拿用户的操作界面赌运气。只作用于坐标规则——
@@ -1149,16 +1235,21 @@ class SkipAccessibilityService : AccessibilityService() {
     // ———————— 结构路径规则（纯图标按钮的精确落点）————————
 
     /** 按结构路径在「本 App 的任一窗口」里找节点：纯图标按钮没有文字/ID 时的主路径 */
-    private fun findByPathAnyWindow(pkg: String, path: String): AccessibilityNodeInfo? {
-        val roots = ArrayList<AccessibilityNodeInfo>(3)
-        rootInActiveWindow?.let { if (it.packageName?.toString() == pkg) roots.add(it) }
+    private fun findByPathAnyWindow(pkg: String, path: String, winId: Int = 0): AccessibilityNodeInfo? {
+        val roots = ArrayList<Pair<Int, AccessibilityNodeInfo>>(4)
         runCatching {
             windows?.forEach { w ->
                 val r = w.root ?: return@forEach
-                if (r.packageName?.toString() == pkg) roots.add(r)
+                if (r.packageName?.toString() == pkg) roots.add(w.id to r)
             }
         }
-        for (r in roots) findByPath(r, path)?.let { return it }
+        runCatching { rootInActiveWindow }
+            .getOrNull()
+            ?.let { if (it.packageName?.toString() == pkg) roots.add(-1 to it) }
+        // 优先抓取时那个窗口：同一个 App 的主窗口和浮层窗口路径前缀往往一样，
+        // 在错的窗口上解出来会点到另一个控件
+        val ordered = if (winId != 0) roots.sortedByDescending { it.first == winId } else roots
+        for ((_, r) in ordered) findByPath(r, path)?.let { return it }
         return null
     }
 
@@ -1192,7 +1283,7 @@ class SkipAccessibilityService : AccessibilityService() {
         val rules = RuleStore.pathRules(this, pkg, act)
         if (rules.isEmpty()) return false
         for (r in rules) {
-            val node = findByPathAnyWindow(pkg, r.nodePath ?: continue) ?: continue
+            val node = findByPathAnyWindow(pkg, r.nodePath ?: continue, r.nodeWinId) ?: continue
             // 类名/尺寸校验：页面改版后同一条路径可能指向别的控件，宁可不错
             if (!nodeMatches(r, node)) {
                 Log.v(TAG, "path-skip ${r.id} 控件已变（${node.className}）")
@@ -1212,7 +1303,10 @@ class SkipAccessibilityService : AccessibilityService() {
             val key = "$pkg#path/${r.nodePath}"
             lastSkipWindow = key
             lastSkipAt = now
-            pending = PendingSkip(key, pkg, "路径·${r.nodePath}", 0, 1)
+            pending = PendingSkip(
+                key, pkg, "路径·${r.nodePath}", 0, 1,
+                path = r.nodePath, ruleId = r.id,
+            )
             val token = pending
             mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
             return true

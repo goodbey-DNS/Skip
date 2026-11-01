@@ -47,10 +47,18 @@ class NodeScanner(
      */
     private data class Match(val node: Compiled, val hitLen: Int, val byText: Boolean)
 
-    private val compiled: List<Compiled> = rules.filter { it.enabled }.map { r ->
+    private val compiled: List<Compiled> = rules.filter { it.enabled }.mapNotNull { r ->
+        // 正则写错不该让整组规则失效：Regex() 在构造时抛 PatternSyntaxException，
+        // 以前这条异常会在每次事件里抛一遍，扫描器永远建不起来，用户只看到「规则不生效」
+        val regexes = if (r.regex) {
+            r.patterns.mapNotNull { p -> runCatching { Regex(p) }.getOrNull() }
+        } else {
+            emptyList()
+        }
+        if (r.regex && regexes.isEmpty()) return@mapNotNull null
         Compiled(
             rule = r,
-            regexes = if (r.regex) r.patterns.map { Regex(it) } else emptyList(),
+            regexes = regexes,
             keywords = if (!r.regex) r.patterns.map { it.lowercase(Locale.ROOT) } else emptyList(),
             viewIds = r.viewIds.map { it.lowercase(Locale.ROOT) },
         )
@@ -104,11 +112,15 @@ class NodeScanner(
                 val byViewId = vid != null && matched.node.viewIds.any { vid.contains(it) }
                 val limit = allowedLen(matched)
                 val tooLong = text != null && text.length > limit
-                val hitExclude = text != null && excludes.any { text.contains(it, ignoreCase = true) }
+                // 排除词命中 = 整屏放弃。界面上写的就是「排除词命中就整屏放弃」，
+                // 而以前只拒这一个节点、接着扫下一个，等于承诺没兑现，
+                // 用户写了排除词却还是被点了
+                if (text != null && excludes.any { text.contains(it, ignoreCase = true) }) {
+                    lastDebug = "EXCLUDE「${text.take(12)}」整屏放弃"
+                    return null
+                }
                 // 负向闸：教程 / 引导 / 新手 这类"跳过"不是广告按钮（"跳过教程""Skip tutorial"）
-                if (hitExclude) {
-                    reject = "「${text!!.take(12)}」命中排除词"
-                } else if (text != null && NEGATIVE_HINTS.any { text.contains(it, ignoreCase = true) }) {
+                if (text != null && NEGATIVE_HINTS.any { text.contains(it, ignoreCase = true) }) {
                     reject = "「${text.take(12)}」疑似教程/引导"
                 } else if (tooLong && text != null) {
                     // 文本长度闸对 viewId 命中同样生效：长文本控件（正文里提到关键字）
