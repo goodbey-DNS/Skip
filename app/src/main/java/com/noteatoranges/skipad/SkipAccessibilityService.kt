@@ -99,9 +99,6 @@ class SkipAccessibilityService : AccessibilityService() {
     /** 内容变化事件的独立节流时间戳 */
     private var lastContentAt = 0L
 
-    /** DEBUG-TEMP 0.17.1：事件诊断日志节流 */
-    private var lastEventLogAt = 0L
-
     private data class PendingSkip(
         val windowKey: String,
         val pkg: String,
@@ -473,16 +470,6 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         val now = SystemClock.elapsedRealtime()
-
-        // DEBUG-TEMP 0.17.1：确认事件是否真在进来、root 是否可读、开屏窗口是否打开，定位后删除
-        val prePkg = runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
-            ?: event.packageName?.toString()
-        val preSplash = prePkg?.let { lastStateChangeAt[it] }?.let { now - it <= SPLASH_WINDOW_MS } == true
-        if (now - lastEventLogAt > 1000L) {
-            lastEventLogAt = now
-            Log.i(TAG, "ev type=$type pkg=$prePkg act=${prePkg?.let { lastActivityClass[it] }} splash=$preSplash")
-        }
-
         if (now - lastHandleAt < THROTTLE_MS) return
         lastHandleAt = now
 
@@ -496,22 +483,9 @@ class SkipAccessibilityService : AccessibilityService() {
         // rootInActiveWindow 在部分 ROM 上会是 null（窗口列表却可读），抓快照走的就是
         // windows 那条路。这里补一个同源的兜底，否则整条规则链路会静默不工作
         val rootRaw = rootInActiveWindow
-        val root = rootRaw ?: activeWindowRoot(event.packageName?.toString())
-        if (root == null) {
-            // DEBUG-TEMP 0.17.3：定位链路卡在哪一步
-            val ws = runCatching { windows?.toList() }.getOrNull()
-            Log.i(
-                TAG,
-                "no-root raw=${rootRaw != null} eps=${event.packageName} wins=${ws?.size ?: -1}" +
-                    " roots=${ws?.count { runCatching { it.root != null }.getOrDefault(false) }}",
-            )
-            return
-        }
+        val root = rootRaw ?: activeWindowRoot(event.packageName?.toString()) ?: return
         val pkg = root.packageName?.toString() ?: event.packageName?.toString() ?: return
-        if (pkg in blacklist || pkg == packageName) {
-            Log.i(TAG, "skip-pkg $pkg self=${pkg == packageName} black=${pkg in blacklist}")
-            return
-        }
+        if (pkg in blacklist || pkg == packageName) return
 
         // 开屏窗口：只从「真的切到这个 App 的那一刻」起算 SPLASH_WINDOW_MS。
         // 窗口内才允许内置关键字；窗口外只认快照生成的用户规则
@@ -535,24 +509,11 @@ class SkipAccessibilityService : AccessibilityService() {
         // 命中就不必再全树扫描。页面/冷却/次数闸在 tryPathRule 内部按规则判断
         if (tryPathRule(root, pkg, act, now)) return
 
-        // DEBUG-TEMP 0.17.3：走到这一步说明 root/包名都正常
-        Log.i(TAG, "chain pkg=$pkg act=$act splash=$splash")
-
         // 开屏窗口内：用户规则优先，没命中再用内置关键字；
         // 窗口外：只认用户规则，没有就一条都不扫
         val scanner = userScanner?.takeIf { userScannerPkg == pkg }
             ?: (if (splash) builtinScanner else null)
-            ?: run {
-                // DEBUG-TEMP 0.17.2：规则没加载 / 不在开屏窗口时链路会安静地停在这里
-                Log.i(
-                    TAG,
-                    "idle pkg=$pkg act=$act splash=$splash nodeRules=" +
-                        RuleStore.nodeRulesAsScannerRules(this, pkg, act).size +
-                        " pathRules=" + RuleStore.pathRules(this, pkg, act).size +
-                        " ruleVer=" + RuleStore.version(this),
-                )
-                return
-            }
+            ?: return
 
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
@@ -570,7 +531,7 @@ class SkipAccessibilityService : AccessibilityService() {
         // 不能凭感觉（上限是 TRAVERSE_TIMEOUT_MS=400ms）
         val cost = SystemClock.elapsedRealtime() - t0
         if (hit == null) {
-            Log.i(TAG, "scan-none pkg=$pkg ${scanner.lastDebug}")
+            Log.v(TAG, "scan $pkg ${cost}ms: ${scanner.lastDebug}")
             return
         }
         val detail = hit.first.text?.toString()
