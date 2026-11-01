@@ -176,7 +176,8 @@ object Backup {
                 .onFailure { kwInvalid = true }
         }
 
-        val snapRoot = File(context.filesDir, "snapshots").apply { mkdirs() }        var snapCount = 0
+        val snapRoot = File(context.filesDir, "snapshots").apply { mkdirs() }
+        var snapCount = 0
         val dirs = snaps.keys.map { it.substringBeforeLast('/') }.distinct()
         for (dir in dirs) {
             val name = dir.substringAfter("snapshots/")
