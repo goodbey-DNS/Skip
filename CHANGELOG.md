@@ -2,6 +2,34 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.13 - 2026-11-01 · 修服务崩溃循环（用户报「淘宝抓不到快照」）
+
+**现象**：在淘宝页点通知抓快照毫无反应，日志里只有 `PendingIntentRecordImpl: notifyGreeze ... systemui -> skipad`；`dumpsys accessibility` 显示 `Bound services:{}`、`Crashed services:{SkipAccessibilityService}`，`pidof` 为空——进程早就死了，通知是挂在栏里的残留。
+
+**根因**（dropbox `data_app_crash`，0.17.12 连续 6 次）
+```
+java.lang.ArrayIndexOutOfBoundsException: length=3; index=3
+  at android.internal.util.ArrayUtils.checkBounds(ArrayUtils.java:846)
+  at android.util.LongArray.get(...)
+  at AccessibilityNodeInfo.getChild(...)
+  at SkipAccessibilityService.findByPath(...)
+  at ...tryPathRule -> onAccessibilityEvent
+```
+`AccessibilityNodeInfo.getChild(i)` 在 `i >= childCount` 时**不返回 null**，而是在系统内部直接抛越界。用户给淘宝建的路径规则是 `2/2/1/0/8/0`，淘宝页面结构一变，某一层取 `getChild(8)` 就越界。
+
+崩溃后果最麻烦：系统把服务记进 `crashed services` 并不再自动绑定，期间通知还挂着、点了没反应——看起来就像"这个 App 抓不到快照"。恢复后事件一来又崩（13:09:36→37、13:12:51→52，每次都换 PID），进入崩溃循环。
+
+**修了什么**
+1. `findByPath` 先读 `childCount` 再取子节点，`runCatching` 兜住跨进程读取。
+2. `onAccessibilityEvent` 整体 try/catch（`handleEvent`）：**单次事件里的任何异常都不许把服务打死**。漏跳一个广告无所谓，服务死掉是整条链路停摆。
+
+**实测**
+- 装 0.17.13 后进程 29839 一直存活，`Bound services` 正常、`Crashed services` 空，dropbox 最后一条崩溃停在 13:16:47（旧版本）。
+- 淘宝页点通知抓取：`capture attempt=0 candidates=1 pkg=com.taobao.taobao` → `snapshot saved nodes=102`。
+- 同一页面扫描 `scan com.taobao.taobao 130ms: no-match nodes=157`，路径规则在跑且不再崩。
+
+**版本** 0.17.13 / versionCode 85。
+
 ## 0.17.12 - 2026-11-01 · 删掉三处盲点；通知整条可点
 
 **删除冷启动右上角盲点**
