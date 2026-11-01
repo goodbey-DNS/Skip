@@ -1097,6 +1097,14 @@ class SkipAccessibilityService : AccessibilityService() {
                 mainHandler.postDelayed({ captureNow(attempt + 1) }, CAPTURE_RETRY_DELAY_MS)
                 return
             }
+            // 一个窗口都拿不到（应用禁了无障碍，连自己的悬浮钮也刚被移除）：
+            // 只要知道前台是哪个 App，就还能只存截图
+            val fg = lastFgPkg
+            Log.i(TAG, "capture-empty attempts=$attempt fg=$fg")
+            if (fg != null) {
+                captureScreenshotOnly(attempt, fg)
+                return
+            }
             dumpSnapFailure(attempt)
             Toast.makeText(this, R.string.snap_failed, Toast.LENGTH_SHORT).show()
             return
@@ -1108,6 +1116,7 @@ class SkipAccessibilityService : AccessibilityService() {
             it.second.packageName?.toString() != packageName
         }?.second?.packageName?.toString()
         val pkg = otherPkg ?: lastFgPkg
+        Log.i(TAG, "capture attempt=$attempt candidates=${candidates.size} pkg=$pkg otherPkg=$otherPkg")
         if (pkg == null) {
             Toast.makeText(this, R.string.snap_no_pkg, Toast.LENGTH_SHORT).show()
             return
@@ -1172,6 +1181,7 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         // 系统界面、加载中的空白页只能抓到一两个节点，存下来是垃圾。
         // 也可能是这一帧只有个空壳弹窗——给重试机会，主窗口的树稍后才就绪
+        Log.i(TAG, "capture nodes=${nodes.size} pkg=$pkg windows=${windowRoots.size}")
         if (nodes.size < 3) {
             if (attempt < CAPTURE_MAX_RETRY) {
                 mainHandler.postDelayed({ captureNow(attempt + 1) }, CAPTURE_RETRY_DELAY_MS)
