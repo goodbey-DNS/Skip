@@ -218,6 +218,13 @@ class SkipAccessibilityService : AccessibilityService() {
 
     /** 悬浮钮点击：隐藏圆钮 → 广播抓取（服务同应用接收）→ 弹回 */
     fun bubbleClicked() {
+        // 点击这一刻前台还是目标 App，先把包名抓下来：
+        // 有些应用（货拉拉企业版）禁了无障碍遍历——窗口树读不到、连事件也不发，
+        // 但 rootInActiveWindow 的包名往往还在，这是降级截图唯一的包名来源
+        runCatching { rootInActiveWindow?.packageName?.toString() }
+            .getOrNull()
+            ?.takeIf { it != packageName && it != SYSTEM_UI_PKG }
+            ?.let { lastFgPkg = it }
         com.noteatoranges.skipad.util.CaptureBubble.hide(this)
         // 250ms 在部分 ROM 上不够：圆钮移除后焦点/窗口列表还在变，取到的树是空的
         mainHandler.postDelayed({
@@ -1088,6 +1095,11 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     private fun captureNow(attempt: Int = 0) {
+        // 再试一次拿前台包名：hide 之后活动窗口就是目标 App
+        runCatching { rootInActiveWindow?.packageName?.toString() }
+            .getOrNull()
+            ?.takeIf { it != packageName && it != SYSTEM_UI_PKG }
+            ?.let { lastFgPkg = it }
         val candidates = captureCandidates()
         if (candidates.isEmpty()) {
             // 点悬浮钮会先把圆钮藏起来，这一瞬间窗口在重排，
