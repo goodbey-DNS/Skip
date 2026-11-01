@@ -413,6 +413,16 @@ object RuleStore {
             .edit().putInt("v", ver).apply()
     }
 
-    fun version(context: Context): Int =
-        context.getSharedPreferences("rulever", Context.MODE_PRIVATE).getInt("v", 0)
+    /**
+     * 规则版本号。每个界面事件都会问一次，所以先走内存。
+     *
+     * 以前直接读 SharedPreferences：虽然它本身有内存缓存不落盘，但每次都要过一次
+     * 同步锁，而这里 @Volatile 的 ver 字段明明已经维护着同一个值却没被用上。
+     * ver 初值 0 = 「还没读过盘」，读一次填上之后就一直走内存。
+     */
+    fun version(context: Context): Int {
+        if (ver != 0) return ver
+        ver = context.getSharedPreferences("rulever", Context.MODE_PRIVATE).getInt("v", 0)
+        return ver
+    }
 }

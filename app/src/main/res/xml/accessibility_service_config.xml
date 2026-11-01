@@ -6,6 +6,10 @@
   - flagReportViewIds：暴露 viewIdResourceName，M2 per-App 规则依赖
   - isAccessibilityTool（API 31+ 要求声明；低版本忽略不报错）
   - packageNames 不设置 = 接收所有应用，粗筛在服务代码层做（黑名单）
+  - notificationTimeout=300：这是系统给「同类型事件」的合并窗口。100ms 时信息流类应用
+    每秒几十个内容变化事件几乎全量投递过来，是常驻耗电的一大块；300ms 把回调次数
+    压到约三分之一，代价是开屏按钮最多晚 300ms 开始处理——开屏倒计时通常在 3~5 秒，
+    这点延迟不影响点中。服务内部还有 600ms 的内容变化节流，两者叠起来仍然灵敏
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeWindowsChanged"
@@ -17,5 +21,5 @@
     android:description="@string/accessibility_service_description"
     android:summary="@string/accessibility_service_summary"
     android:isAccessibilityTool="true"
-    android:notificationTimeout="100"
+    android:notificationTimeout="300"
     android:settingsActivity="com.noteatoranges.skipad.ui.MainActivity" />

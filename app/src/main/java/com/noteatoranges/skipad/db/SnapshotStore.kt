@@ -8,9 +8,12 @@ import java.io.File
 
 /**
  * 快照（GKD 同款思路）：广告在屏时抓"截图 + 完整控件树"，供点选节点生成规则。
- * 目录 filesDir/snapshots/<ts>_<pkg>/：screen.png + tree.json + meta.json。
+ * 目录 filesDir/snapshots/<ts>_<pkg>/：screen.webp（旧快照是 screen.png）+ tree.json + meta.json。
  */
 object SnapshotStore {
+
+    private const val SCREEN_FILE = "screen.webp"
+    private const val LEGACY_SCREEN_FILE = "screen.png"
 
     data class Node(
         val idx: Int,
@@ -55,7 +58,16 @@ object SnapshotStore {
     ): File {
         val dir = File(File(context.filesDir, "snapshots"), "${System.currentTimeMillis()}_$pkg")
         dir.mkdirs()
-        screen?.compress(Bitmap.CompressFormat.PNG, 90, java.io.FileOutputStream(File(dir, "screen.png")))
+        // 存 WebP 而不是 PNG：PNG 是无损格式，compress() 的 quality 参数对它完全无效，
+        // 一张 1220x2712 的界面截图就是 1.5~4MB，30 份能吃到上百 MB。
+        // WebP 质量 90 对"看清小字、点选按钮"绰绰有余，体积只有 PNG 的 1/5 左右
+        val fmt = if (android.os.Build.VERSION.SDK_INT >= 30) {
+            Bitmap.CompressFormat.WEBP_LOSSY
+        } else {
+            @Suppress("DEPRECATION")
+            Bitmap.CompressFormat.WEBP
+        }
+        screen?.compress(fmt, 90, java.io.FileOutputStream(File(dir, SCREEN_FILE)))
         val arr = JSONArray()
         nodes.forEach { n ->
             arr.put(JSONObject().apply {
@@ -173,7 +185,13 @@ object SnapshotStore {
         emptyList()
     }
 
-    fun loadScreen(dir: File): File? = File(dir, "screen.png").takeIf { it.exists() }
+    /**
+     * 截图文件。0.17.27 起存 WebP；旧快照仍是 PNG，读的时候两种都认，
+     * 不做迁移（迁移要重编码，用户可能正在用那些快照）。
+     */
+    fun loadScreen(dir: File): File? =
+        File(dir, SCREEN_FILE).takeIf { it.exists() }
+            ?: File(dir, LEGACY_SCREEN_FILE).takeIf { it.exists() }
 
     fun remove(context: Context, dir: File) {
         dir.deleteRecursively()
@@ -187,4 +205,15 @@ object SnapshotStore {
             ?.drop(30)
             ?.forEach { it.deleteRecursively() }
     }
+
+    /**
+     * 快照目录总占用（含截图）。
+     *
+     * 「数据与维护」原来只显示内存和数据库大小，而快照恰恰是唯一可能吃掉
+     * 几十上百 MB 的项——用户看不到它，也就不知道空间去哪了。
+     */
+    fun totalSizeBytes(context: Context): Long =
+        File(context.filesDir, "snapshots").walkTopDown()
+            .filter { it.isFile }
+            .sumOf { it.length() }
 }

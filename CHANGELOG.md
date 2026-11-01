@@ -2,6 +2,56 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.27 - 2026-11-01 · 内存/省电专项：堵泄漏、砍存储、少唤醒
+
+一次「内存占用 + 常驻省电」的整体检查，量了真机数据（后台纯服务 PSS 57MB、前台 88MB，
+抓完快照内存回落无泄漏），改的是查出来的七处加一个顺带。
+
+**1. 截图回调没有异常兜底，失败时 HardwareBuffer 不关（真泄漏）**
+`TakeScreenshotCallback.onSuccess` 里 `wrapHardwareBuffer` / `copy` 任何一步抛异常，
+后面的 `hardwareBuffer.close()` 就执行不到 —— 一张全屏 buffer 是十几 MB native 内存。
+0.17.25 补崩溃兜底时补了广播、延迟任务、核验、抓取，唯独漏了这个系统回调。
+现在解码包 `try`、关闭放 `finally`、`onResult` 单独包一层（它内部还有存盘转码整套流程）。
+失败会退化成 `onResult(null)`，走"只存节点树不存截图"的既有分支。
+
+**2. CaptureBubble 持有已销毁的 Activity**
+`CaptureBubble` 是进程级单例，`RulesActivity` 在 onResume 里把 `onClick` 赋成捕获 this 的
+lambda，退出页面没有清 —— 单例会一直攥着那个 Activity 直到下次被覆盖。
+现在 `onDestroy` 把回调改指回服务实例：既释放 Activity，又不会让还挂在屏幕上的悬浮钮变哑巴。
+
+**3. 快照从 PNG 改存 WebP**
+`compress(CompressFormat.PNG, 90, …)` 里的 quality 对 PNG 完全无效，等于每张全尺寸无损图
+（1220×2712 约 1.5~4MB），30 份上限下最坏能吃到上百 MB。改成 WebP 质量 90
+（API 30+ 用 `WEBP_LOSSY`，26~29 用已废弃的 `WEBP`），体积约为原来的 1/5。
+文件名 `screen.webp`；`loadScreen` 两种后缀都认，旧快照不迁移、照常能看。
+
+**4. 统计表只在打开 App 时才清理**
+`StatsDb.prune(KEEP_EVENTS=1000)` 原来只有 `MainActivity` 调，用户装完不再打开 App
+的话表就只增不减，"保留最近 1000 条"的设计没落地。改成每写入 200 条顺手 prune 一次
+（调用方本来就是后台 IO 线程，不需要额外加锁）。
+
+**5. 「数据与维护」看不到快照占用**
+原来只显示内存和数据库大小，而快照恰恰是唯一可能吃掉几十上百 MB 的项。
+新增 `SnapshotStore.totalSizeBytes`，那行改成「内存 X MB · 数据库 Y KB · 快照 Z MB」。
+
+**6. 内容变化事件的系统合并窗口从 100ms 放宽到 300ms**
+`notificationTimeout` 决定系统把同类型事件合并多久再投递。100ms 时信息流类应用
+每秒几十个内容变化几乎全量投递，是常驻耗电的大头；300ms 把回调压到约 1/3，
+代价是开屏按钮最多晚 300ms 开始处理（开屏倒计时通常 3~5 秒，不影响点中）。
+服务内部 600ms 的内容变化节流照旧。
+
+**7. `RuleStore.version()` 每次事件都过一次 SharedPreferences 锁**
+类里 `@Volatile ver` 明明维护着同一个值，`version()` 却没用它。改成先读内存，
+`ver==0`（还没读过盘）才回落到 SharedPreferences。
+
+**8. 顺带修一个静默失效**：`isRunningNow` 在服务实例为空时查
+`getEnabledAccessibilityServiceList`，而那个列表是**配置态**——服务崩溃后被系统标记为
+不可用、不再自动绑定时，配置里仍写着启用，于是永远判成"运行中"，永不复活。
+改成看「最近真的连上过没有」：`lastConnectedAt` 在 10 秒宽限期内算运行中（覆盖重绑过渡期），
+超期即认定掉线交给复活逻辑。
+
+**版本** 0.17.27 / versionCode 99。
+
 ## 0.17.26 - 2026-11-01 · 规则按 App 分组收起；点选不再让人在五种定位方式里选
 
 两条都是"界面在替用户做判断"的收尾，没动引擎匹配逻辑。

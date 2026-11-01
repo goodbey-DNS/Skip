@@ -110,6 +110,17 @@ class RulesActivity : AppCompatActivity() {
         renderSnapshots()
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        // 上面两行赋值捕获的是本 Activity，而 CaptureBubble 是进程级单例：
+        // 不处理的话它会一直攥着一个已经销毁的 Activity，直到下次被覆盖。
+        // 退出时改指回服务实例——服务是长生命周期的，既释放了 Activity，
+        // 又不会把还挂在屏幕上的悬浮钮弄成哑巴
+        val svc = SkipAccessibilityService.instance
+        CaptureBubble.onClick = if (svc != null) ({ svc.bubbleClicked() }) else null
+        CaptureBubble.onLongClick = if (svc != null) ({ svc.bubbleLongClicked() }) else null
+    }
+
     // —————————— 关键字 ——————————
 
     /** 关键字列表：一行一个作用对象，显示命中词与排除词 */

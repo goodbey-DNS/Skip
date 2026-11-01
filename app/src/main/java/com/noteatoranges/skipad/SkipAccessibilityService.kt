@@ -1279,17 +1279,32 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
-            // 尺寸要在 close() 之前读：HardwareBuffer 关了之后再取宽高就不保证有效
-            val shotW = screenshot.hardwareBuffer.width
-            val shotH = screenshot.hardwareBuffer.height
-            val hw = android.graphics.Bitmap.wrapHardwareBuffer(
-                screenshot.hardwareBuffer, screenshot.colorSpace
-            )
-            val bitmap = hw?.copy(Bitmap.Config.ARGB_8888, false)
-            screenshot.hardwareBuffer.close()
-            // 硬件位图占的是图形内存，copy 完就没用了
-            hw?.recycle()
-            onResult(bitmap, shotW, shotH)
+            var shotW = 0
+            var shotH = 0
+            var bitmap: Bitmap? = null
+            try {
+                // 尺寸要在 close() 之前读：HardwareBuffer 关了之后再取宽高就不保证有效
+                shotW = screenshot.hardwareBuffer.width
+                shotH = screenshot.hardwareBuffer.height
+                val hw = android.graphics.Bitmap.wrapHardwareBuffer(
+                    screenshot.hardwareBuffer, screenshot.colorSpace
+                )
+                bitmap = hw?.copy(Bitmap.Config.ARGB_8888, false)
+                // 硬件位图占的是图形内存，copy 完就没用了
+                hw?.recycle()
+            } catch (t: Throwable) {
+                traceW("screenshot-decode-fail", t)
+            } finally {
+                // 无论解码成不成功都必须关：一张全屏 HardwareBuffer 是十几 MB 的 native 内存，
+                // 上面任何一步抛异常时不关就是实打实的泄漏
+                runCatching { screenshot.hardwareBuffer.close() }
+            }
+            try {
+                onResult(bitmap, shotW, shotH)
+            } catch (t: Throwable) {
+                // 回调里还有存盘、转码、Toast 一整套流程，各自都可能抛
+                traceW("screenshot-result-fail", t)
+            }
         }
 
         abstract fun onResult(bitmap: Bitmap?, srcW: Int, srcH: Int)

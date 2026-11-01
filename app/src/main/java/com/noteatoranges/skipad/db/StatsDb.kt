@@ -23,7 +23,18 @@ class StatsDb private constructor(context: Context) :
             put(C_TS, System.currentTimeMillis())
         }
         writableDatabase.insert(TABLE, null, cv)
+        // 每写 PRUNE_EVERY 条顺手清理一次。
+        // 以前 prune 只在打开 App 时跑（MainActivity），用户装完基本不再打开的话
+        // 表就只增不减，"保留最近 1000 条"的设计等于没落地。
+        // 调用方都是后台 IO 线程（Io.run("stats-insert")），不需要额外加锁
+        if (++insertSincePrune >= PRUNE_EVERY) {
+            insertSincePrune = 0
+            runCatching { prune(KEEP_EVENTS) }
+        }
     }
+
+    /** 距上次清理累计写入条数（只在 IO 线程访问） */
+    private var insertSincePrune = 0
 
     fun total(): Int =
         readableDatabase.compileStatement("SELECT COUNT(*) FROM $TABLE").simpleQueryForLong().toInt()
@@ -88,6 +99,9 @@ class StatsDb private constructor(context: Context) :
         private const val C_DETAIL = "detail"
         private const val C_TS = "ts"
         private const val KEEP_EVENTS = 1000
+
+        /** 每写入这么多条触发一次 prune，避免只在打开 App 时才清理 */
+        private const val PRUNE_EVERY = 200
 
         @Volatile
         private var inst: StatsDb? = null

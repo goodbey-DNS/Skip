@@ -232,10 +232,14 @@ class MaintenanceActivity : AppCompatActivity() {
         val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val pssKb = am.getProcessMemoryInfo(intArrayOf(Process.myPid())).firstOrNull()?.totalPss ?: 0
         val dbKb = StatsDb.sizeKb(this)
+        // 快照目录要遍历文件算总量：最多 30 份、每份三个文件，几十次 stat 都在毫秒级，
+        // 直接在主线程算完，不值得为它起一次线程
+        val snapBytes = com.noteatoranges.skipad.db.SnapshotStore.totalSizeBytes(this)
         findViewById<TextView>(R.id.mem_text).text = getString(
             R.string.mem_format,
             String.format(Locale.CHINA, "%.1f", pssKb / 1024f),
             dbKb.toString(),
+            String.format(Locale.CHINA, "%.1f", snapBytes / 1024f / 1024f),
         )
     }
 

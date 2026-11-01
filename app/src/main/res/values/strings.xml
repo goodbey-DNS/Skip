@@ -76,7 +76,7 @@
     <string name="section_ka_settings">服务保活</string>
 
     <string name="section_maintain">应用维护</string>
-    <string name="mem_format">内存占用约 %1$s MB · 数据库 %2$s KB</string>
+    <string name="mem_format">内存占用约 %1$s MB · 数据库 %2$s KB · 快照 %3$s MB</string>
     <string name="action_clear_mem_cache">清除内存缓存</string>
     <string name="action_clear_stats">清空统计数据</string>
     <string name="clear_mem_cache_done">内存缓存已清除（图标会重新加载，无数据影响）</string>

@@ -1,6 +1,5 @@
 package com.noteatoranges.skipad.keepalive
 
-import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -12,7 +11,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
-import android.view.accessibility.AccessibilityManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -47,6 +45,15 @@ object KeepAlive {
 
     /** 每小时静默复活上限：超过就退化为提醒，避免与用户的手动关闭长期对抗 */
     private const val RESURRECT_PER_HOUR = 6
+
+    /**
+     * 「刚连上」的宽限期。
+     *
+     * 实例为空但几分钟前才连上过，说明系统正在重绑（过渡期实例还没赋值），
+     * 这时候去"复活"只会把刚起来的服务又踢一遍。宽限期取 10 秒：
+     * 正常重绑在 1~2 秒内完成，真掉线则早就超过这个时长。
+     */
+    private const val CONNECT_GRACE_MS = 10_000L
     private const val PREF_KA = "keepalive"
     private const val KEY_RESURRECT_TS = "resurrect_ts"
     private const val KEY_LAST_CONN = "last_conn_at"
@@ -99,20 +106,21 @@ object KeepAlive {
     }
 
     /**
-     * 运行态：系统当前真实绑定着本服务（比配置态可信，ROM 拦自启时配置在但没绑定）。
+     * 运行态：系统当前真的绑定着本服务（比配置态可信，ROM 拦自启时配置在但没绑定）。
      *
-     * 先看同进程里的服务实例——这是最直接的证据。无障碍管理器那份列表在部分 ROM 上
-     * 并不可靠：本次在 HyperOS 上实测到「dumpsys accessibility 显示已绑定」但
-     * `getEnabledAccessibilityServiceList` 里查不到本服务，只看列表会一直误判掉线。
-     * 列表查询留作兜底（服务刚起来、实例还没赋值的那一瞬间会走到）。
+     * 先看同进程里的服务实例，这是最直接的证据。
+     *
+     * 实例为空时，过去用 `getEnabledAccessibilityServiceList` 兜底，但那个列表返回的是
+     * **配置态**：服务崩溃后被系统标记为不可用、不再自动绑定时，配置里仍然写着它启用，
+     * 于是这里一直认为是「运行中」，永远不去复活 —— 用户看到的是服务明明开着却毫无反应。
+     * 改成看「最近有没有真的连上过」：连接过渡期（几秒）算运行中，不折腾；
+     * 超过宽限期就认定掉线，交给复活逻辑判断。
      */
     fun isRunningNow(context: Context): Boolean {
         if (SkipAccessibilityService.instance != null) return true
-        val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
-            ?: return false
-        val me = serviceComponent(context)
-        return am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-            .any { sameService(it.id, me) }
+        val last = lastConnectedAt(context)
+        if (last <= 0L) return false
+        return System.currentTimeMillis() - last < CONNECT_GRACE_MS
     }
 
     fun hasWriteSecureSettings(context: Context): Boolean =
