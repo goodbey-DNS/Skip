@@ -50,6 +50,8 @@
     <string name="snapshot_hint">点选下方任一节点生成跳过规则；可点击的节点排在最前。生成后规则立即生效，下次同款广告自动跳过。</string>
     <string name="snap_saved">快照已保存</string>
     <string name="snap_failed">快照失败：读不到当前页面的控件，稍等一秒再点一次</string>
+    <string name="snap_no_pkg">快照失败：读不出当前是哪个应用，换个界面再试</string>
+    <string name="snap_shot_failed">快照失败：系统没让截屏，稍后再试</string>
 
     <string name="section_rules">跳过规则</string>
     <string name="section_snapshots">快照（点开点选生成规则）</string>

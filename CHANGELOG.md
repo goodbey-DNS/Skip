@@ -2,6 +2,25 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.16.16 - 2026-11-01 · 抓取失败的真凶：包名为空时静默返回
+
+**真机复现（M098FE / Android 17）**
+- 货拉拉弹出 PopupWindow 广告时点悬浮钮：圆钮正常隐藏（说明点击到位），但既没有快照、也没有提示，外部 diag 目录也没生成。
+- 没有提示 = 没走到 `snap_failed`；没生成 diag = 没走到重试失败分支。那就只剩一条路：`val pkg = root.packageName?.toString() ?: return` —— 包名读不到，直接静默退出。
+
+**根因**
+- PopupWindow 的 `AccessibilityNodeInfo` 经常没有 `packageName`。0.16.15 的 `pickCaptureRoot` 还会把这类节点当"不可用"过滤掉，于是要么落到 `snap_failed`（0.16.12 用户看到的那句），要么拿到 root 后又被 `?: return` 吞掉。
+
+**改了什么**
+1. `pickCaptureRoot` 不再丢弃 `packageName` 为 null 的窗口，先收进候选，由调用方用「最后记录的前台包」补。
+2. `captureNow` 的包名改为 `root.packageName ?: lastFgPkg`，两个都拿不到才提示 `snap_no_pkg`，不再静默返回。
+3. 截图失败（`takeScreenshot` 的 onFailure）补上提示 `snap_shot_failed` 并恢复悬浮钮——原来只写日志，用户以为点了没反应。
+4. `TakeScreenshotCallback` 改成 inner class 以便弹 Toast。
+- 版本 0.16.16 / versionCode 63。
+
+**教训**
+- 抓取链路上任何 `?: return` 都必须带提示。静默返回在无 logcat 的 ROM 上等于黑盒。
+
 ## 0.16.15 - 2026-11-01 · 修「手动抓取失败：没找到可抓取的应用窗口」
 
 **现场**

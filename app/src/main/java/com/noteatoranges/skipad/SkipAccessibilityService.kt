@@ -974,9 +974,15 @@ class SkipAccessibilityService : AccessibilityService() {
         val selfRoots = ArrayList<AccessibilityNodeInfo>(2)
         fun consider(node: AccessibilityNodeInfo?) {
             if (node == null) return
-            val p = node.packageName?.toString() ?: return
+            val p = node.packageName?.toString()
             if (p == SYSTEM_UI_PKG) return
-            if (p == packageName) selfRoots.add(node) else others.add(node)
+            when {
+                // 包名读不到的窗口先收着：PopupWindow 的 root 常常没有 packageName，
+                // 以前这里直接抛弃，弹窗场景就永远抓不到
+                p == null -> others.add(node)
+                p == packageName -> selfRoots.add(node)
+                else -> others.add(node)
+            }
         }
         consider(runCatching { rootInActiveWindow }.getOrNull())
         val wins: List<AccessibilityWindowInfo> =
@@ -1036,7 +1042,13 @@ class SkipAccessibilityService : AccessibilityService() {
             Toast.makeText(this, R.string.snap_failed, Toast.LENGTH_SHORT).show()
             return
         }
-        val pkg = root.packageName?.toString() ?: return
+        // 包名优先取 root 自己的；取不到就用最后记录的前台包（弹窗窗口常常没有 packageName）。
+        // 以前这里 `?: return` 静默退出：点了没反应、不报错、不落盘，最难查的一种
+        val pkg = root.packageName?.toString() ?: lastFgPkg
+        if (pkg == null) {
+            Toast.makeText(this, R.string.snap_no_pkg, Toast.LENGTH_SHORT).show()
+            return
+        }
         val act = lastActivityClass[pkg] ?: ""
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
@@ -1133,10 +1145,17 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     /** takeScreenshot 回调适配（API 30+），HardwareBuffer 转 Bitmap */
-    private abstract class TakeScreenshotCallback :
+    private inner abstract class TakeScreenshotCallback :
         AccessibilityService.TakeScreenshotCallback {
         override fun onFailure(errorCode: Int) {
             Log.w("SkipAdEngine", "takeScreenshot failed: $errorCode")
+            // 截图失败原来只写日志：用户点了没反应，也不知道为什么
+            com.noteatoranges.skipad.util.CaptureBubble.apply(this@SkipAccessibilityService)
+            Toast.makeText(
+                this@SkipAccessibilityService,
+                R.string.snap_shot_failed,
+                Toast.LENGTH_SHORT,
+            ).show()
         }
 
         override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
