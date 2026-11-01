@@ -2,6 +2,30 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.16.23 - 2026-11-01 · 降级快照让用户指定目标应用
+
+**日志确认**（0.16.22，Redmi / Android 15）
+```
+capture attempt=3 candidates=1 pkg=null otherPkg=null
+```
+- 货拉拉前台时 `captureCandidates()` 只有 1 个窗口（能拿到 root 的只剩我们自己的），`rootInActiveWindow`、`event.packageName`、`lastFgPkg` **全是 null**。
+- 结论：这个 App 不光是裁掉节点树，连无障碍事件和活动窗口都不给。任何无障碍 API 都拿不到它的包名。
+
+**改了什么**
+1. `SnapshotStore.setPkg(dir, pkg)`：把用户指定的包名写回 `meta.json`。
+2. 快照详情页在「节点数为 0」时显示一行「目标应用：xxx（点这里改）」，点击列出有桌面图标的已安装应用，选完立即写回并刷新标题。
+3. 规则生成用的 `meta.pkg` 随之更新，坐标规则能落到正确的 App 上。
+- 版本 0.16.23 / versionCode 70。
+
+**为什么这样**
+- 坐标规则本来就不依赖控件树（长按截图取点 → dpX/dpY），唯一缺的是「这条规则属于哪个 App」。让用户点一次比自己猜可靠。
+
+## 0.16.22 - 2026-11-01 · 点击与抓取时补前台包名
+
+- `bubbleClicked()` 与 `captureNow()` 开头各补一次 `rootInActiveWindow?.packageName` 写进 `lastFgPkg`。
+- 实测对货拉拉无效（root 也是 null），但路径保留——对「事件不发、窗口还在」的应用有用。
+- 版本 0.16.22 / versionCode 69。
+
 ## 0.16.21 - 2026-11-01 · 一个窗口都拿不到时也要能存截图
 
 - 0.16.20 在货拉拉上仍然存不下快照：`captureCandidates()` 为空（货拉拉禁无障碍、自己的悬浮钮又被 hide 掉了），代码直接跳到 `snap_failed`。

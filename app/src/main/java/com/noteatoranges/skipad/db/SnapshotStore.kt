@@ -124,6 +124,22 @@ object SnapshotStore {
     }
 
     /**
+     * 改快照的目标应用。
+     *
+     * 有些应用禁了无障碍，抓取时读不到包名（只能存截图），规则却必须知道包名才生效。
+     * 用户在详情页手动指定后写回 meta，之后生成的规则就用这个 pkg。
+     */
+    fun setPkg(dir: File, pkg: String): Boolean = try {
+        val f = File(dir, "meta.json")
+        val j = JSONObject(f.readText())
+        j.put("pkg", pkg)
+        f.writeText(j.toString())
+        true
+    } catch (e: Exception) {
+        false
+    }
+
+    /**
      * 读节点树。逐条兜：坐标或用 idx 缺失的条目跳过，不因一条坏把整份快照读成空。
      * （全部用 opt 取值，历史备份缺 path/winId 时走默认值即可）
      */

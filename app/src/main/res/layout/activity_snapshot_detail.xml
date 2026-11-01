@@ -62,6 +62,21 @@
                 android:textColor="@color/text_secondary"
                 android:textSize="12sp" />
 
+            <!-- 只在「读不到控件树」的降级快照上显示：那类快照抓取时认不出包名 -->
+            <TextView
+                android:id="@+id/app_row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/bg_card"
+                android:paddingLeft="14dp"
+                android:paddingTop="12dp"
+                android:paddingRight="14dp"
+                android:paddingBottom="12dp"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp"
+                android:visibility="gone" />
+
             <com.noteatoranges.skipad.ui.ScreenshotOverlayView
                 android:id="@+id/overlay"
                 android:layout_width="match_parent"

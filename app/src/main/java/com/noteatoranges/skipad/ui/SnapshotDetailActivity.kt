@@ -1,5 +1,6 @@
 package com.noteatoranges.skipad.ui
 
+import android.content.Intent
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.os.Bundle
@@ -81,6 +82,51 @@ class SnapshotDetailActivity : AppCompatActivity() {
         }
 
         renderNodes()
+
+        // 降级快照（读不到控件树，节点为空）抓取时认不出包名，让用户手动指定，
+        // 否则生成的坐标规则 app 字段是错的，永远不会生效
+        val appRow = findViewById<TextView>(R.id.app_row)
+        if (nodes.isEmpty()) {
+            appRow.visibility = View.VISIBLE
+            refreshAppRow(appRow)
+            appRow.setOnClickListener { pickTargetApp(appRow) }
+        } else {
+            appRow.visibility = View.GONE
+        }
+    }
+
+    private fun refreshAppRow(row: TextView) {
+        row.text = getString(R.string.snapshot_target_app, AppLabels.get(this, meta.pkg).label)
+    }
+
+    /** 从有桌面图标的已安装应用里选一个当目标 */
+    private fun pickTargetApp(row: TextView) {
+        val seen = LinkedHashSet<String>()
+        val apps = packageManager
+            .queryIntentActivities(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0,
+            )
+            .map { it.activityInfo.packageName }
+            .filter { seen.add(it) }
+            .map { AppLabels.get(this, it).label to it }
+            .sortedBy { it.first.lowercase() }
+        if (apps.isEmpty()) return
+        AlertDialog.Builder(this)
+            .setTitle(R.string.snapshot_pick_app_title)
+            .setItems(apps.map { it.first }.toTypedArray()) { _, which ->
+                val pkg = apps[which].second
+                meta = meta.copy(pkg = pkg)
+                SnapshotStore.setPkg(dir, pkg)
+                refreshAppRow(row)
+                findViewById<TextView>(R.id.detail_title).text = AppLabels.get(this, pkg).label
+                Toast.makeText(
+                    this,
+                    getString(R.string.snapshot_pick_app_done, apps[which].first),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+            .setNegativeButton(R.string.action_cancel, null)
+            .show()
     }
 
     private fun selectNode(node: SnapshotStore.Node?) {

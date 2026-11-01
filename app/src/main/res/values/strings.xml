@@ -42,6 +42,9 @@
     <string name="snap_notif_text">遇到杀不掉的广告？下拉点「抓取快照」，回 App 点选生成跳过规则</string>
     <string name="snapshot_selected">选中的元素</string>
     <string name="snapshot_pick_hint">点选截图上的元素（或下方列表），然后生成跳过规则</string>
+    <string name="snapshot_target_app">目标应用：%1$s　（点这里改）</string>
+    <string name="snapshot_pick_app_title">这个快照属于哪个应用</string>
+    <string name="snapshot_pick_app_done">已指定为「%1$s」</string>
     <string name="action_generate_rule">生成跳过规则</string>
     <string name="section_nodes">全部节点（可点击的排前）</string>
     <string name="snap_action">抓取快照</string>
