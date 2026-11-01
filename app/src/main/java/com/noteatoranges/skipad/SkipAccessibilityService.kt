@@ -24,11 +24,13 @@ import com.noteatoranges.skipad.core.ClickPerformer
 import com.noteatoranges.skipad.core.NodeFactsCache
 import com.noteatoranges.skipad.core.NodeScanner
 import com.noteatoranges.skipad.core.SkipRule
+import com.noteatoranges.skipad.db.KeywordStore
 import com.noteatoranges.skipad.db.RuleStore
 import com.noteatoranges.skipad.db.SnapshotStore
 import com.noteatoranges.skipad.db.StatsDb
 import com.noteatoranges.skipad.keepalive.KeepAlive
 import com.noteatoranges.skipad.store.StatsStore
+import com.noteatoranges.skipad.util.EnginePrefs
 import com.noteatoranges.skipad.util.Io
 import java.io.File
 import java.util.concurrent.Executor
@@ -50,8 +52,10 @@ class SkipAccessibilityService : AccessibilityService() {
 
     private var userScanner: NodeScanner? = null
 
-    /** 内置开屏规则扫描器：只在开屏窗口期内参与，窗口外一律不跑 */
-    private var builtinScanner: NodeScanner? = null
+    /** 开屏窗口用的词表扫描器：内置默认词（可开关）+ 该 App 的命中词，带排除词 */
+    private var kwScanner: NodeScanner? = null
+    private var kwKey: String? = null
+    private var kwPkg: String? = null
     private var clicker: ClickPerformer? = null
     private var lastHandleAt = 0L
 
@@ -128,9 +132,6 @@ class SkipAccessibilityService : AccessibilityService() {
         // 连接留痕：装了新包之后服务是否真的起来了，只能靠这一行判断
         val ver = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()
         Log.i(TAG, "service-connected $ver")
-        builtinScanner = NodeScanner(BuiltinRules.defaults(), factsCache).also {
-            it.verbose = Log.isLoggable(TAG, Log.VERBOSE)
-        }
         clicker = ClickPerformer(this)
         blacklist = PACKAGE_BLACKLIST + findHomePackages()
         KeepAlive.scheduleJob(this)
@@ -509,11 +510,11 @@ class SkipAccessibilityService : AccessibilityService() {
         // 命中就不必再全树扫描。页面/冷却/次数闸在 tryPathRule 内部按规则判断
         if (tryPathRule(root, pkg, act, now)) return
 
-        // 开屏窗口内：用户规则优先，没命中再用内置关键字；
-        // 窗口外：只认用户规则，没有就一条都不扫
-        val scanner = userScanner?.takeIf { userScannerPkg == pkg }
-            ?: (if (splash) builtinScanner else null)
-            ?: return
+        // 开屏窗口内：用户规则优先，没命中再走词表（内置默认词 + 手输命中/排除词）；
+        // 窗口外：只认用户规则，两样都没有就一条都不扫
+        val userSc = userScanner?.takeIf { userScannerPkg == pkg }
+        val kwSc = if (splash) keywordScannerFor(pkg) else null
+        if (userSc == null && kwSc == null) return
 
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
@@ -526,19 +527,24 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         val t0 = SystemClock.elapsedRealtime()
-        val hit = scanner.findSkipTarget(root, w, h)
+        var hit = userSc?.findSkipTarget(root, w, h)
+        var dbg = userSc?.lastDebug
+        if (hit == null && kwSc != null) {
+            hit = kwSc.findSkipTarget(root, w, h)
+            dbg = kwSc.lastDebug
+        }
         // 扫描耗时：决定要不要给「每 App 事件次数」加预算时必须看这个数，
         // 不能凭感觉（上限是 TRAVERSE_TIMEOUT_MS=400ms）
         val cost = SystemClock.elapsedRealtime() - t0
         if (hit == null) {
-            Log.v(TAG, "scan $pkg ${cost}ms: ${scanner.lastDebug}")
+            Log.v(TAG, "scan $pkg ${cost}ms: $dbg")
             return
         }
         val detail = hit.first.text?.toString()
             ?: hit.first.contentDescription?.toString()
             ?: hit.first.viewIdResourceName
             ?: hit.second.id
-        Log.d(TAG, "match $pkg ${cost}ms: ${scanner.lastDebug}")
+        Log.d(TAG, "match $pkg ${cost}ms: $dbg")
 
         val rule = hit.second
         // 冷却 / 次数上限：拦在这里，误点的代价远大于漏跳
@@ -630,6 +636,31 @@ class SkipAccessibilityService : AccessibilityService() {
             return r
         }
         return null
+    }
+
+    /**
+     * 开屏窗口用的词表扫描器：内置默认词（可开关）+ 该 App 的命中词，带排除词。
+     *
+     * 缓存键含词表版本、内置开关、包名；用户改词或拨开关，下一次事件就重建，不用重启服务。
+     * **只在开屏窗口内调用**——这是它不会在聊天页、信息流里动手的唯一保证。
+     */
+    private fun keywordScannerFor(pkg: String): NodeScanner? {
+        val kwVer = KeywordStore.version(this)
+        val builtinOn = EnginePrefs.builtinWordsEnabled(this)
+        val key = "$kwVer|$builtinOn|$pkg"
+        if (key != kwKey) {
+            kwKey = key
+            val (hits, excludes) = KeywordStore.forApp(this, pkg)
+            val rules = ArrayList<SkipRule>()
+            if (builtinOn) rules.addAll(BuiltinRules.defaults())
+            // 只有命中词才有意义；只写了排除词时没有可命中的东西，整组不建
+            if (hits.isNotEmpty()) rules.add(SkipRule(id = "kw:$pkg", patterns = hits))
+            kwScanner = if (rules.isEmpty()) null else NodeScanner(rules, factsCache, excludes).also {
+                it.verbose = Log.isLoggable(TAG, Log.VERBOSE)
+            }
+            kwPkg = pkg
+        }
+        return kwScanner?.takeIf { kwPkg == pkg }
     }
 
     /**

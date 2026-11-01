@@ -22,6 +22,11 @@ class NodeScanner(
     rules: List<SkipRule>,
     /** 共享的节点属性缓存：同一次事件里多次扫描复用同一份读取结果 */
     private val facts: NodeFactsCache? = null,
+    /**
+     * 用户排除词：命中即整条拒绝。优先级高于命中词——用户写「跳过新手引导」
+     * 就是为了把这类命中挡掉，绝不能先看命中词再考虑排除词
+     */
+    private val excludes: List<String> = emptyList(),
 ) {
 
     private fun factsOf(node: AccessibilityNodeInfo): NodeFacts =
@@ -99,8 +104,11 @@ class NodeScanner(
                 val byViewId = vid != null && matched.node.viewIds.any { vid.contains(it) }
                 val limit = allowedLen(matched)
                 val tooLong = text != null && text.length > limit
+                val hitExclude = text != null && excludes.any { text.contains(it, ignoreCase = true) }
                 // 负向闸：教程 / 引导 / 新手 这类"跳过"不是广告按钮（"跳过教程""Skip tutorial"）
-                if (text != null && NEGATIVE_HINTS.any { text.contains(it, ignoreCase = true) }) {
+                if (hitExclude) {
+                    reject = "「${text!!.take(12)}」命中排除词"
+                } else if (text != null && NEGATIVE_HINTS.any { text.contains(it, ignoreCase = true) }) {
                     reject = "「${text.take(12)}」疑似教程/引导"
                 } else if (tooLong && text != null) {
                     // 文本长度闸对 viewId 命中同样生效：长文本控件（正文里提到关键字）
