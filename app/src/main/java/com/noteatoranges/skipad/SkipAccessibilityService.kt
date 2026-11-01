@@ -479,9 +479,23 @@ class SkipAccessibilityService : AccessibilityService() {
 
         // rootInActiveWindow 在部分 ROM 上会是 null（窗口列表却可读），抓快照走的就是
         // windows 那条路。这里补一个同源的兜底，否则整条规则链路会静默不工作
-        val root = rootInActiveWindow ?: activeWindowRoot() ?: return
+        val rootRaw = rootInActiveWindow
+        val root = rootRaw ?: activeWindowRoot()
+        if (root == null) {
+            // DEBUG-TEMP 0.17.3：定位链路卡在哪一步
+            val ws = runCatching { windows?.toList() }.getOrNull()
+            Log.i(
+                TAG,
+                "no-root raw=${rootRaw != null} eps=${event.packageName} wins=${ws?.size ?: -1}" +
+                    " roots=${ws?.count { runCatching { it.root != null }.getOrDefault(false) }}",
+            )
+            return
+        }
         val pkg = root.packageName?.toString() ?: event.packageName?.toString() ?: return
-        if (pkg in blacklist || pkg == packageName) return
+        if (pkg in blacklist || pkg == packageName) {
+            Log.i(TAG, "skip-pkg $pkg self=${pkg == packageName} black=${pkg in blacklist}")
+            return
+        }
 
         // 开屏窗口：只从「真的切到这个 App 的那一刻」起算 SPLASH_WINDOW_MS。
         // 窗口内才允许内置关键字；窗口外只认快照生成的用户规则
@@ -504,6 +518,9 @@ class SkipAccessibilityService : AccessibilityService() {
         // 结构路径规则最精确（用户从快照里点选的那个控件本身），先试一次；
         // 命中就不必再全树扫描。页面/冷却/次数闸在 tryPathRule 内部按规则判断
         if (tryPathRule(root, pkg, act, now)) return
+
+        // DEBUG-TEMP 0.17.3：走到这一步说明 root/包名都正常
+        Log.i(TAG, "chain pkg=$pkg act=$act splash=$splash")
 
         // 开屏窗口内：用户规则优先，没命中再用内置关键字；
         // 窗口外：只认用户规则，没有就一条都不扫
