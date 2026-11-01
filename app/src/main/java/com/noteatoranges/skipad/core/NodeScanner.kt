@@ -211,11 +211,11 @@ class NodeScanner(
         for (c in compiled) {
             if (text != null) {
                 if (c.regexes.any { it.containsMatchIn(text) }) return Match(c, 0, true)
-                c.keywords.firstOrNull { lower!!.contains(it) }
+                c.keywords.firstOrNull { kwHit(c, lower!!, it) }
                     ?.let { return Match(c, it.length, true) }
                 // 归一化后再试一次：「跳 过」「[跳过]」「跳·过」
                 if (norm != null && norm.isNotEmpty() && norm != lower) {
-                    c.keywords.firstOrNull { norm.contains(it) }
+                    c.keywords.firstOrNull { kwHit(c, norm, it) }
                         ?.let { return Match(c, it.length, true) }
                 }
             }
@@ -223,6 +223,28 @@ class NodeScanner(
         }
         return null
     }
+
+    /**
+     * 关键字是否命中。
+     *
+     * 用户词：包含匹配即可——他写「放弃福利」就是明确要这一段出现在控件里。
+     * 内置通用词：还要求关键字落在首尾（见 [SkipRule.strictText]）。否则「广告跳过项目」
+     * 这类会话标题、列表正文只要含「跳过」两个字就会被当成开屏按钮点掉。
+     */
+    private fun kwHit(c: Compiled, s: String, kw: String): Boolean {
+        if (!s.contains(kw)) return false
+        if (!c.rule.strictText) return true
+        val t = stripEdge(s)
+        return t.startsWith(kw) || t.endsWith(kw)
+    }
+
+    /**
+     * 去掉首尾的标点与符号，只给首尾判定用。
+     *
+     * 「跳过。」「[跳过]」「跳过广告，」这类收尾带标点的写法，不该因为一个逗号
+     * 就被判成「关键字不在结尾」。
+     */
+    private fun stripEdge(s: String): String = s.replace(EDGE_TRIM, "")
 
     /**
      * 命中节点是否落在「用户点选时那个控件」的位置附近。
@@ -282,6 +304,12 @@ class NodeScanner(
          */
         val SEPARATOR_RE =
             Regex("[\\s\\u200B-\\u200D\\uFEFF\\p{Z}·\\-_|/•\\[\\]()（）【】]+")
+
+        /**
+         * 首尾标点/符号裁剪，只给内置词的「关键字在首尾」判定用。
+         * 不动中间内容，所以不会把「广告跳过项目」误裁成以「跳过」结尾。
+         */
+        val EDGE_TRIM = Regex("^[\\p{P}\\p{S}\\s]+|[\\p{P}\\p{S}\\s]+\$")
 
         /** 负向关键词：出现即判定不是要点的按钮（宁可少点，不能误点引导页） */
         val NEGATIVE_HINTS = listOf(
