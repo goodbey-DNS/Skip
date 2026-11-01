@@ -966,30 +966,41 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 挑一个能抓的窗口：优先别的 App（活动窗口 → 其余窗口按是否活动排序），
-     * 实在只有自己在前台时退回抓自己（手动抓取自测用）。拿不到返回 null，由调用方重试。
+     * 候选窗口，按「别的 App 优先 → 面积大的优先」排序。
+     *
+     * 只挑一个活动窗口会踩坑：货拉拉首页上有个空白 tooltip 弹窗，
+     * `rootInActiveWindow` 正好指向它，抓下来不到 3 个节点就报「没抓到内容」。
+     * 主窗口面积大、节点多，就算排在后面也会被合并进来。
      */
-    private fun pickCaptureRoot(): AccessibilityNodeInfo? {
-        val others = ArrayList<AccessibilityNodeInfo>(4)
-        val selfRoots = ArrayList<AccessibilityNodeInfo>(2)
-        fun consider(node: AccessibilityNodeInfo?) {
+    private fun captureCandidates(): List<Pair<Int, AccessibilityNodeInfo>> {
+        class Cand(val id: Int, val node: AccessibilityNodeInfo, val area: Int, val self: Boolean)
+
+        val cands = ArrayList<Cand>(8)
+        val seen = HashSet<Int>()
+
+        fun add(id: Int, node: AccessibilityNodeInfo?, area: Int) {
             if (node == null) return
             val p = node.packageName?.toString()
             if (p == SYSTEM_UI_PKG) return
-            when {
-                // 包名读不到的窗口先收着：PopupWindow 的 root 常常没有 packageName，
-                // 以前这里直接抛弃，弹窗场景就永远抓不到
-                p == null -> others.add(node)
-                p == packageName -> selfRoots.add(node)
-                else -> others.add(node)
-            }
+            if (!seen.add(id)) return
+            // 包名读不到（PopupWindow 常见）也收，交给调用方用 lastFgPkg 补
+            cands.add(Cand(id, node, area, p == packageName))
         }
-        consider(runCatching { rootInActiveWindow }.getOrNull())
-        val wins: List<AccessibilityWindowInfo> =
-            runCatching { windows?.toList() }.getOrNull() ?: emptyList()
-        wins.sortedByDescending { it.isActive }
-            .forEach { consider(runCatching { it.root }.getOrNull()) }
-        return others.firstOrNull() ?: selfRoots.firstOrNull()
+
+        val wins = runCatching { windows?.toList() }.getOrNull() ?: emptyList()
+        for (win in wins) {
+            val r = runCatching { win.root }.getOrNull() ?: continue
+            val rect = Rect()
+            runCatching { win.getBoundsInScreen(rect) }
+            add(win.id, r, rect.width() * rect.height())
+        }
+        if (cands.isEmpty()) {
+            add(0, runCatching { rootInActiveWindow }.getOrNull(), 0)
+        }
+
+        return cands
+            .sortedWith(compareBy<Cand> { it.self }.thenByDescending { it.area })
+            .map { it.id to it.node }
     }
 
     /**
@@ -1029,8 +1040,8 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     private fun captureNow(attempt: Int = 0) {
-        val root = pickCaptureRoot()
-        if (root == null) {
+        val candidates = captureCandidates()
+        if (candidates.isEmpty()) {
             // 点悬浮钮会先把圆钮藏起来，这一瞬间窗口在重排，
             // rootInActiveWindow 与 window.getRoot() 都可能返回 null。
             // 以前这里直接报错，HyperOS + Android 17 上这就是「抓不到」的主因。
@@ -1042,9 +1053,9 @@ class SkipAccessibilityService : AccessibilityService() {
             Toast.makeText(this, R.string.snap_failed, Toast.LENGTH_SHORT).show()
             return
         }
-        // 包名优先取 root 自己的；取不到就用最后记录的前台包（弹窗窗口常常没有 packageName）。
+        // 包名优先取窗口自己的；取不到就用最后记录的前台包（弹窗窗口常常没有 packageName）。
         // 以前这里 `?: return` 静默退出：点了没反应、不报错、不落盘，最难查的一种
-        val pkg = root.packageName?.toString() ?: lastFgPkg
+        val pkg = candidates.first().second.packageName?.toString() ?: lastFgPkg
         if (pkg == null) {
             Toast.makeText(this, R.string.snap_no_pkg, Toast.LENGTH_SHORT).show()
             return
@@ -1055,17 +1066,15 @@ class SkipAccessibilityService : AccessibilityService() {
 
         // 同一个 App 可能有多个窗口（主窗口 + 浮层 / 对话框），全都抓：
         // 应用内弹窗的关闭钮经常就在独立浮层窗口里，只抓活动窗口会漏掉它。
-        // 只收本 App 的窗口，避免把输入法、别的 App 的悬浮窗混进来。
-        val windowRoots = ArrayList<Pair<Int, AccessibilityNodeInfo>>(3)
-        runCatching {
-            windows?.toList().orEmpty()
-                .sortedByDescending { it.isActive }
-                .forEach { win ->
-                    val r = win.root ?: return@forEach
-                    if (r.packageName?.toString() == pkg) windowRoots.add(win.id to r)
-                }
+        // 只收本 App 的窗口（包名读不到的也算），避免把输入法、别的 App 的悬浮窗混进来。
+        val windowRoots = ArrayList<Pair<Int, AccessibilityNodeInfo>>(4)
+        for ((id, r) in candidates) {
+            val p = r.packageName?.toString()
+            if (p != null && p != pkg) continue
+            windowRoots.add(id to r)
+            if (windowRoots.size > POPUP_SCAN_WINDOWS) break
         }
-        if (windowRoots.isEmpty()) windowRoots.add(0 to root)
+        if (windowRoots.isEmpty()) windowRoots.add(0 to candidates.first().second)
 
         val nodes = ArrayList<SnapshotStore.Node>(SNAPSHOT_MAX_NODES)
         var idx = 0
@@ -1104,9 +1113,14 @@ class SkipAccessibilityService : AccessibilityService() {
                 }
             }
         }
-        // 系统界面、加载中的空白页只能抓到一两个节点，存下来是垃圾，直接提示重抓
+        // 系统界面、加载中的空白页只能抓到一两个节点，存下来是垃圾。
+        // 也可能是这一帧只有个空壳弹窗——给重试机会，主窗口的树稍后才就绪
         if (nodes.size < 3) {
-            Toast.makeText(this, "这个页面没抓到内容，换个页面再试", Toast.LENGTH_SHORT).show()
+            if (attempt < CAPTURE_MAX_RETRY) {
+                mainHandler.postDelayed({ captureNow(attempt + 1) }, CAPTURE_RETRY_DELAY_MS)
+                return
+            }
+            Toast.makeText(this, R.string.snap_too_few, Toast.LENGTH_SHORT).show()
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

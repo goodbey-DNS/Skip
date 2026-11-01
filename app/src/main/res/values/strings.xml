@@ -52,6 +52,7 @@
     <string name="snap_failed">快照失败：读不到当前页面的控件，稍等一秒再点一次</string>
     <string name="snap_no_pkg">快照失败：读不出当前是哪个应用，换个界面再试</string>
     <string name="snap_shot_failed">快照失败：系统没让截屏，稍后再试</string>
+    <string name="snap_too_few">快照失败：这个页面几乎读不到控件，换个界面再试</string>
 
     <string name="section_rules">跳过规则</string>
     <string name="section_snapshots">快照（点开点选生成规则）</string>
