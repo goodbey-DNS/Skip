@@ -85,6 +85,14 @@ class SkipAccessibilityService : AccessibilityService() {
     private var lastSkipAt = 0L
     private var lastFgPkg: String? = null
 
+    /**
+     * 上一次出现在屏幕上的包名，**包含桌面与系统界面**。
+     *
+     * 判断「是不是刚切到这个 App」只能用这个值：桌面在黑名单里，若用 lastFgPkg 比，
+     * 从桌面点图标进来时它会仍然是旧 App，开屏窗口永远算不出来。
+     */
+    private var lastShownPkg: String? = null
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pending: PendingSkip? = null
 
@@ -412,7 +420,10 @@ class SkipAccessibilityService : AccessibilityService() {
             val ep = event.packageName?.toString()
             if (ep != null && ep != packageName) {
                 if (lastStateChangeAt.size > 50) lastStateChangeAt.clear()
-                val freshSwitch = lastFgPkg != ep && ep !in blacklist
+                val prevShown = lastShownPkg
+                // 「切到这个 App」：前一个出现在屏幕上的是别的包（含桌面）就算
+                val freshSwitch = prevShown != ep
+                lastShownPkg = ep
                 // 开屏窗口只从「真的切到这个 App 的那一刻」起算：开屏页跳主界面会再来一个
                 // WSC，若每次都刷新，主界面前 6 秒也会被当成开屏——那正是误点的来源
                 if (freshSwitch) lastStateChangeAt[ep] = SystemClock.elapsedRealtime()
@@ -498,7 +509,17 @@ class SkipAccessibilityService : AccessibilityService() {
         // 窗口外：只认用户规则，没有就一条都不扫
         val scanner = userScanner?.takeIf { userScannerPkg == pkg }
             ?: (if (splash) builtinScanner else null)
-            ?: return
+            ?: run {
+                // DEBUG-TEMP 0.17.2：规则没加载 / 不在开屏窗口时链路会安静地停在这里
+                Log.i(
+                    TAG,
+                    "idle pkg=$pkg act=$act splash=$splash nodeRules=" +
+                        RuleStore.nodeRulesAsScannerRules(this, pkg, act).size +
+                        " pathRules=" + RuleStore.pathRules(this, pkg, act).size +
+                        " ruleVer=" + RuleStore.version(this),
+                )
+                return
+            }
 
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
@@ -516,7 +537,7 @@ class SkipAccessibilityService : AccessibilityService() {
         // 不能凭感觉（上限是 TRAVERSE_TIMEOUT_MS=400ms）
         val cost = SystemClock.elapsedRealtime() - t0
         if (hit == null) {
-            Log.v(TAG, "scan $pkg ${cost}ms: ${scanner.lastDebug}")
+            Log.i(TAG, "scan-none pkg=$pkg ${scanner.lastDebug}")
             return
         }
         val detail = hit.first.text?.toString()
