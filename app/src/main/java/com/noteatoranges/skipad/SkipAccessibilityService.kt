@@ -458,10 +458,18 @@ class SkipAccessibilityService : AccessibilityService() {
         ) return
 
         // 非切页事件也顺手记住前台包名：目标 App 禁了无障碍时，窗口 root 全为 null，
-        // 抓取只能靠这个值判断"用户在哪个 App 里"，光靠 WSC 在服务重启后会丢
+        // 抓取只能靠这个值判断"用户在哪个 App 里"，光靠 WSC 在服务重启后会丢。
+        // 顺带补一个「切 App」兜底：部分应用（计算器这类轻量页）启动时不发 WSC，
+        // 只看 WSC 的话它的开屏窗口永远打不开
         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val ep = event.packageName?.toString()
-            if (ep != null && ep != packageName && ep != SYSTEM_UI_PKG) lastFgPkg = ep
+            if (ep != null && ep != packageName && ep != SYSTEM_UI_PKG) {
+                lastFgPkg = ep
+                if (ep != lastShownPkg && ep !in blacklist) {
+                    lastShownPkg = ep
+                    lastStateChangeAt[ep] = SystemClock.elapsedRealtime()
+                }
+            }
         }
 
         val now = SystemClock.elapsedRealtime()
@@ -488,7 +496,7 @@ class SkipAccessibilityService : AccessibilityService() {
         // rootInActiveWindow 在部分 ROM 上会是 null（窗口列表却可读），抓快照走的就是
         // windows 那条路。这里补一个同源的兜底，否则整条规则链路会静默不工作
         val rootRaw = rootInActiveWindow
-        val root = rootRaw ?: activeWindowRoot()
+        val root = rootRaw ?: activeWindowRoot(event.packageName?.toString())
         if (root == null) {
             // DEBUG-TEMP 0.17.3：定位链路卡在哪一步
             val ws = runCatching { windows?.toList() }.getOrNull()
@@ -641,14 +649,23 @@ class SkipAccessibilityService : AccessibilityService() {
      * 部分 ROM 上 rootInActiveWindow 返回 null，但 getWindows() 里的窗口 root 是可读的
      * （抓快照走的就是这条路）。没有这个兜底，整条规则链路会安静地不工作。
      */
-    private fun activeWindowRoot(): AccessibilityNodeInfo? {
+    private fun activeWindowRoot(preferredPkg: String?): AccessibilityNodeInfo? {
         val wins = runCatching { windows?.toList() ?: emptyList() }.getOrDefault(emptyList())
         if (wins.isEmpty()) return null
         val ordered = wins.sortedByDescending { it.isActive }
+        // 先按事件里的包名精确匹配，再退为「任意不是自己的窗口」：窗口 root 的
+        // packageName 在部分 ROM 上读不出来，硬要用它判包名会把唯一可用的窗口丢掉
         for (w in ordered) {
             val r = runCatching { w.root }.getOrNull() ?: continue
-            val p = runCatching { r.packageName?.toString() }.getOrNull() ?: continue
+            val p = runCatching { r.packageName?.toString() }.getOrNull()
+            if (p == null) continue
             if (p == packageName || p in blacklist) continue
+            if (preferredPkg == null || p == preferredPkg) return r
+        }
+        for (w in ordered) {
+            val r = runCatching { w.root }.getOrNull() ?: continue
+            val p = runCatching { r.packageName?.toString() }.getOrNull()
+            if (p == packageName || (p != null && p in blacklist)) continue
             return r
         }
         return null
