@@ -403,7 +403,9 @@ class SkipAccessibilityService : AccessibilityService() {
         stateActivity[pkg] = activity
         factsCache.clear()
         val prefix = "$pkg|"
-        ruleState.keys.filter { it.startsWith(prefix) }.forEach { ruleState.remove(it) }
+        // 换页面只把次数上限归零，**冷却时间必须留着**：点击后页面往往会跳到下一屏，
+        // 那里若还有同一个词（App 名、标题），清掉冷却就会紧接着点第二下
+        ruleState.keys.filter { it.startsWith(prefix) }.forEach { ruleState[it]?.count = 0 }
         userScannerKey = null
         // 同页面重复 WSC 会在上面 early return，这里清空只在真的换页面时发生
         clickedRects.clear()
