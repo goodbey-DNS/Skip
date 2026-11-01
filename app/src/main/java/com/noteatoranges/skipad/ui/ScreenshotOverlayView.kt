@@ -101,6 +101,9 @@ class ScreenshotOverlayView @JvmOverloads constructor(
         this.srcH = maxOf(srcHeight, nodeMaxB).takeIf { it > 0 } ?: bitmap?.height ?: 0
         this.nodes = nodes
         selected = null
+        // 换一份快照时清掉上一次的长按十字标记，否则新图上会留一个旧落点
+        pickX = -1f
+        pickY = -1f
         requestLayout()
         invalidate()
     }

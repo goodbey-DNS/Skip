@@ -4,20 +4,20 @@ plugins {
 
 android {
     namespace 'com.noteatoranges.skipad'
-    // 36：AGP 9.x 的推荐编译目标；工程实际用到的最高 API 是 31，targetSdk 仍留 34
+    // 36?AGP 9.x ????????????????? API ? 31?targetSdk ?? 34
     compileSdk 36
 
     defaultConfig {
         applicationId "com.noteatoranges.skipad"
         minSdk 26
         targetSdk 34
-        versionCode 58
-        versionName "0.16.11"
+        versionCode 59
+        versionName "0.16.12"
     }
 
-    // 固定签名：CI 从 GitHub Secrets 还原 keystore 后设这两个环境变量，
-    // 保证每次构建出来的包签名一致，可以直接覆盖安装，不用卸载。
-    // 本地没有这两个变量时这个 signingConfig 是空的，走系统默认 debug 签名。
+    // ?????CI ? GitHub Secrets ?? keystore ??????????
+    // ?????????????????????????????
+    // ???????????? signingConfig ????????? debug ???
     def ciStoreB64 = System.getenv("KEYSTORE_B64")
     def ciStorePwd = System.getenv("KEYSTORE_PASSWORD")
 
@@ -37,12 +37,12 @@ android {
             if (ciStoreB64 && ciStorePwd) signingConfig signingConfigs.ci
         }
         release {
-            // 不混淆：本工程全是自写代码，没有反射/序列化依赖，混淆只会让崩溃栈不可读
+            // ??????????????????/?????????????????
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // 出包一律走 release：debug 包的 android:debuggable=true，任何人都能
-            // run-as 读私有数据、attach 调试器改内存。CI 用 release 出包，签名与 debug 同一个
-            // keystore，覆盖安装不受影响。
+            // ????? release?debug ?? android:debuggable=true??????
+            // run-as ??????attach ???????CI ? release ?????? debug ???
+            // keystore??????????
             if (ciStoreB64 && ciStorePwd) signingConfig signingConfigs.ci
         }
     }
@@ -52,7 +52,7 @@ android {
     }
 }
 
-// Kotlin 2.x 用 compilerOptions（旧的 kotlinOptions 已废弃）
+// Kotlin 2.x ? compilerOptions??? kotlinOptions ????
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
@@ -60,7 +60,7 @@ kotlin {
 }
 
 dependencies {
-    // M1 刻意保持最小依赖：不引入 material/compose，减小体积与攻击面
+    // M1 ???????????? material/compose?????????
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
 }

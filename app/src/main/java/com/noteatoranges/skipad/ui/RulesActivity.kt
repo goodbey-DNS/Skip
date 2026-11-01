@@ -74,7 +74,13 @@ class RulesActivity : AppCompatActivity() {
     }
 
     private fun bubbleClicked() {
-        (SkipAccessibilityService.instance)?.bubbleClicked()
+        val svc = SkipAccessibilityService.instance
+        if (svc == null) {
+            // 服务没连上时点圆钮什么都不会发生，用户会以为坏了
+            Toast.makeText(this, "无障碍服务未连接，抓不到快照", Toast.LENGTH_SHORT).show()
+            return
+        }
+        svc.bubbleClicked()
     }
 
     override fun onResume() {

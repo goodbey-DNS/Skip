@@ -1,12 +1,10 @@
 package com.noteatoranges.skipad.ui
 
-import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.os.Process
 import android.provider.Settings
 import android.view.View
 import android.view.ViewGroup
@@ -24,7 +22,6 @@ import com.noteatoranges.skipad.keepalive.KeepAlive
 import com.noteatoranges.skipad.util.AppLabels
 import com.noteatoranges.skipad.util.GlassBarView
 import com.noteatoranges.skipad.util.Ui
-import java.util.Locale
 
 /**
  * 单 Activity 双 Tab（悬浮底栏）：首页（状态/自检/排行榜）、设置（规则/保活/维护/版本）。
@@ -204,17 +201,11 @@ class MainActivity : AppCompatActivity() {
             val total = db.total()
             val distinct = db.distinctApps()
             val counts = db.countsByPackage()
-            val am = appContext.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            val pssKb = am.getProcessMemoryInfo(intArrayOf(Process.myPid()))
-                .firstOrNull()?.totalPss ?: 0
-            val dbKb = StatsDb.sizeKb(appContext)
-            runOnUiThread {
-                renderStats(total, distinct, counts, pssKb, dbKb)
-            }
+            runOnUiThread { renderStats(total, distinct, counts) }
         }.start()
     }
 
-    private fun renderStats(total: Int, distinct: Int, counts: List<StatsDb.PkgCount>, pssKb: Int, dbKb: Long) {
+    private fun renderStats(total: Int, distinct: Int, counts: List<StatsDb.PkgCount>) {
         statsSummary.text = getString(R.string.stats_summary_format, total, distinct)
 
         rankContainer.removeAllViews()
