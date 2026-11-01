@@ -47,6 +47,14 @@ object Backup {
             File(context.filesDir, "keywords.json").takeIf { it.exists() }?.let {
                 put("keywords.json", it.readBytes())
             }
+            // 引擎开关：换机恢复后行为不该惄惄变回去
+            put(
+                "engine.json",
+                JSONObject().apply {
+                    put("builtinWords", EnginePrefs.builtinWordsEnabled(context))
+                    put("bubble", CaptureBubble.isEnabled(context))
+                }.toString().toByteArray(Charsets.UTF_8),
+            )
             // 快照只带 meta + 节点树，不带截图
             File(context.filesDir, "snapshots").listFiles()
                 ?.filter { it.isDirectory }
@@ -84,6 +92,8 @@ object Backup {
         val rulesInvalid: Boolean = false,
         val keywordsInvalid: Boolean = false,
         val fromVersion: String = "",
+        /** 恢复的引擎开关项数（内置词开关 / 悬浮窗） */
+        val settings: Int = 0,
     )
 
     /** backup 目录里最新的一份 zip（按修改时间） */
@@ -104,6 +114,7 @@ object Backup {
     fun restore(context: Context, input: InputStream): Restored? = try {
         val rules = ArrayList<ByteArray>()
         val keywords = ArrayList<ByteArray>()
+        var engine: ByteArray? = null
         val snaps = HashMap<String, ByteArray>() // "dir/file" -> bytes
         var hasManifest = false
         var manifestApp = ""
@@ -128,6 +139,7 @@ object Backup {
                         }
                         name == "rules.json" -> rules.add(bytes)
                         name == "keywords.json" -> keywords.add(bytes)
+                        name == "engine.json" -> engine = bytes
                         name.startsWith("snapshots/") && (name.endsWith("/meta.json") || name.endsWith("/tree.json")) ->
                             snaps[name] = bytes
                     }
@@ -164,8 +176,7 @@ object Backup {
                 .onFailure { kwInvalid = true }
         }
 
-        val snapRoot = File(context.filesDir, "snapshots").apply { mkdirs() }
-        var snapCount = 0
+        val snapRoot = File(context.filesDir, "snapshots").apply { mkdirs() }        var snapCount = 0
         val dirs = snaps.keys.map { it.substringBeforeLast('/') }.distinct()
         for (dir in dirs) {
             val name = dir.substringAfter("snapshots/")
@@ -183,7 +194,21 @@ object Backup {
             }
             if (wrote) snapCount++
         }
-        Restored(rulesCount, kwCount, snapCount, rulesSkipped, kwSkipped, rulesInvalid, kwInvalid, manifestVersion)
+        var settings = 0
+        engine?.let { bytes ->
+            runCatching {
+                val j = JSONObject(String(bytes, Charsets.UTF_8))
+                if (j.has("builtinWords")) {
+                    EnginePrefs.setBuiltinWordsEnabled(context, j.optBoolean("builtinWords", true))
+                    settings++
+                }
+                if (j.has("bubble")) {
+                    CaptureBubble.setEnabled(context, j.optBoolean("bubble", false))
+                    settings++
+                }
+            }
+        }
+        Restored(rulesCount, kwCount, snapCount, rulesSkipped, kwSkipped, rulesInvalid, kwInvalid, manifestVersion, settings)
     } catch (e: Exception) {
         null
     }

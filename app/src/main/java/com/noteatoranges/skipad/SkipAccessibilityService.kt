@@ -909,7 +909,7 @@ class SkipAccessibilityService : AccessibilityService() {
             .setContentTitle(getString(R.string.snap_notif_title))
             .setContentText(getString(R.string.snap_notif_text))
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             // 整条通知都能点：以前只有右侧那个 action 能点，很多人压根看不到它
             .setContentIntent(pi)
             .addAction(R.drawable.ic_stat_keepalive, getString(R.string.snap_action), pi)
@@ -917,12 +917,20 @@ class SkipAccessibilityService : AccessibilityService() {
         try {
             val nm = androidx.core.app.NotificationManagerCompat.from(this)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                (getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager)
-                    .createNotificationChannel(
-                        android.app.NotificationChannel(
-                            SNAP_CHANNEL, getString(R.string.snap_channel), android.app.NotificationManager.IMPORTANCE_LOW
-                        )
-                    )
+                val nmSys = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                nmSys.createNotificationChannel(
+                    android.app.NotificationChannel(
+                        SNAP_CHANNEL, getString(R.string.snap_channel),
+                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
+                    ).apply {
+                        setShowBadge(false)
+                        setSound(null, null)
+                    }
+                )
+                // 旧渠道建成了 IMPORTANCE_LOW：折叠时连 action 按钮都不显示，
+                // 抓快照这条唯一不装悬浮窗的入口等于被藏起来。渠道重要性创建后改不了，
+                // 只能换新 id，旧渠道直接删掉
+                runCatching { nmSys.deleteNotificationChannel("snapshot") }
             }
             nm.notify(SNAP_NOTIF_ID, n)
         } catch (e: SecurityException) {
@@ -1397,7 +1405,7 @@ class SkipAccessibilityService : AccessibilityService() {
          * 再长就会覆盖到开屏页跳过去之后的主界面，那正是误点开始的地方。
          */
         const val SPLASH_WINDOW_MS = 4000L
-        const val SNAP_CHANNEL = "snapshot"
+        const val SNAP_CHANNEL = "snapshot_v2"
         const val SNAP_NOTIF_ID = 2001
         const val ACTION_TAKE_SNAPSHOT = "com.noteatoranges.skipad.TAKE_SNAPSHOT"
 

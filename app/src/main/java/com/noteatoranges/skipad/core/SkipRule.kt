@@ -1,5 +1,7 @@
 package com.noteatoranges.skipad.core
 
+import android.graphics.RectF
+
 /**
  * 跳过规则模型：一条规则 = 一组匹配条件 + 一个动作。
  *
@@ -27,6 +29,13 @@ data class SkipRule(
      * 而开屏页的按钮又常摆在中央，再卡位置闸就把用户写的话吹了。
      */
     val allowCenter: Boolean = false,
+    /**
+     * 用户点选时那个控件在屏幕上的位置（四边比例 0..1）。
+     *
+     * 有它就只认「这块位置附近」的命中，取代「屏幕正中一律算正文」的粗闸：
+     * 中央的按钮能点，而页面上别处出现的同一串字点不动——用位置代替几何猜测。
+     */
+    val zone: RectF? = null,
     val enabled: Boolean = true,
     /** 命中后的动作：click（默认）/ back（返回键）/ none（只记录不动手） */
     val action: String = ACTION_CLICK,
@@ -52,20 +61,37 @@ data class SkipRule(
 object BuiltinRules {
 
     fun defaults(): List<SkipRule> = listOf(
-        // viewId 带 skip 的基本就是广告 SDK 的跳过按钮本体（穿山甲 tt_splash_skip_btn 等）
-        SkipRule(id = "ad-skip-viewid", viewIds = listOf("skip")),
+        // viewId 带 skip 的基本就是广告 SDK 的跳过按钮本体（穿山甲 tt_splash_skip_btn 等）；
+        // 冷却/次数上限：没有闸时一个窗口内会把页面上所有像跳过的控件都点一遍，
+        // 第二下落在已经跳走的页面上就是一次没有意义的点击
+        SkipRule(
+            id = "ad-skip-viewid",
+            viewIds = listOf("skip"),
+            cooldownMs = BUILTIN_COOLDOWN_MS,
+            maxCount = BUILTIN_MAX_COUNT,
+        ),
         SkipRule(
             id = "splash-common-text",
             // zh-CN/zh-TW/ja/ko/en 常见"跳过"文案；contains 匹配天然覆盖"跳过 3""Skip 5s"
-            patterns = listOf("跳过", "跳過", "スキップ", "건너뛰기", "skip"),
+            patterns = listOf("跳过", "跳過", "スキップ", "건너떄기", "skip"),
+            cooldownMs = BUILTIN_COOLDOWN_MS,
+            maxCount = BUILTIN_MAX_COUNT,
         ),
         SkipRule(
             id = "splash-countdown-regex",
             regex = true,
             patterns = listOf(
                 "(?i)skip[\\s\\d]*(s|sec|秒)?",
-                "\\d+\\s*(s|S|秒)\\s*(之|後|后)?\\s*跳过",
+                "\\d+\\s*(s|S|秒)\\s*(之|后|後)?\\s*跳过",
             ),
+            cooldownMs = BUILTIN_COOLDOWN_MS,
+            maxCount = BUILTIN_MAX_COUNT,
         ),
     )
+
+    /** 内置词两次动作的最小间隔：同一窗口内不再连点 */
+    private const val BUILTIN_COOLDOWN_MS = 1200L
+
+    /** 内置词单页面动作次数上限：一个开屏窗冪最多点两下，多出来的定位不准 */
+    private const val BUILTIN_MAX_COUNT = 2
 }

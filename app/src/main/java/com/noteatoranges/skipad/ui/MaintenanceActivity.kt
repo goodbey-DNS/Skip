@@ -109,6 +109,7 @@ class MaintenanceActivity : AppCompatActivity() {
             val sb = StringBuilder()
             sb.append("已恢复：规则 ").append(res.rules).append(" 条、关键字 ").append(res.keywords)
                 .append(" 条、快照 ").append(res.snapshots).append(" 份")
+            if (res.settings > 0) sb.append("、设置 ").append(res.settings).append(" 项")
 
             // 跳过与失败必须让用户看见：静默丢掉等于骗他说「全恢复了」
             if (res.rulesSkipped > 0) {

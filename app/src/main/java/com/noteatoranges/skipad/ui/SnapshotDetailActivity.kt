@@ -340,7 +340,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
                     Toast.makeText(this, "文字不能为空", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
-                confirm("node", textContains = t)
+                confirm("node", textContains = t, zone = zoneOf(n))
             }
             .setNegativeButton("取消", null)
             .show()
@@ -372,13 +372,14 @@ class SnapshotDetailActivity : AppCompatActivity() {
         nodeHDp: Int? = null,
         dpX: Float? = null,
         dpY: Float? = null,
+        zone: android.graphics.RectF? = null,
     ) {
         AlertDialog.Builder(this)
             .setTitle("确认生成")
             .setMessage(
                 preview(
                     viewId, textContains, xRatio, yRatio, anchorVid, anchorText, dxDp, dyDp,
-                    nodePath, dpX, dpY,
+                    nodePath, dpX, dpY, zone,
                 ) +
                     "\n\n" + scopeNote() +
                     "动作默认点击，可在规则页改成返回键。"
@@ -403,6 +404,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
                         nodeHDp = nodeHDp,
                         dpX = dpX,
                         dpY = dpY,
+                        zone = zone,
                     ),
                 )
                 Toast.makeText(this, R.string.rule_saved, Toast.LENGTH_SHORT).show()
@@ -423,6 +425,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
         nodePath: String? = null,
         dpX: Float? = null,
         dpY: Float? = null,
+        zone: android.graphics.RectF? = null,
     ): String {
         val sb = StringBuilder()
         when {
@@ -509,20 +512,13 @@ class SnapshotDetailActivity : AppCompatActivity() {
                         sb.append("\n#${it.idx} ${it.cls.substringAfterLast('.')} ")
                         sb.append("「${it.text.ifEmpty { it.desc }.take(16)}」")
                     }
-                    // 文字规则运行时仍受位置闸约束（页面正中那片多半是正文，不点）。
-                    // 用户选的按钮若正好在中央，规则就会一条都不触发而他又不知道为什么，
-                    // 所以保存前当面说清楚，并给出能用的替代方式
-                    val (sw, sh) = meta.screenW to meta.screenH
-                    val cw = if (sw > 0) sw else realScreenPx().first
-                    val ch = if (sh > 0) sh else realScreenPx().second
-                    val centerHit = hits.firstOrNull {
-                        val cx = it.l + it.w / 2f
-                        val cy = it.t + it.h / 2f
-                        cx > cw * 0.3f && cx < cw * 0.7f && cy > ch * 0.2f && cy < ch * 0.8f
-                    }
-                    if (centerHit != null) {
-                        sb.append("\n\n⚠ 这个按钮在页面正中，运行时会被当成正文跳过、不会点。\n")
-                        sb.append("它确实是要点的按钮，请改用「按编号」或「按层级找」。")
+                    // 位置约束：文字匹配是宽泛匹配，所以只认用户点选时那块地方。
+                    // 不再用「屏幕正中算正文」的粗闸——那个会让中央的真按钮永远点不到
+                    if (zone != null) {
+                        sb.append("\n\n只在原位置附近才点：宽 ")
+                        sb.append("${(zone.left * 100).toInt()}%–${(zone.right * 100).toInt()}%")
+                        sb.append("、高 ${(zone.top * 100).toInt()}%–${(zone.bottom * 100).toInt()}%")
+                        sb.append(" 那一块（含一点容差）")
                     }
                 }
             }
@@ -567,6 +563,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
         nodeHDp: Int? = null,
         dpX: Float? = null,
         dpY: Float? = null,
+        zone: android.graphics.RectF? = null,
     ) = SkipAppRule(
         id = UUID.randomUUID().toString(),
         app = meta.pkg,
@@ -591,6 +588,10 @@ class SnapshotDetailActivity : AppCompatActivity() {
         nodeHDp = nodeHDp,
         dpX = dpX,
         dpY = dpY,
+        zoneL = zone?.left,
+        zoneT = zone?.top,
+        zoneR = zone?.right,
+        zoneB = zone?.bottom,
     )
 
     /**
@@ -607,6 +608,19 @@ class SnapshotDetailActivity : AppCompatActivity() {
         } else {
             "只在这一页生效（${act.substringAfterLast('.')}），换到别的页面就不动手。\n\n"
         }
+    }
+
+    /**
+     * 节点矩形 → 屏幕比例。
+     *
+     * 用抓取时的屏幕尺寸做分母（meta 记了就用 meta），回放时再按当前屏幕还原，
+     * 这样跨分辨率也不会偏；meta 缺失才退回当前屏幕尺寸。
+     */
+    private fun zoneOf(n: SnapshotStore.Node): android.graphics.RectF {
+        val (rw, rh) = realScreenPx()
+        val w = if (meta.screenW > 0) meta.screenW.toFloat() else rw.toFloat()
+        val h = if (meta.screenH > 0) meta.screenH.toFloat() else rh.toFloat()
+        return android.graphics.RectF(n.l / w, n.t / h, n.r / w, n.b / h)
     }
 
     /**

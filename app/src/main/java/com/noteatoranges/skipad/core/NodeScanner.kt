@@ -1,6 +1,7 @@
 package com.noteatoranges.skipad.core
 
 import android.graphics.Rect
+import android.graphics.RectF
 import android.view.accessibility.AccessibilityNodeInfo
 import java.util.Locale
 
@@ -146,7 +147,15 @@ class NodeScanner(
                         val cy = rect.exactCenterY()
                         val inCenter = cx > screenW * 0.3f && cx < screenW * 0.7f &&
                             cy > screenH * 0.2f && cy < screenH * 0.8f
-                        if (!byViewId && !matched.node.rule.allowCenter && inCenter) {
+                        // 位置校验：规则记了用户点选时的位置，就只认那块地方；
+                        // 没记（旧规则）才退回「屏幕正中算正文」的粗闸。
+                        // 比的是命中节点本身（带文字那个）的矩形，不是可点击祖先——
+                        // 旧布局里跳过按钮常是一个全宽横栏里的两个字，用祖先矩形比就会被判在外面
+                        val zone = matched.node.rule.zone
+                        val zoneOk = zone == null || zoneHit(zone, f.rect, screenW, screenH)
+                        if (!zoneOk) {
+                            reject = "「${text?.take(12)}」不在记录的位置"
+                        } else if (zone == null && !byViewId && !matched.node.rule.allowCenter && inCenter) {
                             reject = "「${text?.take(12)}」在中央区域(cx=${cx.toInt()},cy=${cy.toInt()})"
                         } else if (area in 1f..screenArea * matched.node.rule.maxAreaRatio) {
                             lastDebug = "HIT「${(text ?: vid)?.take(20)}」面积${pct}% 规则=${matched.node.rule.id}" +
@@ -215,6 +224,27 @@ class NodeScanner(
         return null
     }
 
+    /**
+     * 命中节点是否落在「用户点选时那个控件」的位置附近。
+     *
+     * 容差横 8%、纵 12%：纵向偏大是因为规则存的是抓取时的全屏比例，回放时比的是
+     * 不含导航栏的可用高度，两者相差约 9%，容差不留余量会把整条规则判死。
+     * 判据用「相交面积 ≥ 较小者的 25%」而不是「中心点落在范围内」：全宽横栏里的
+     * 两个字中心靠近右侧，用中心点判会误杀，用相交判只看它们是否在同一块地方。
+     */
+    private fun zoneHit(zone: RectF, hit: Rect, screenW: Int, screenH: Int): Boolean {
+        val l = (zone.left - ZONE_TOL_X) * screenW
+        val t = (zone.top - ZONE_TOL_Y) * screenH
+        val r = (zone.right + ZONE_TOL_X) * screenW
+        val b = (zone.bottom + ZONE_TOL_Y) * screenH
+        val inter = RectF()
+        if (!inter.setIntersect(RectF(l, t, r, b), RectF(hit))) return false
+        val hitArea = hit.width().toFloat() * hit.height()
+        val zoneArea = (r - l) * (b - t)
+        val small = minOf(hitArea, zoneArea)
+        return small <= 0f || inter.width() * inter.height() >= small * ZONE_MIN_OVERLAP
+    }
+
     private fun clickableAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         var cur: AccessibilityNodeInfo? = node
         var hops = 0
@@ -238,6 +268,13 @@ class NodeScanner(
          * 这类带倒计时或引导语的写法，6 字会误杀；而 24（原绝对上限）对两字词又等于没闸。
          */
         const val TEXT_SLACK = 8
+
+        /** 位置校验的容差（屏幕比例）：横向 8%、纵向 12% */
+        const val ZONE_TOL_X = 0.08f
+        const val ZONE_TOL_Y = 0.12f
+
+        /** 命中节点与记录位置的最小相交比例（相对较小的一方） */
+        const val ZONE_MIN_OVERLAP = 0.25f
 
         /**
          * 分隔符正则：空白、零宽字符、全角空格、中点、常见括号与竖线。

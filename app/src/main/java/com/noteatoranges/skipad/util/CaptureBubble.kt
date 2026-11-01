@@ -12,6 +12,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
@@ -24,8 +25,15 @@ object CaptureBubble {
     private const val PREF = "capture_bubble"
     private const val SIZE_DP = 48
 
-    /** 按住超过这个时长算长按：执行坐标规则，而不是抓快照 */
+    /** 按住超过这个时长算长按：弹出「抓快照 / 点坐标」两项菜单 */
     private const val LONG_PRESS_MS = 600L
+
+    /** 菜单宽度与每行高度（dp） */
+    private const val PANEL_W_DP = 96
+    private const val ROW_H_DP = 40
+
+    /** 菜单自动收起时长：选就选，不选别一直挡着 */
+    private const val PANEL_TIMEOUT_MS = 5000L
 
     @Volatile
     private var view: View? = null
@@ -62,9 +70,19 @@ object CaptureBubble {
         val wm = appContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         this.wm = wm
 
-        val density = appContext.resources.displayMetrics.density
+        val dm = appContext.resources.displayMetrics
+        val density = dm.density
         val size = (SIZE_DP * density + 0.5f).toInt()
         val pad = (6 * density + 0.5f).toInt()
+        val panelW = (PANEL_W_DP * density + 0.5f).toInt()
+        val rowH = (ROW_H_DP * density + 0.5f).toInt()
+        val rowGap = (6 * density).toInt()
+
+        fun roundBg(fill: Int): GradientDrawable = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = 14f * density
+            setColor(fill)
+        }
 
         val label = TextView(appContext).apply {
             text = "抓"
@@ -78,20 +96,97 @@ object CaptureBubble {
                 setStroke((1.5f * density).toInt(), 0xFFFFFFFF.toInt())
             }
         }
-        val container = FrameLayout(appContext).apply {
-            addView(label, FrameLayout.LayoutParams(size, size))
+
+        fun menuRow(text: String): TextView = TextView(appContext).apply {
+            this.text = text
+            gravity = Gravity.CENTER
+            setTextColor(0xFFFFFFFF.toInt())
+            textSize = 15f
+            background = roundBg(0xE616A34A.toInt())
         }
 
+        val rowShot = menuRow("抓快照")
+        val rowPoint = menuRow("点坐标")
+        val panel = LinearLayout(appContext).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            addView(rowShot, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, rowH))
+            addView(
+                rowPoint,
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, rowH).apply {
+                    topMargin = rowGap
+                },
+            )
+        }
+        // 没接长按回调时（理论上不会）不摆出「点坐标」，免得点了没反应
+        if (onLongClick == null) rowPoint.visibility = View.GONE
+
+        val container = FrameLayout(appContext).apply {
+            addView(label, FrameLayout.LayoutParams(size, size))
+            addView(panel, FrameLayout.LayoutParams(panelW, FrameLayout.LayoutParams.WRAP_CONTENT))
+        }
+
+        val baseW = size + pad * 2
+        val baseH = size + pad * 2
+        val openH = rowH * 2 + rowGap
+
         val lp = WindowManager.LayoutParams(
-            size + pad * 2, size + pad * 2,
+            baseW, baseH,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                 or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = appContext.resources.displayMetrics.widthPixels - size - pad * 2
+            x = dm.widthPixels - size - pad * 2
             y = (300 * density).toInt()
+        }
+
+        fun clamp() {
+            val maxX = (dm.widthPixels - lp.width).coerceAtLeast(0)
+            val maxY = (dm.heightPixels - lp.height.coerceAtLeast(0)).coerceAtLeast(0)
+            lp.x = lp.x.coerceIn(0, maxX)
+            lp.y = lp.y.coerceIn(0, maxY)
+        }
+
+        var panelOpen = false
+        val collapse = Runnable {
+            if (panelOpen) {
+                panelOpen = false
+                panel.visibility = View.GONE
+                label.visibility = View.VISIBLE
+                lp.width = baseW
+                lp.height = baseH
+                clamp()
+                runCatching { wm.updateViewLayout(container, lp) }
+            }
+        }
+
+        fun closePanel() {
+            container.removeCallbacks(collapse)
+            collapse.run()
+        }
+
+        fun openPanel() {
+            if (panelOpen) return
+            panelOpen = true
+            label.visibility = View.GONE
+            panel.visibility = View.VISIBLE
+            lp.width = panelW
+            lp.height = openH
+            clamp()
+            runCatching { wm.updateViewLayout(container, lp) }
+            container.removeCallbacks(collapse)
+            container.postDelayed(collapse, PANEL_TIMEOUT_MS)
+        }
+
+        rowShot.setOnClickListener {
+            closePanel()
+            onClick?.invoke()
+        }
+        rowPoint.setOnClickListener {
+            closePanel()
+            onLongClick?.invoke()
         }
 
         var downX = 0f
@@ -106,28 +201,27 @@ object CaptureBubble {
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = e.rawX - downX
-                    val dy = e.rawY - downY
-                    if (moved || dx * dx + dy * dy > 100) {
-                        moved = true
-                        // 上下左右都夹住：原来只有 coerceAtLeast(0)，往右/下拖出屏幕就再也找不回来
-                        val maxX = (appContext.resources.displayMetrics.widthPixels - lp.width).coerceAtLeast(0)
-                        val maxY = (appContext.resources.displayMetrics.heightPixels - lp.height).coerceAtLeast(0)
-                        lp.x = (lp.x + dx).toInt().coerceIn(0, maxX)
-                        lp.y = (lp.y + dy).toInt().coerceIn(0, maxY)
-                        downX = e.rawX; downY = e.rawY
-                        wm.updateViewLayout(container, lp)
+                    // 面板展开时不跟着拖，否则手指一滑就把两个选项带跑
+                    if (!panelOpen) {
+                        val dx = e.rawX - downX
+                        val dy = e.rawY - downY
+                        if (moved || dx * dx + dy * dy > 100) {
+                            moved = true
+                            lp.x = (lp.x + dx).toInt()
+                            lp.y = (lp.y + dy).toInt()
+                            downX = e.rawX; downY = e.rawY
+                            clamp()
+                            wm.updateViewLayout(container, lp)
+                        }
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!moved) {
+                    // 长按不再直接执行坐标点击：先弹两项菜单，选错也还有救。
+                    // 以前慢一点的点按就会在别人界面上按坐标点一下，不可撤销
+                    if (!panelOpen && !moved) {
                         val held = System.currentTimeMillis() - downAt
-                        if (held >= LONG_PRESS_MS && onLongClick != null) {
-                            onLongClick?.invoke()
-                        } else {
-                            onClick?.invoke()
-                        }
+                        if (held >= LONG_PRESS_MS) openPanel() else onClick?.invoke()
                     }
                     true
                 }

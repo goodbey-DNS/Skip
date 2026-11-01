@@ -1,6 +1,7 @@
 package com.noteatoranges.skipad.db
 
 import android.content.Context
+import android.graphics.RectF
 import com.noteatoranges.skipad.core.SkipRule
 import org.json.JSONArray
 import org.json.JSONObject
@@ -54,10 +55,26 @@ data class SkipAppRule(
     /** 屏幕中心偏移（dp）：自由取点的存储方式，换分辨率不偏 */
     val dpX: Float? = null,
     val dpY: Float? = null,
+    /**
+     * 用户点选时那个控件在屏幕上的位置（四边比例 0..1）。
+     *
+     * 文字匹配的规则只在这个位置附近才动手：同一个词在页面别处出现时点不动，
+     * 而在屏幕中央的真按钮却能点（它取代了「正中一律算正文」的粗闸）。
+     */
+    val zoneL: Float? = null,
+    val zoneT: Float? = null,
+    val zoneR: Float? = null,
+    val zoneB: Float? = null,
 ) {
     val hasAnchor: Boolean get() = !anchorVid.isNullOrBlank() || !anchorText.isNullOrBlank()
     val hasPath: Boolean get() = !nodePath.isNullOrBlank()
     val hasDpPoint: Boolean get() = dpX != null && dpY != null
+
+    /** 位置区间（四边齐了才算） */
+    val zone: RectF?
+        get() = if (zoneL != null && zoneT != null && zoneR != null && zoneB != null) {
+            RectF(zoneL, zoneT, zoneR, zoneB)
+        } else null
 
     /** 动作的中文名，UI 与日志共用 */
     val actionLabel: String
@@ -113,6 +130,10 @@ object RuleStore {
             nodeHDp = if (j.has("nodeHDp")) j.optInt("nodeHDp") else null,
             dpX = if (j.has("dpX")) j.optDouble("dpX").toFloat() else null,
             dpY = if (j.has("dpY")) j.optDouble("dpY").toFloat() else null,
+            zoneL = if (j.has("zoneL")) j.optDouble("zoneL").toFloat() else null,
+            zoneT = if (j.has("zoneT")) j.optDouble("zoneT").toFloat() else null,
+            zoneR = if (j.has("zoneR")) j.optDouble("zoneR").toFloat() else null,
+            zoneB = if (j.has("zoneB")) j.optDouble("zoneB").toFloat() else null,
         )
     }
 
@@ -190,6 +211,10 @@ object RuleStore {
                 r.nodeHDp?.let { put("nodeHDp", it) }
                 r.dpX?.let { put("dpX", it.toDouble()) }
                 r.dpY?.let { put("dpY", it.toDouble()) }
+                r.zoneL?.let { put("zoneL", it.toDouble()) }
+                r.zoneT?.let { put("zoneT", it.toDouble()) }
+                r.zoneR?.let { put("zoneR", it.toDouble()) }
+                r.zoneB?.let { put("zoneB", it.toDouble()) }
             })
         }
         // 原子写：先落临时文件再改名。直接 writeText 若中途被杀，会留下半截 JSON，
@@ -228,6 +253,8 @@ object RuleStore {
             a.anchorVid == b.anchorVid && a.anchorText == b.anchorText &&
             a.dxDp == b.dxDp && a.dyDp == b.dyDp &&
             a.dpX == b.dpX && a.dpY == b.dpY &&
+            a.zoneL == b.zoneL && a.zoneT == b.zoneT &&
+            a.zoneR == b.zoneR && a.zoneB == b.zoneB &&
             a.xRatio == b.xRatio && a.yRatio == b.yRatio
 
     fun remove(context: Context, id: String) {
@@ -318,6 +345,9 @@ object RuleStore {
                     action = r.action,
                     cooldownMs = r.cooldownMs,
                     maxCount = r.maxCount,
+                    // 只给文字规则加位置约束：viewId / 结构路径已经精确指向控件本身，
+                    // 再加位置反而会在布局微调后把规则判死
+                    zone = if (r.textContains != null) r.zone else null,
                 )
             }
 
