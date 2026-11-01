@@ -654,9 +654,13 @@ class SkipAccessibilityService : AccessibilityService() {
             val rules = ArrayList<SkipRule>()
             if (builtinOn) rules.addAll(BuiltinRules.defaults())
             // 只有命中词才有意义；只写了排除词时没有可命中的东西，整组不建。
-            // allowCenter：用户手输的词免位置闸——他要点的就是这个，开屏按钮也常在中央
+            // allowCenter：用户手输的词免位置闸——他要点的就是这个，开屏按钮也常在中央。
+            // cooldownMs：点掉开屏后往往会进到下一个页面，那里若也有同一个词（如 App 名），
+            // 不设冷却就会连着点第二下，所以给 3 秒
             if (hits.isNotEmpty()) {
-                rules.add(SkipRule(id = "kw:$pkg", patterns = hits, allowCenter = true))
+                rules.add(
+                    SkipRule(id = "kw:$pkg", patterns = hits, allowCenter = true, cooldownMs = 3000L),
+                )
             }
             kwScanner = if (rules.isEmpty()) null else NodeScanner(rules, factsCache, excludes).also {
                 it.verbose = Log.isLoggable(TAG, Log.VERBOSE)
