@@ -104,7 +104,7 @@
     <string name="battery_status_on">电池优化：已忽略 ✓（后台不易被杀）</string>
     <string name="battery_status_off">电池优化：未忽略——建议申请，可显著降低服务被系统回收的概率</string>
     <string name="action_battery">去申请忽略电池优化</string>
-    <string name="autostart_hint">自启动（荣耀）：系统不提供开关直达，下面按钮进手机管家的「应用启动管理」，找到 SkipAd 允许 自启动 / 关联启动 / 后台活动；找不到就先开一次 SkipAd 再看。</string>
+    <string name="autostart_hint">自启动：点下面的按钮进本机的自启动 / 后台管理页，找到 SkipAd 允许「自启动 / 关联启动 / 后台活动」。各家系统的入口名不同（小米叫自启动，OPPO 叫自动启动，vivo 叫后台启动），找不到就先打开一次 SkipAd 再看。</string>
     <string name="action_autostart">去自启动管理</string>
     <string name="action_app_info">打开应用信息</string>
     <string name="notif_status_on">通知权限：已授权（掉线提醒可送达）</string>

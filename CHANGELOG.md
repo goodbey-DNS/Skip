@@ -2,6 +2,16 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.16.8 - 2026-11-01 · 自启动说明去掉写死的「荣耀」
+
+**改了什么**
+- `autostart_hint` 原文写死「自启动（荣耀）：系统不提供开关直达，下面按钮进手机管家……」，在小米/OPPO/vivo 上都是误导。改成通用描述并点名各家叫法：小米叫自启动、OPPO 叫自动启动、vivo 叫后台启动。
+- 版本 0.16.8 / versionCode 55。
+
+**实测补充（0.16.7，Redmi / HyperOS）**
+- 「去自启动管理」直达 `com.miui.securitycenter/com.miui.permcenter.autostart.AutoStartManagementActivity`，页面标题「自启动管理」，SkipAd 出现在「允许自启动」列表里——小米 Intent 命中。
+- `am force-stop` 后 HyperOS 会把 `enabled_accessibility_services` 清成 null（不是「配置在但没连上」），所以强停场景下主界面显示「未开启」是对的，走的也是「打开一次 App 恢复」这条既定路径。
+
 ## 0.16.7 - 2026-11-01 · 维护页功能小字 + 自启动覆盖小米/OPPO/vivo + 断线感知
 
 **改了什么**
