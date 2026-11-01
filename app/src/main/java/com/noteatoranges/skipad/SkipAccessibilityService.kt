@@ -19,6 +19,7 @@ import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.noteatoranges.skipad.core.BuiltinRules
 import com.noteatoranges.skipad.core.ClickPerformer
 import com.noteatoranges.skipad.core.NodeFactsCache
 import com.noteatoranges.skipad.core.NodeScanner
@@ -48,6 +49,9 @@ import java.util.concurrent.Executor
 class SkipAccessibilityService : AccessibilityService() {
 
     private var userScanner: NodeScanner? = null
+
+    /** 内置开屏规则扫描器：只在开屏窗口期内参与，窗口外一律不跑 */
+    private var builtinScanner: NodeScanner? = null
     private var clicker: ClickPerformer? = null
     private var lastHandleAt = 0L
 
@@ -87,6 +91,9 @@ class SkipAccessibilityService : AccessibilityService() {
     /** 内容变化事件的独立节流时间戳 */
     private var lastContentAt = 0L
 
+    /** DEBUG-TEMP 0.17.1：事件诊断日志节流 */
+    private var lastEventLogAt = 0L
+
     private data class PendingSkip(
         val windowKey: String,
         val pkg: String,
@@ -116,6 +123,9 @@ class SkipAccessibilityService : AccessibilityService() {
         // 连接留痕：装了新包之后服务是否真的起来了，只能靠这一行判断
         val ver = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()
         Log.i(TAG, "service-connected $ver")
+        builtinScanner = NodeScanner(BuiltinRules.defaults(), factsCache).also {
+            it.verbose = Log.isLoggable(TAG, Log.VERBOSE)
+        }
         clicker = ClickPerformer(this)
         blacklist = PACKAGE_BLACKLIST + findHomePackages()
         KeepAlive.scheduleJob(this)
@@ -403,7 +413,9 @@ class SkipAccessibilityService : AccessibilityService() {
             if (ep != null && ep != packageName) {
                 if (lastStateChangeAt.size > 50) lastStateChangeAt.clear()
                 val freshSwitch = lastFgPkg != ep && ep !in blacklist
-                lastStateChangeAt[ep] = SystemClock.elapsedRealtime()
+                // 开屏窗口只从「真的切到这个 App 的那一刻」起算：开屏页跳主界面会再来一个
+                // WSC，若每次都刷新，主界面前 6 秒也会被当成开屏——那正是误点的来源
+                if (freshSwitch) lastStateChangeAt[ep] = SystemClock.elapsedRealtime()
                 // className 不一定就是 Activity：弹浮层 / 列表刷新时 WSC 事件报的是
                 // android.widget.PopupWindow、androidx...RecyclerView 这类系统控件类名。
                 // 直接记下来会让「页面限定」的规则永远失配（activityMatches 按类名后缀比）
@@ -434,6 +446,16 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         val now = SystemClock.elapsedRealtime()
+
+        // DEBUG-TEMP 0.17.1：确认事件是否真在进来、root 是否可读、开屏窗口是否打开，定位后删除
+        val prePkg = runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
+            ?: event.packageName?.toString()
+        val preSplash = prePkg?.let { lastStateChangeAt[it] }?.let { now - it <= SPLASH_WINDOW_MS } == true
+        if (now - lastEventLogAt > 1000L) {
+            lastEventLogAt = now
+            Log.i(TAG, "ev type=$type pkg=$prePkg act=${prePkg?.let { lastActivityClass[it] }} splash=$preSplash")
+        }
+
         if (now - lastHandleAt < THROTTLE_MS) return
         lastHandleAt = now
 
@@ -444,11 +466,18 @@ class SkipAccessibilityService : AccessibilityService() {
             lastContentAt = now
         }
 
-        val root = rootInActiveWindow ?: return
+        // rootInActiveWindow 在部分 ROM 上会是 null（窗口列表却可读），抓快照走的就是
+        // windows 那条路。这里补一个同源的兜底，否则整条规则链路会静默不工作
+        val root = rootInActiveWindow ?: activeWindowRoot() ?: return
         val pkg = root.packageName?.toString() ?: event.packageName?.toString() ?: return
         if (pkg in blacklist || pkg == packageName) return
 
-        // 刷新规则扫描器（规则版本 / 包名 / 页面任一变化就重建）
+        // 开屏窗口：只从「真的切到这个 App 的那一刻」起算 SPLASH_WINDOW_MS。
+        // 窗口内才允许内置关键字；窗口外只认快照生成的用户规则
+        val sinceSwitch = lastStateChangeAt[pkg]
+        val splash = sinceSwitch != null && now - sinceSwitch <= SPLASH_WINDOW_MS
+
+        // 刷新用户规则扫描器（规则版本 / 包名 / 页面任一变化就重建）
         val ver = RuleStore.version(this)
         val act = lastActivityClass[pkg].orEmpty()
         val key = "$ver|$pkg|$act"
@@ -465,9 +494,11 @@ class SkipAccessibilityService : AccessibilityService() {
         // 命中就不必再全树扫描。页面/冷却/次数闸在 tryPathRule 内部按规则判断
         if (tryPathRule(root, pkg, act, now)) return
 
-        // 这个 App 没有节点规则：一条都不扫。规则按 App 建，没有规则的页面上
-        // 任何控件都不许动——聊天窗口、输入法这类正常界面永远不会被点到
-        val scanner = userScanner?.takeIf { userScannerPkg == pkg } ?: return
+        // 开屏窗口内：用户规则优先，没命中再用内置关键字；
+        // 窗口外：只认用户规则，没有就一条都不扫
+        val scanner = userScanner?.takeIf { userScannerPkg == pkg }
+            ?: (if (splash) builtinScanner else null)
+            ?: return
 
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
@@ -556,6 +587,25 @@ class SkipAccessibilityService : AccessibilityService() {
             Log.d(TAG, "retry#${p.attempts} ${p.pkg} gesture ok=$ok win=${found.second}")
         }
         mainHandler.postDelayed({ if (pending === p) verifySkip() }, VERIFY_DELAY_MS)
+    }
+
+    /**
+     * 活动窗口的 root，作为 [rootInActiveWindow] 的兜底。
+     *
+     * 部分 ROM 上 rootInActiveWindow 返回 null，但 getWindows() 里的窗口 root 是可读的
+     * （抓快照走的就是这条路）。没有这个兜底，整条规则链路会安静地不工作。
+     */
+    private fun activeWindowRoot(): AccessibilityNodeInfo? {
+        val wins = runCatching { windows?.toList() ?: emptyList() }.getOrDefault(emptyList())
+        if (wins.isEmpty()) return null
+        val ordered = wins.sortedByDescending { it.isActive }
+        for (w in ordered) {
+            val r = runCatching { w.root }.getOrNull() ?: continue
+            val p = runCatching { r.packageName?.toString() }.getOrNull() ?: continue
+            if (p == packageName || p in blacklist) continue
+            return r
+        }
+        return null
     }
 
     /**
@@ -1171,6 +1221,13 @@ class SkipAccessibilityService : AccessibilityService() {
         const val UNBIND_RECOVER_DELAY_MS = 1500L
         const val VERIFY_DELAY_MS = 800L
         const val MAX_RETRY = 2
+
+        /**
+         * 开屏窗口：App 从别的 App 切到前台后的这段时间，只在这段时间里允许内置关键字。
+         * 用户实测开屏广告多是 2–5 秒，这里给到 6 秒；再多就会盖住开屏页跳过去之后的
+         * 主界面，那正是误点开始的地方。
+         */
+        const val SPLASH_WINDOW_MS = 6000L
         const val CORNER_X_RATIO = 0.93f
         const val CORNER_Y_RATIO = 0.065f
         const val SNAP_CHANNEL = "snapshot"

@@ -33,3 +33,31 @@ data class SkipRule(
         const val ACTION_NONE = "none"
     }
 }
+
+/**
+ * 内置开屏规则：**只允许在开屏窗口期内使用**（见 SkipAccessibilityService.isSplashWindow）。
+ *
+ * 0.17.0 曾把这一组整块删掉，原因是它没有场景边界，在聊天页、信息流里也会跑。
+ * 0.17.1 按「开屏 = App 刚切到前台的头几秒」这个硬边界收回来：窗口之外一条都不用，
+ * 于是它的形态约束（位置闸/面积闸/长度闸/负向词）只需要对付开屏页那一种布局。
+ */
+object BuiltinRules {
+
+    fun defaults(): List<SkipRule> = listOf(
+        // viewId 带 skip 的基本就是广告 SDK 的跳过按钮本体（穿山甲 tt_splash_skip_btn 等）
+        SkipRule(id = "ad-skip-viewid", viewIds = listOf("skip")),
+        SkipRule(
+            id = "splash-common-text",
+            // zh-CN/zh-TW/ja/ko/en 常见"跳过"文案；contains 匹配天然覆盖"跳过 3""Skip 5s"
+            patterns = listOf("跳过", "跳過", "スキップ", "건너뛰기", "skip"),
+        ),
+        SkipRule(
+            id = "splash-countdown-regex",
+            regex = true,
+            patterns = listOf(
+                "(?i)skip[\\s\\d]*(s|sec|秒)?",
+                "\\d+\\s*(s|S|秒)\\s*(之|後|后)?\\s*跳过",
+            ),
+        ),
+    )
+}
