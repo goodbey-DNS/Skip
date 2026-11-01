@@ -19,13 +19,11 @@ import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import com.noteatoranges.skipad.core.BuiltinRules
 import com.noteatoranges.skipad.core.ClickPerformer
 import com.noteatoranges.skipad.core.NodeFactsCache
 import com.noteatoranges.skipad.core.NodeScanner
 import com.noteatoranges.skipad.core.SkipRule
 import com.noteatoranges.skipad.db.RuleStore
-import com.noteatoranges.skipad.db.KeywordStore
 import com.noteatoranges.skipad.db.SnapshotStore
 import com.noteatoranges.skipad.db.StatsDb
 import com.noteatoranges.skipad.keepalive.KeepAlive
@@ -35,24 +33,25 @@ import java.io.File
 import java.util.concurrent.Executor
 
 /**
- * 核心无障碍服务：窗口事件 → 规则匹配（用户规则优先，内置规则兜底）→ 模拟点击。
+ * 核心无障碍服务：窗口事件 → **只按用户规则**匹配 → 模拟点击。
  *
- * - 点击后验证制：点击 800ms 后在**所有窗口**（含 overlay）重扫，目标还在就用真实手势补刀
- *   （最多 2 次），目标消失才记一次跳过；
- * - 用户规则（GKD 式）：快照点选生成的 node/point 规则优先于内置关键字；
- * - 坐标点按兜底：无可读文本的广告 App 冷启动后朝右上角标准位真点；
- * - 快照：常驻通知「抓取快照」按钮，截图+控件树落盘供点选生成规则；
+ * 0.17.0 起引擎只认从快照点选生成的规则（节点 / 结构路径 / 坐标）。内置关键字扫描
+ * 与应用内弹窗关闭这两条启发式通道整体停用：它们会在聊天页、输入法窗口这类正常
+ * 界面命中短文本和小控件，误点的代价远大于多跳过几个广告。
+ *
+ * - 点击后验证制：点击 800ms 后在**同一个 App 的**窗口里重扫，目标还在就用真实手势
+ *   补刀（最多 2 次），目标消失才记一次跳过；
+ * - 规则按 App 隔离：规则的 app 字段决定它只在哪一个应用里生效，跨应用一条都不用；
+ * - 快照：悬浮钮 / 通知栏「抓取快照」按钮，截图+控件树落盘，点选生成规则；
  * - 诊断：TAG=SkipAdEngine；控件树落盘 filesDir/diag/。
  */
 class SkipAccessibilityService : AccessibilityService() {
 
-    private var builtinScanner: NodeScanner? = null
     private var userScanner: NodeScanner? = null
-    private var userRulesVersionSeen = -1
     private var clicker: ClickPerformer? = null
     private var lastHandleAt = 0L
 
-    /** 两个通道共享的节点属性缓存：同一次事件里弹窗通道直接复用开屏通道读过的属性 */
+    /** 节点属性缓存：同一次事件里多次扫描复用同一份跨进程读取结果 */
     private val factsCache = NodeFactsCache()
 
     /** 扫描器重建的键（规则版本 + 包名 + 页面）：换 App / 换页面都要重建，否则规则会跨页生效 */
@@ -61,27 +60,11 @@ class SkipAccessibilityService : AccessibilityService() {
     /**
      * userScanner 是按哪个包构建的。
      *
-     * 用户规则是 per-App 的，但 [findTargetInAnyWindow] 会遍历所有窗口（含浮层）。
+     * 规则是 per-App 的，而 [findUserTargetInAnyWindow] 会遍历多个窗口。
      * 不看包名就拿同一份扫描器过一遍，等于把 A 应用的规则套到 B 应用的控件上——
-     * 命中就点，是实打实的误点。
+     * 命中就点，是实打实的跨应用误点。
      */
     private var userScannerPkg: String? = null
-
-    /**
-     * 用户自建关键字缓存：**按包名**存，弹窗通道扫哪个窗口就取哪个包的那份；
-     * 关键字版本号一变整份清掉（用户改词无需重启服务）。
-     */
-    private var kwVerSeen = -1
-    private val kwCache = HashMap<String, Pair<List<String>, List<String>>>()
-
-    private fun keywordsFor(pkg: String): Pair<List<String>, List<String>> {
-        val ver = KeywordStore.version(this)
-        if (ver != kwVerSeen) {
-            kwVerSeen = ver
-            kwCache.clear()
-        }
-        return kwCache.getOrPut(pkg) { KeywordStore.forApp(this, pkg) }
-    }
 
     /** 每条规则的运行态：上次动作时间与累计次数（换页面清零） */
     private class RuleRun(var lastAt: Long = 0L, var count: Int = 0)
@@ -93,9 +76,7 @@ class SkipAccessibilityService : AccessibilityService() {
     /** 快照广播只注册一次：onServiceConnected 可能被系统重复回调，重复注册会导致一次点击抓多张 */
     private var snapshotRegistered = false
 
-    /** 窗口 id → (时间戳, 是否有广告标识)，避免每次扫描重走节点树 */
-    private val adHintCache = HashMap<Int, Pair<Long, Boolean>>()
-
+    /** 上次执行动作的窗口键与时间：同窗口冷却期内不重复匹配 */
     private var lastSkipWindow: String? = null
     private var lastSkipAt = 0L
     private var lastFgPkg: String? = null
@@ -103,38 +84,15 @@ class SkipAccessibilityService : AccessibilityService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pending: PendingSkip? = null
 
-    /** 弹窗通道节流：每次全树扫描有成本，未命中时也不低于这个间隔 */
-    private var lastPopupScanAt = 0L
-
     /** 内容变化事件的独立节流时间戳 */
     private var lastContentAt = 0L
-
-    /** 事件心跳日志的节流时间戳（确认无障碍事件真的在进来） */
-    private var lastEventLogAt = 0L
-
-    /** 弹窗点击冷却：按窗口记账，同窗口 4 秒内不重复点（原来是整 App 20 秒） */
-    private val popupClickAt = HashMap<String, Long>()
-    private val popupClickCount = HashMap<String, Int>()
-
-    /** 点了三次也没关掉的窗口：静默 30 秒，别反复去点同一个顽固弹窗 */
-    private val popupBlockedUntil = HashMap<String, Long>()
-
-    /** 上一次弹窗动作时间：保证两次动作之间隔开一个验证周期 */
-    private var lastPopupActionAt = 0L
-
-    /** 手动执行坐标规则后的静默期：这段时间内弹窗通道不再动手，避免同一下点两遍 */
-    private var popupSuppressUntil = 0L
-
-    /** 弱证据（角落小图 / 图片弹窗）需连续两次命中同一控件才点，单次命中先记账 */
-    private class WeakHit(val key: String, val rect: Rect, val at: Long)
-    private var lastWeakHit: WeakHit? = null
 
     private data class PendingSkip(
         val windowKey: String,
         val pkg: String,
         val detail: String,
         var attempts: Int,
-        /** 弹窗只补刀一次：弹窗消失后原坐标已变成广告本身，多点一下就是点广告 */
+        /** 补刀上限：目标没消失才补，弹窗/路径类只补一次 */
         val maxRetry: Int = MAX_RETRY,
     )
 
@@ -158,9 +116,6 @@ class SkipAccessibilityService : AccessibilityService() {
         // 连接留痕：装了新包之后服务是否真的起来了，只能靠这一行判断
         val ver = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()
         Log.i(TAG, "service-connected $ver")
-        builtinScanner = NodeScanner(BuiltinRules.defaults(), factsCache).also {
-            it.verbose = Log.isLoggable(TAG, Log.VERBOSE)
-        }
         clicker = ClickPerformer(this)
         blacklist = PACKAGE_BLACKLIST + findHomePackages()
         KeepAlive.scheduleJob(this)
@@ -279,8 +234,6 @@ class SkipAccessibilityService : AccessibilityService() {
             )
         }
         bubbleToast("已执行 ${rules.size} 条坐标规则（成功 $ok）")
-        // 手动点过之后，弹窗通道静默一段时间，避免同一下点两遍
-        popupSuppressUntil = SystemClock.elapsedRealtime() + MANUAL_POINT_SUPPRESS_MS
     }
 
     /** 1dp 对应的像素，锚点偏移用 */
@@ -427,13 +380,6 @@ class SkipAccessibilityService : AccessibilityService() {
         factsCache.clear()
         val prefix = "$pkg|"
         ruleState.keys.filter { it.startsWith(prefix) }.forEach { ruleState.remove(it) }
-        // 弹窗计数跟着页面走：同窗口的冷却记录留着没意义，窗口 id 会换
-        popupClickAt.clear()
-        popupClickCount.clear()
-        popupBlockedUntil.clear()
-        // 广告标识缓存是按窗口 id 记的，换页后旧 id 的结果没有意义
-        adHintCache.clear()
-        lastWeakHit = null
         userScannerKey = null
         // 同页面重复 WSC 会在上面 early return，这里清空只在真的换页面时发生
         clickedRects.clear()
@@ -477,8 +423,7 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            type != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
-            type != AccessibilityEvent.TYPE_WINDOWS_CHANGED
+            type != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         ) return
 
         // 非切页事件也顺手记住前台包名：目标 App 禁了无障碍时，窗口 root 全为 null，
@@ -492,26 +437,10 @@ class SkipAccessibilityService : AccessibilityService() {
         if (now - lastHandleAt < THROTTLE_MS) return
         lastHandleAt = now
 
-        // 新增窗口（浮层弹窗最常见形态）单独走弹窗通道：这类窗口不一定改动
-        // 活动窗口的 root，只靠 WSC/WCC 会漏。不动开屏扫描，避免重复点
-        if (type == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
-            if (event.windowChanges and AccessibilityEvent.WINDOWS_CHANGE_ADDED == 0) return
-            tryPopupClose(event, now)
-            return
-        }
-
         // 内容变化事件在信息流里一秒能来几十个，每次都要全树走一遍无障碍节点，
-        // 是耗电主因。开屏广告真正出现时伴随 WINDOW_STATE_CHANGED，内容变化慢一拍不影响
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+        // 是耗电主因。命中只取决于控件是否还在，下一次切页/内容变化都会补上
+        if (type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
             if (now - lastContentAt < CONTENT_THROTTLE_MS) return
-            // 滑动信息流只产生 SCROLL / TEXT_CHANGED，弹窗浮层是整棵子树插进来。
-            // 没带 SUBTREE 的变化基本不可能长出关闭按钮，直接跳过（0 表示未上报，不过滤）
-            val types = event.contentChangeTypes
-            if (types != 0 &&
-                types and AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE == 0
-            ) {
-                return
-            }
             lastContentAt = now
         }
 
@@ -519,12 +448,11 @@ class SkipAccessibilityService : AccessibilityService() {
         val pkg = root.packageName?.toString() ?: event.packageName?.toString() ?: return
         if (pkg in blacklist || pkg == packageName) return
 
-        // 刷新用户规则扫描器（规则版本 / 包名 / 页面任一变化就重建）
+        // 刷新规则扫描器（规则版本 / 包名 / 页面任一变化就重建）
         val ver = RuleStore.version(this)
         val act = lastActivityClass[pkg].orEmpty()
         val key = "$ver|$pkg|$act"
         if (key != userScannerKey) {
-            userRulesVersionSeen = ver
             userScannerKey = key
             val nodeRules = RuleStore.nodeRulesAsScannerRules(this, pkg, act)
             userScanner = if (nodeRules.isEmpty()) null else NodeScanner(nodeRules, factsCache).also {
@@ -533,52 +461,38 @@ class SkipAccessibilityService : AccessibilityService() {
             userScannerPkg = pkg
         }
 
-        // 关键字不再在事件入口统一加载：弹窗通道会扫多个窗口，
-        // 每个窗口按自己的包名取词（见 keywordsFor），避免跨应用误伤
-
         // 结构路径规则最精确（用户从快照里点选的那个控件本身），先试一次；
         // 命中就不必再全树扫描。页面/冷却/次数闸在 tryPathRule 内部按规则判断
         if (tryPathRule(root, pkg, act, now)) return
 
+        // 这个 App 没有节点规则：一条都不扫。规则按 App 建，没有规则的页面上
+        // 任何控件都不许动——聊天窗口、输入法这类正常界面永远不会被点到
+        val scanner = userScanner?.takeIf { userScannerPkg == pkg } ?: return
+
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
 
-        // 启动窗口闸：只在"新窗口出现后 SPLASH_WINDOW_MS 内"扫描开屏广告。
-        // 无状态变化记录（服务在该 App 已在前台时才连上/重连）时按"现在"起算，
-        // 否则 now - 0 恒大于闸门，等于这类场景永远不扫描。
-        // 闸外不等于放弃：用户点菜单后的弹窗要靠下面的弹窗通道，它有自己的节流。
-        val stateAt = lastStateChangeAt[pkg] ?: now
-        if (now - stateAt > SPLASH_WINDOW_MS) {
-            tryPopupClose(event, now)
-            return
-        }
-
-        // 同窗口冷却：刚点过的窗口在冷却期内不再重复匹配（COOLDOWN_MS 此前只定义未使用）
+        // 同窗口冷却：刚点过的窗口在冷却期内不再重复匹配
         if (lastSkipWindow != null && now - lastSkipAt < COOLDOWN_MS &&
             lastSkipWindow == windowKeyFor(pkg, event, root)
         ) {
             return
         }
 
-        // 用户规则优先；窗口有"广告"标识时免位置闸
-        val adHint = adHintFor(-1, root)
         val t0 = SystemClock.elapsedRealtime()
-        val hit = userScanner?.findSkipTarget(root, w, h, adHint)
-            ?: builtinScanner?.findSkipTarget(root, w, h, adHint)
+        val hit = scanner.findSkipTarget(root, w, h)
         // 扫描耗时：决定要不要给「每 App 事件次数」加预算时必须看这个数，
         // 不能凭感觉（上限是 TRAVERSE_TIMEOUT_MS=400ms）
         val cost = SystemClock.elapsedRealtime() - t0
         if (hit == null) {
-            Log.v(TAG, "scan $pkg ${cost}ms: ${userScanner?.lastDebug ?: builtinScanner?.lastDebug}")
-            // 开屏窗口期内也可能先浮出营销弹窗，主路径没命中就顺带试一次弹窗通道
-            tryPopupClose(event, now)
+            Log.v(TAG, "scan $pkg ${cost}ms: ${scanner.lastDebug}")
             return
         }
         val detail = hit.first.text?.toString()
             ?: hit.first.contentDescription?.toString()
             ?: hit.first.viewIdResourceName
             ?: hit.second.id
-        Log.d(TAG, "match $pkg ${cost}ms: ${userScanner?.lastDebug ?: builtinScanner?.lastDebug}")
+        Log.d(TAG, "match $pkg ${cost}ms: ${scanner.lastDebug}")
 
         val rule = hit.second
         // 冷却 / 次数上限：拦在这里，误点的代价远大于漏跳
@@ -609,135 +523,18 @@ class SkipAccessibilityService : AccessibilityService() {
         mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
     }
 
-    /**
-     * 应用内弹窗通道：用户点菜单后浮出来的营销卡片。
-     *
-     * 不套启动窗口闸——弹窗出现时距 Activity 切换可能已过几分钟；改用两道自己的节流：
-     * 扫描间隔（窗口切换 500ms / 新增窗口 400ms / 内容变化 1800ms），点击后按**窗口**
-     * 冷却 4 秒、同一窗口最多 3 次——此前是整 App 20 秒冷却，一个 App 里连着两个弹窗，
-     * 第二个基本会被放过。
-     *
-     * 扫描范围是所有可交互窗口（活动窗口优先，最多 3 个）：浮层弹窗常常是独立窗口，
-     * 不在 rootInActiveWindow 里。点完同样进 800ms 验证：没消失就不记账，只补刀一次。
-     */
-    private fun tryPopupClose(event: AccessibilityEvent, now: Long, force: Boolean = false) {
-        val interval = when (event.eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> POPUP_SCAN_STATE_MS
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> POPUP_SCAN_WINDOW_MS
-            else -> POPUP_SCAN_MS
-        }
-        if (!force && now - lastPopupScanAt < interval) return
-        lastPopupScanAt = now
-        val scanner = builtinScanner ?: run {
-            Log.w(TAG, "popup: builtinScanner 未初始化（服务未连上）")
-            return
-        }
-        val w = resources.displayMetrics.widthPixels
-        val h = resources.displayMetrics.heightPixels
-        var scanned = 0
-        for (win in popupWindowCandidates()) {
-            val root = win.root ?: continue
-            val pkg = root.packageName?.toString() ?: continue
-            scanned++
-            // 「像弹窗的窗口」：窗口自己没铺满屏幕（对话框/浮层），E2 靠这个放宽节点数限制
-            val rootRect = Rect()
-            root.getBoundsInScreen(rootRect)
-            val dialogWindow = rootRect.width() > 0 &&
-                (rootRect.width() < w * 0.98f || rootRect.height() < h * 0.98f)
-            // 关键字严格按「这个窗口属于哪个包」取：弹窗通道会扫多个窗口，
-            // 拿前台 App 的词去扫别的 App 的窗口就是跨应用误伤
-            val (kh, ke) = keywordsFor(pkg)
-            if (kh.isNotEmpty() || ke.isNotEmpty()) {
-                Log.v(TAG, "kw $pkg#${win.id} hits=${kh.size} excludes=${ke.size}")
-            }
-            val hit = scanner.findPopupCloseTarget(root, w, h, dialogWindow, kh, ke)
-            if (hit == null) {
-                Log.v(TAG, "popup-none $pkg#${win.id}: ${scanner.lastPopupDebug}")
-                continue
-            }
-            val key = "$pkg#${win.id}"
-            // 弱证据要看到两次：弹窗刚插入时布局还没稳，单帧的判断不牢靠
-            if (hit.tier >= 5) {
-                val r = Rect()
-                hit.node.getBoundsInScreen(r)
-                val prev = lastWeakHit
-                val same = prev != null && prev.key == key && prev.rect == r && now - prev.at < WEAK_CONFIRM_MS
-                lastWeakHit = WeakHit(key, r, now)
-                if (!same) {
-                    Log.v(TAG, "popup-weak-wait $key: ${scanner.lastPopupDebug}")
-                    // 没有后续事件也要有第二次查看的机会，否则弱证据永远等不到确认
-                    mainHandler.postDelayed(
-                        { tryPopupClose(event, SystemClock.elapsedRealtime(), true) },
-                        WEAK_CONFIRM_DELAY_MS,
-                    )
-                    continue
-                }
-            } else {
-                lastWeakHit = null
-            }
-            if (!gatePopup(key, now)) {
-                Log.v(TAG, "popup-cool $key: ${scanner.lastPopupDebug}")
-                continue
-            }
-            Log.d(TAG, "popup-match $key: ${scanner.lastPopupDebug}")
-            // 同位置本轮已点过：跳过这个窗口，不要重写诊断树
-            if (rectKeyOf(hit.node) in clickedRects) {
-                Log.v(TAG, "popup-dup $pkg")
-                continue
-            }
-            dumpTree(root, pkg, "popup")
-            if (clickNodeOnce(hit.node)) {
-                lastSkipWindow = key
-                lastSkipAt = now
-                pending = PendingSkip(key, pkg, "弹窗·${hit.why}", 0, 1)
-                val token = pending
-                mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
-                return
-            }
-            Log.d(TAG, "popup-click-failed $pkg")
-        }
-        if (scanned == 0) Log.v(TAG, "popup: 没有可扫窗口")
-    }
-
-    /** 待扫窗口：活动窗口优先，跳过自己和黑名单，最多 [POPUP_SCAN_WINDOWS] 个 */
-    private fun popupWindowCandidates(): List<AccessibilityWindowInfo> {
-        val all = runCatching { windows?.toList() ?: emptyList() }.getOrDefault(emptyList())
-        if (all.isEmpty()) return emptyList()
-        val out = ArrayList<AccessibilityWindowInfo>(POPUP_SCAN_WINDOWS)
-        for (win in all.sortedByDescending { it.isActive }) {
-            val p = runCatching { win.root?.packageName?.toString() }.getOrNull() ?: continue
-            if (p == packageName || p in blacklist) continue
-            out.add(win)
-            if (out.size >= POPUP_SCAN_WINDOWS) break
-        }
-        return out
-    }
-
-    /**
-     * 弹窗点击闸门：按窗口冷却 + 同窗口次数上限 + 全局最小间隔。
-     * 全局最小间隔是为了让上一次的 800ms 验证先跑完，别在验证期间插队点第二个。
-     */
-    private fun gatePopup(key: String, now: Long): Boolean {
-        if (now < popupSuppressUntil) return false
-        if (now < (popupBlockedUntil[key] ?: 0L)) return false
-        if (now - lastPopupActionAt < POPUP_GLOBAL_MIN_MS) return false
-        val last = popupClickAt[key] ?: 0L
-        if (last > 0 && now - last < POPUP_WINDOW_COOLDOWN_MS) return false
-        val n = popupClickCount[key] ?: 0
-        if (n >= POPUP_MAX_PER_WINDOW) return false
-        popupClickAt[key] = now
-        popupClickCount[key] = n + 1
-        lastPopupActionAt = now
-        return true
-    }
-
     private fun windowKeyFor(pkg: String, event: AccessibilityEvent, root: AccessibilityNodeInfo): String =
         "$pkg/${event.className ?: root.className ?: ""}"
 
-    /** 核验：所有窗口（含 overlay）都找不到目标才算跳过成功，否则手势补刀 */
+    /**
+     * 核验：在**同一个 App 的**窗口里再找一遍，目标消失才算跳过成功，否则手势补刀。
+     *
+     * 以前这里遍历所有窗口（含浮层、输入法），同一份规则套到别的窗口上，命中就补刀，
+     * 那是实打实的跨应用误点。规则按 App 建，核验也只认那个 App。
+     */
     private fun verifySkip() {
         val p = pending ?: return
-        val found = findTargetInAnyWindow()
+        val found = findUserTargetInAnyWindow(p.pkg)
         if (found == null) {
             val appCtx = applicationContext
             Io.run("stats-insert") { StatsDb.get(appCtx).insert(p.pkg, p.detail) }
@@ -746,10 +543,8 @@ class SkipAccessibilityService : AccessibilityService() {
             return
         }
         if (p.attempts >= p.maxRetry) {
-            Log.d(TAG, "giveup ${p.pkg} 「${p.detail}」广告仍在(${found.second}), 已补刀${p.attempts}次不记账")
+            Log.d(TAG, "giveup ${p.pkg} 「${p.detail}」目标仍在(${found.second}), 已补刀${p.attempts}次不记账")
             dumpTree(rootInActiveWindow, p.pkg, "giveup")
-            // 点不掉就暂时别碰这个窗口：反复尝试只会反复误点
-            if (p.detail.startsWith("弹窗")) popupBlockedUntil[p.windowKey] = SystemClock.elapsedRealtime() + POPUP_STUBBORN_MS
             pending = null
             return
         }
@@ -763,57 +558,25 @@ class SkipAccessibilityService : AccessibilityService() {
         mainHandler.postDelayed({ if (pending === p) verifySkip() }, VERIFY_DELAY_MS)
     }
 
-    /** 在所有可交互窗口里找跳过目标（用户规则 + 内置规则，rootInActiveWindow 未必是广告层） */
-    private fun findTargetInAnyWindow(): Triple<AccessibilityNodeInfo, String, String>? {
+    /**
+     * 只在属于 [pkg] 的窗口里找规则目标。
+     *
+     * 没有该 App 的节点规则（点击来自结构路径或坐标规则）时直接返回 null，
+     * 不拿别的规则去凑——凑出来的那个控件没人要，补刀点下去就是误点。
+     */
+    private fun findUserTargetInAnyWindow(pkg: String): Triple<AccessibilityNodeInfo, String, String>? {
+        val scanner = userScanner?.takeIf { userScannerPkg == pkg } ?: return null
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
         // getWindows() 是平台类型，服务刚起来时可能为 null
         val wins = runCatching { windows?.toList() ?: emptyList() }.getOrDefault(emptyList())
         for (window in wins) {
             val root = window.root ?: continue
-            val wp = root.packageName?.toString() ?: continue
-            if (wp == packageName || wp in blacklist) continue
-            // 窗口里有"广告"标识时，跳过按钮不设位置闸（微博的跳过就在右下角）
-            val adHint = adHintFor(window.id, root)
-            // 用户规则只对本包生效：窗口属于别的 App（浮层、对话框）时退回内置规则
-            val us = userScanner.takeIf { wp == userScannerPkg }
-            val hit = us?.findSkipTarget(root, w, h, adHint)
-                ?: builtinScanner?.findSkipTarget(root, w, h, adHint)
-            if (hit != null) return Triple(hit.first, wp, "win#${window.id} ${window.type}")
-            // 弹窗通道点下去之后也按同一套核验：弹窗还在说明没点掉，补刀一次
-            val kw = keywordsFor(wp)
-            val popup = builtinScanner?.findPopupCloseTarget(
-                root, w, h, isDialogWindow(root, w, h), kw.first, kw.second,
-            )
-            if (popup != null) return Triple(popup.node, wp, "popup#${window.id}")
-            // 纯图片/视频开屏：跳过按钮既无文本也无 skip 类 id，只在开屏类 Activity 上
-            // 按"右上/右下角 + 小尺寸"兜底，避免在正常页面误点搜索、更多按钮
-            val act = lastActivityClass[wp] ?: ""
-            if (isSplashLike(act)) {
-                val corner = builtinScanner?.findCornerButton(root, w, h)
-                if (corner != null) {
-                    Log.d(TAG, "corner-fallback $wp act=$act")
-                    return Triple(corner, wp, "corner#${window.id}")
-                }
-            }
+            if (root.packageName?.toString() != pkg) continue
+            val hit = scanner.findSkipTarget(root, w, h) ?: continue
+            return Triple(hit.first, pkg, "win#${window.id}")
         }
         return null
-    }
-
-    /** 窗口是否没铺满屏幕（对话框/浮层）：弹窗通道用它放宽“节点稀疏”限制 */
-    private fun isDialogWindow(root: AccessibilityNodeInfo, w: Int, h: Int): Boolean {
-        val r = Rect()
-        root.getBoundsInScreen(r)
-        return r.width() > 0 && (r.width() < w * 0.98f || r.height() < h * 0.98f)
-    }
-
-    /** 广告标识判定带 1.5 秒缓存：同一次开屏会被反复扫描，别每次都重走 200 个节点 */
-    private fun adHintFor(windowId: Int, root: AccessibilityNodeInfo): Boolean {
-        val now = SystemClock.elapsedRealtime()
-        adHintCache[windowId]?.let { (t, v) -> if (now - t < AD_HINT_TTL_MS) return v }
-        val v = adSignature(root) == true
-        adHintCache[windowId] = now to v
-        return v
     }
 
     /**
@@ -827,14 +590,6 @@ class SkipAccessibilityService : AccessibilityService() {
     private fun isSystemUiClass(cn: String): Boolean =
         cn.startsWith("android.") || cn.startsWith("androidx.") ||
             cn.startsWith("com.android.internal.")
-
-    /** 开屏类 Activity：决定能不能用"角落小按钮"兜底 */
-    private fun isSplashLike(act: String): Boolean {
-        if (act.isEmpty()) return false
-        val low = act.lowercase(java.util.Locale.ROOT)
-        return low.contains("splash") || low.contains("welcome") || low.contains("advert") ||
-            low.contains("adactivity") || low.contains(".ad.")
-    }
 
     // ———————— 坐标点按 ————————
 
@@ -1136,7 +891,7 @@ class SkipAccessibilityService : AccessibilityService() {
             val p = r.packageName?.toString()
             if (p != null && p != pkg) continue
             windowRoots.add(id to r)
-            if (windowRoots.size > POPUP_SCAN_WINDOWS) break
+            if (windowRoots.size > SNAPSHOT_MAX_WINDOWS) break
         }
         if (windowRoots.isEmpty()) {
             // 目标 App 的窗口一个都拿不到（它自己把无障碍遍历禁了）：只存截图，
@@ -1398,18 +1153,6 @@ class SkipAccessibilityService : AccessibilityService() {
         const val THROTTLE_MS = 300L
         const val COOLDOWN_MS = 4000L
 
-        /** 弹窗通道：未命中时的扫描节流（全树最多 500 节点，别跟着信息流滚动一直扫） */
-        const val POPUP_SCAN_MS = 1800L
-
-        /** 窗口切换时弹窗可能刚出现，用更短的间隔 */
-        const val POPUP_SCAN_STATE_MS = 500L
-
-        /** 新增窗口事件：弹窗刚挂上来，间隔再短一点 */
-        const val POPUP_SCAN_WINDOW_MS = 400L
-
-        /** 一次最多扫几个窗口（浮层弹窗常在独立窗口里，但没必要把整桌窗口扫一遍） */
-        const val POPUP_SCAN_WINDOWS = 3
-
         /** 内容变化事件的最小间隔：滑动信息流时一秒能来几十个，没必要每个都扫 */
         const val CONTENT_THROTTLE_MS = 900L
 
@@ -1422,28 +1165,12 @@ class SkipAccessibilityService : AccessibilityService() {
         /** 单个窗口的节点上限：防止一个超大窗口把额度吃光，浮层窗口就没机会了 */
         const val SNAPSHOT_MAX_PER_WINDOW = 800
 
-        /** 弹窗冷却改为按窗口：同窗口 4 秒内不重复点，最多 3 次（此前整 App 20 秒） */
-        const val POPUP_WINDOW_COOLDOWN_MS = 4000L
-        const val POPUP_MAX_PER_WINDOW = 3
+        /** 一次快照最多合并几个窗口（同一 App 的主窗口 + 浮层） */
+        const val SNAPSHOT_MAX_WINDOWS = 3
 
-        /** 两次弹窗动作的最小间隔：让上一次的 800ms 验证先跑完 */
-        const val POPUP_GLOBAL_MIN_MS = 1200L
-
-        /** 手动执行坐标规则后的静默期，避免自动通道在同一点上再点一次 */
-        const val MANUAL_POINT_SUPPRESS_MS = 8000L
-
-        /** 点了 3 次仍没关掉的窗口，静默这么久再试 */
-        const val POPUP_STUBBORN_MS = 30000L
-
-        /** 弱证据确认窗口：两次命中同一控件且间隔在这么内才算数 */
-        const val WEAK_CONFIRM_MS = 2500L
-
-        /** 弱证据首次命中后多久补一次扫描 */
-        const val WEAK_CONFIRM_DELAY_MS = 450L
         const val UNBIND_RECOVER_DELAY_MS = 1500L
         const val VERIFY_DELAY_MS = 800L
         const val MAX_RETRY = 2
-        const val SPLASH_WINDOW_MS = 12000L
         const val CORNER_X_RATIO = 0.93f
         const val CORNER_Y_RATIO = 0.065f
         const val SNAP_CHANNEL = "snapshot"
@@ -1477,7 +1204,6 @@ class SkipAccessibilityService : AccessibilityService() {
         )
         val AD_TEXT_HINTS = listOf("广告", "Sponsored")
         const val AD_SIGNATURE_SCAN_NODES = 200
-        const val AD_HINT_TTL_MS = 1500L
 
         /** 坐标规则的重试节拍（相对 delayMs）：一次落空不等于失败，再补三拍 */
         val POINT_RETRY_OFFSETS = longArrayOf(0L, 600L, 1200L, 1800L)

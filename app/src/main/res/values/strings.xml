@@ -3,7 +3,7 @@
     <string name="app_subtitle">开屏广告自动跳过 · 零联网权限 · 本地识别</string>
 
     <string name="section_status">无障碍服务</string>
-    <string name="status_on">✓ 已开启，正在自动跳过开屏广告</string>
+    <string name="status_on">✓ 已开启，只按你从快照里建的规则动手</string>
     <string name="status_off">✗ 未开启，点下方按钮去系统设置开启</string>
     <string name="status_not_bound">⚠ 设置里已开启，但服务没连上——点「立即自检」，或把无障碍开关关开一次</string>
     <string name="status_not_bound_ago">⚠ 设置里已开启，但服务没连上（上次连上 %1$d 分钟前）——点「立即自检」，或把无障碍开关关开一次</string>
@@ -128,8 +128,8 @@
     <string name="ka_result_not_bound">系统设置里显示已开启，但服务实例没绑上——把无障碍开关关开一次，或稍等几秒再自检</string>
 
     <string name="accessibility_service_label">SkipAd 开屏跳过</string>
-    <string name="accessibility_service_summary">自动点击开屏广告的“跳过”按钮</string>
-    <string name="accessibility_service_description">SkipAd 监听窗口内容变化，识别并自动点击开屏广告中的“跳过”按钮。本应用不申请网络与存储权限，不读取、不上传任何数据，所有识别均在本地完成。</string>
+    <string name="accessibility_service_summary">按你自建的规则点击要跳过的按钮</string>
+    <string name="accessibility_service_description">SkipAd 只在你从快照里点选生成的规则命中的控件上动手，不套用通用词表、不猜位置。规则按应用隔离，在微信、聊天、输入法等没有规则的地方一律不做动作。本应用不申请网络与存储权限，不读取、不上传任何数据，所有判断均在本地完成。</string>
 
-    <string name="footer_note">内置通用关键字规则（跳过 / Skip / 倒计时）+ 防误触约束。\n路线图：per-App 规则 → 节点快照调试 → 社区规则兼容，详见仓库 docs/design.md</string>
+    <string name="footer_note">只执行你从快照里点选生成的规则；规则按应用隔离，没有规则的应用一律不动手。\n下一步：广告在屏上时点悬浮钮抓快照 → 点选按钮 → 生成规则</string>
 </resources>

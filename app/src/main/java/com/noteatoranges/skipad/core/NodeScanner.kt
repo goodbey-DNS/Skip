@@ -5,20 +5,22 @@ import android.view.accessibility.AccessibilityNodeInfo
 import java.util.Locale
 
 /**
- * 在节点树中定位"跳过"目标：BFS 遍历 → 规则匹配 → 安全校验 → 返回可点击节点。
+ * 在节点树中定位规则指定的目标：BFS 遍历 → 规则匹配 → 安全校验 → 返回可点击节点。
  *
- * 匹配三层（GKD 路数）：
- * - 文本/描述 关键字与正则（需过右上角位置闸防页面正文误触）；
- * - **viewId 结构匹配**：viewIdResourceName 含 "skip" 之类即命中，无文本也认——
- *   国产广告 SDK 的跳过按钮本体（tt_splash_skip_btn / xxx:id/skip_btn），免位置闸；
- * - 命中节点不可点击时沿父链向上找可点击祖先。
+ * 0.17.0 起这里**只**执行用户从快照点选生成的规则（[com.noteatoranges.skipad.db.RuleStore]
+ * 里 kind=node 的那些）。内置的关键字 / 倒计时 / skip viewId 规则与应用内弹窗关闭
+ * 那套启发式全部撤掉——它们在聊天页、输入法窗口这类正常界面会命中短文本和小控件。
+ *
+ * 匹配两层：
+ * - 文本包含匹配（需过位置闸与相对长度闸，防页面正文误触）；
+ * - viewId 包含匹配（快照点选时记下的资源名，免位置闸）。
  *
  * 注：AccessibilityNodeInfo.recycle() 在 API 33+ 已废弃（系统接管回收）；
  * 低版本上不主动回收只造成轻微内存压力，换来规避 recycle 误用型崩溃，有意不回收。
  */
 class NodeScanner(
     rules: List<SkipRule>,
-    /** 共享的节点属性缓存：开屏与弹窗两个通道在同一次事件里复用同一份读取结果 */
+    /** 共享的节点属性缓存：同一次事件里多次扫描复用同一份读取结果 */
     private val facts: NodeFactsCache? = null,
 ) {
 
@@ -59,23 +61,11 @@ class NodeScanner(
      */
     var verbose = false
 
-    /** 最近一次弹窗扫描的诊断信息，供真机排查 */
-    var lastPopupDebug: String? = null
-        private set
-
-    /** 弹窗关闭按钮命中结果：node 为待点节点，why 为命中依据（落库展示用） */
-    data class PopupHit(val node: AccessibilityNodeInfo, val why: String, val tier: Int = 4)
-
-    /** 返回 (可点击目标节点, 命中的规则)；找不到返回 null
-     *
-     * @param hasAdHint 该窗口里已看到广告标识（"广告"文本 / 广告 SDK viewId），
-     *                  命中时免位置闸——广告页里的"跳过"无论在哪都是按钮
-     */
+    /** 返回 (可点击目标节点, 命中的规则)；找不到返回 null */
     fun findSkipTarget(
         root: AccessibilityNodeInfo,
         screenW: Int,
         screenH: Int,
-        hasAdHint: Boolean = false,
     ): Pair<AccessibilityNodeInfo, SkipRule>? {
         if (screenW <= 0 || screenH <= 0) return null
         val screenArea = screenW.toFloat() * screenH
@@ -102,7 +92,7 @@ class NodeScanner(
             val text = f.label
             if (text != null && samples.size < 20) samples.add(text.take(16))
             val vid = f.vid?.lowercase(Locale.ROOT)
-            if (vid != null && vid.contains("skip") && samples.size < 20) samples.add("vid=$vid")
+            if (vid != null && samples.size < 20) samples.add("vid=$vid")
 
             val matched = firstMatch(node, text, vid)
             if (matched != null) {
@@ -111,17 +101,16 @@ class NodeScanner(
                 val tooLong = text != null && text.length > limit
                 // 负向闸：教程 / 引导 / 新手 这类"跳过"不是广告按钮（"跳过教程""Skip tutorial"）
                 if (text != null && NEGATIVE_HINTS.any { text.contains(it, ignoreCase = true) }) {
-                    reject = "「${text.take(12)}」疑似教程/引导，非广告"
+                    reject = "「${text.take(12)}」疑似教程/引导"
                 } else if (tooLong && text != null) {
-                    // 文本长度闸对 viewId 命中同样生效：原先 viewId 命中完全绕过此闸，
-                    // 长文本控件（正文里提到 skip）也会被点。无文本的 viewId 命中仍放行，
-                    // 那是穿山甲等广告 SDK 跳过按钮的正常形态（只有 id 没有 text）。
+                    // 文本长度闸对 viewId 命中同样生效：长文本控件（正文里提到关键字）
+                    // 不该被点。无文本的 viewId 命中仍放行，那是按钮本体只有 id 的形态
                     reject = "「${text.take(12)}」文本超长(${text.length}>$limit)"
                 } else if (!byViewId && text == null) {
                     reject = "「${vid?.take(12)}」无文本且非 viewId 命中"
                 } else {
                     // 找不到可点击祖先时退回节点本身：ClickPerformer 会先试 performAction，
-                    // 失败再按节点中心坐标点。微博开屏的"跳过"是纯 TextView（clickable=false、
+                    // 失败再按节点中心坐标点。有些跳过按钮是纯 TextView（clickable=false、
                     // 祖先也不可点），只有这条路能点掉
                     val cand = clickableAncestor(node) ?: node
                     val candFacts = factsOf(cand)
@@ -131,14 +120,13 @@ class NodeScanner(
                         val rect = candFacts.rect
                         val area = rect.width().toFloat() * rect.height()
                         val pct = (area / screenArea * 100).toInt()
-                        // 位置闸：广告跳过按钮可以出现在任意角落（微博在右下角 95%），
-                        // 只排除屏幕中央主体区，那里出现"跳过"基本是正文而不是按钮。
+                        // 位置闸：排除屏幕中央主体区，那里出现关键字基本是正文而不是按钮。
                         // viewId 命中的是按钮本体，免此闸。
                         val cx = rect.exactCenterX()
                         val cy = rect.exactCenterY()
                         val inCenter = cx > screenW * 0.3f && cx < screenW * 0.7f &&
                             cy > screenH * 0.2f && cy < screenH * 0.8f
-                        if (!byViewId && !hasAdHint && inCenter) {
+                        if (!byViewId && inCenter) {
                             reject = "「${text?.take(12)}」在中央区域(cx=${cx.toInt()},cy=${cy.toInt()})"
                         } else if (area in 1f..screenArea * matched.node.rule.maxAreaRatio) {
                             lastDebug = "HIT「${(text ?: vid)?.take(20)}」面积${pct}% 规则=${matched.node.rule.id}" +
@@ -165,369 +153,9 @@ class NodeScanner(
     }
 
     /**
-     * 兜底：开屏窗口里右上 / 右下角的"小可点击控件"。
-     * 用于纯图片、视频类开屏广告——跳过按钮是 ImageView，既没有文本也没有 skip 类 viewId，
-     * 无障碍层只能靠"位置 + 尺寸"认。调用方只在 Activity 名含 splash / welcome / ad 时启用，
-     * 避免在正常页面误点右上角的搜索、更多。
-     */
-    fun findCornerButton(
-        root: AccessibilityNodeInfo,
-        screenW: Int,
-        screenH: Int,
-    ): AccessibilityNodeInfo? {
-        if (screenW <= 0 || screenH <= 0) return null
-        val w = screenW.toFloat()
-        val h = screenH.toFloat()
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var n = 0
-        var best: AccessibilityNodeInfo? = null
-        var bestArea = Float.MAX_VALUE
-        while (queue.isNotEmpty() && n < CORNER_SCAN_NODES) {
-            val node = queue.removeFirst()
-            n++
-            val f = factsOf(node)
-            if (f.clickable && f.visible) {
-                val r = f.rect
-                val cw = r.width().toFloat()
-                val ch = r.height().toFloat()
-                val cx = r.exactCenterX()
-                val cy = r.exactCenterY()
-                val inCorner = cx > w * 0.62f && (cy < h * 0.22f || cy > h * 0.78f)
-                val sizeOk = cw in (w * 0.04f)..(w * 0.30f) && ch in (h * 0.015f)..(h * 0.09f)
-                if (inCorner && sizeOk) {
-                    val area = cw * ch
-                    if (area < bestArea) {
-                        best = node
-                        bestArea = area
-                    }
-                }
-            }
-            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
-        }
-        return best
-    }
-
-    /**
-     * 应用内弹窗（不是开屏）的关闭按钮定位。
-     *
-     * 开屏是整个窗口一张广告，跳过按钮在角落；弹窗盖在正常页面上，关闭钮落在屏幕
-     * 中央偏下或卡片右上角，正好被 [findSkipTarget] 的"排除中央区"闸拒掉。
-     *
-     * 三条证据任一成立才返回，宁可漏掉不误点：
-     * - E1 居中卡片（短文本包围盒）边缘 ±12% 内的小可点控件，且卡片内有营销文案；
-     * - E2 节点稀疏（≤60）的窗口里，纵向 60% 以下的小可点图片控件（独立弹窗 Activity）；
-     * - E3 控件文字本身就是"关闭 / close / ×"，且落在屏幕中央偏下——正常页面的
-     *   关闭钮都在角落，中央偏下基本只有弹窗会有；
-     * - E4 卡片下沿内的全宽文字按钮（「我知道了」「以后再说」这类，宽度可到 92% 屏宽）。
-     *
-     * 业务型弹窗（登录、支付、授权、隐私、订单）一律不点：点掉会打断用户正在做的事。
-     * 业务词优先于营销词——命中业务词就整窗放弃，宁可漏一个营销弹窗。
-     */
-    fun findPopupCloseTarget(
-        root: AccessibilityNodeInfo,
-        screenW: Int,
-        screenH: Int,
-        /** 窗口本身没铺满屏幕（对话框/浮层）：E2 用它代替“节点稀疏”判断 */
-        dialogWindow: Boolean = false,
-        /** 用户自建命中词（提高识别）：形如“放弃福利”，仍受尺寸闸约束 */
-        extraClose: List<String> = emptyList(),
-        /** 用户自建排除词（防误点）：命中就整窗放弃，优先级高于所有命中证据 */
-        extraExclude: List<String> = emptyList(),
-    ): PopupHit? {
-        if (screenW <= 0 || screenH <= 0) return null
-        val snaps = collectSnaps(root, screenW, screenH)
-        if (snaps.isEmpty()) {
-            lastPopupDebug = "popup-empty"
-            return null
-        }
-
-        // 业务弹窗排除（第一道）：屏幕中央区的业务词 + 用户自建排除词。
-        // 只看中央区是因为首页常驻的「登录」「银行卡」在四角，不能因此整页放弃
-        businessWordIn(snaps, screenW, screenH, null, extraExclude)?.let {
-            lastPopupDebug = "popup-block 业务弹窗「${it.take(12)}」"
-            return null
-        }
-
-        // 卡片 = 营销文案的包围盒。没有营销文案的窗口不是营销弹窗，宁可漏掉
-        val texts = snaps.filter { s ->
-            val t = s.text ?: return@filter false
-            val cy = s.rect.exactCenterY()
-            t.length in 2..20 && cy > screenH * 0.10f && cy < screenH * 0.89f &&
-                !NUMBER_ONLY.matches(t)
-        }
-        val marketingTexts = texts.filter { s ->
-            val t = s.text ?: return@filter false
-            MARKETING_WORDS.any { t.contains(it, ignoreCase = true) }
-        }
-        val card = if (marketingTexts.size >= 2) unionRect(marketingTexts.map { it.rect }) else null
-        val cardOk = card != null &&
-            card.width().toFloat() in (screenW * 0.25f)..(screenW * 0.92f) &&
-            card.height().toFloat() in (screenH * 0.12f)..(screenH * 0.62f) &&
-            card.exactCenterX() in (screenW * 0.35f)..(screenW * 0.65f) &&
-            card.exactCenterY() in (screenH * 0.28f)..(screenH * 0.72f)
-
-        // 业务弹窗排除（第二道）：卡片范围内的业务词。弹窗自己的文案都在卡片里，
-        // 这一道能拦住「确认收货 / 开通会员前先绑定手机号」这类不带营销词的业务弹窗
-        if (card != null) {
-            businessWordIn(snaps, screenW, screenH, card, extraExclude)?.let {
-                lastPopupDebug = "popup-block 业务弹窗(卡片内)「${it.take(12)}」"
-                return null
-            }
-        }
-
-        // 候选按证据强度打分，不再「谁先被 BFS 到就点谁」：
-        // 1=E3（文字就是关闭且在中下）2=E5（关闭某活动）3=E4（卡片全宽按钮）
-        // 4=E1（卡片边缘小控件）5=E2（稀疏窗口角落小图）6=E6（图片弹窗唯一小控件）
-        // 弱证据（5/6）出现多个候选时直接放弃——歧义状态下点错的代价更大
-        var best: PopupHit? = null
-        var bestTier = Int.MAX_VALUE
-        var bestArea = Long.MAX_VALUE
-        var bestTag = ""
-        var weakCount = 0
-
-        fun consider(tier: Int, s: Snap, why: String, tag: String) {
-            if (tier >= 5) weakCount++
-            val area = s.rect.width().toLong() * s.rect.height()
-            if (tier < bestTier || (tier == bestTier && area < bestArea)) {
-                bestTier = tier
-                bestArea = area
-                best = PopupHit(s.node, why, tier)
-                bestTag = tag
-            }
-        }
-
-        // 「像弹窗的窗口」：节点少，或窗口本身没铺满屏幕（对话框/浮层）
-        val sparse = snaps.size <= SPARSE_NODES
-        val dialogish = sparse || dialogWindow
-
-        for (s in snaps) {
-            val st = s.text
-            // 归一化文本只用于匹配，显示仍用原文（「关 闭」显示出来还能认出问题）
-            val stn = st?.let { normalizeForMatch(it) }
-            val shapeOk = closeCandidate(s, screenW, screenH) != null
-            // E3：文字以"关闭"开头（淘宝 poplayer 的按钮描述就叫"关闭按钮"），
-            // 且落在屏幕中央偏下——正常页面的关闭钮都在角落。
-            // 用 startsWith 而不是 contains：只排除正文里顺带提到"关闭"的句子
-            if (shapeOk && stn != null && stn.length <= 6 &&
-                STRONG_CLOSE_WORDS.any { stn.startsWith(it, ignoreCase = true) } &&
-                s.rect.exactCenterX() > screenW * 0.30f && s.rect.exactCenterX() < screenW * 0.70f &&
-                s.rect.exactCenterY() > screenH * 0.55f
-            ) {
-                consider(1, s, "关闭「$st」", "E3")
-            }
-            // E5：文字明说是「关闭某活动/广告/浮层」。这类控件就是关广告的，
-            // 不套位置闸——京东首页那个「关闭浮层活动」贴在屏幕右缘（中心 x≈94%），
-            // 按普通关闭钮的 92% 上限会被挡掉；尺寸闸也放宽到 22% 屏宽
-            if (closeSizeOk(s, screenW, screenH) && stn != null && stn.length in 2..10 &&
-                STRONG_CLOSE_WORDS.any { stn.startsWith(it, ignoreCase = true) } &&
-                AD_WORDS.any { stn.contains(it, ignoreCase = true) }
-            ) {
-                consider(2, s, "关闭「$st」", "E5")
-            }
-            // E7：用户自建命中词。用户明确说这是关闭按钮，位置不再限制，
-            // 但仍要求尺寸像按钮（小控件 ≤22% 屏宽，或卡片级按钮 ≤92% 宽 × ≤12% 高）
-            if (stn != null && extraClose.isNotEmpty() && stn.length <= 10 &&
-                extraClose.any { stn.contains(it, ignoreCase = true) } &&
-                (closeSizeOk(s, screenW, screenH) ||
-                    (s.rect.width() <= screenW * 0.92f && s.rect.height() <= screenH * 0.12f))
-            ) {
-                consider(2, s, "命中「$st」", "E7")
-            }
-            // E4：卡片下沿内的全宽文字按钮。这类按钮高度常超 8% 屏高、宽度接近整卡，
-            // 过不了 closeCandidate 的形状闸，但文字本身就是关闭语义，且有卡片做背书
-            if (cardOk && card != null && stn != null && stn.length in 2..10 &&
-                CLOSE_WORDS.any { stn.startsWith(it, ignoreCase = true) } &&
-                s.rect.width() <= screenW * 0.92f && s.rect.height() <= screenH * 0.12f &&
-                s.rect.exactCenterX() > card.left - screenW * 0.06f &&
-                s.rect.exactCenterX() < card.right + screenW * 0.06f &&
-                s.rect.exactCenterY() > card.bottom - screenH * 0.16f &&
-                s.rect.exactCenterY() < card.bottom + screenH * 0.06f
-            ) {
-                consider(3, s, "关闭「$st」", "E4")
-            }
-            if (!shapeOk) continue
-            // E1：营销卡片边缘的小控件
-            if (cardOk && card != null && edgeOfCard(s.rect, card, screenW, screenH)) {
-                consider(4, s, "弹窗评论按钮", "E1")
-            }
-            // E2：独立弹窗窗口（节点稀疏或窗口不满屏），纵向偏下的小图控件
-            if (dialogish && s.clickable &&
-                s.rect.exactCenterY() > screenH * 0.60f &&
-                s.rect.width() <= screenW * 0.12f
-            ) {
-                consider(5, s, "弹窗角落按钮", "E2")
-            }
-        }
-
-        // E6：无营销文案的纯图片弹窗——整窗只有一个居中大卡片，
-        // 且它下沿只有一个小可点控件。卡片多于一个说明是信息流，不是弹窗
-        if (best == null && card == null) {
-            val cards = snaps.filter { looksLikeDialogCard(it, screenW, screenH) }
-            if (cards.size == 1) {
-                val box = cards[0].rect
-                val near = snaps.filter { s ->
-                    closeSizeOk(s, screenW, screenH) && s.clickable &&
-                        s.rect.exactCenterX() > box.left - screenW * 0.06f &&
-                        s.rect.exactCenterX() < box.right + screenW * 0.06f &&
-                        s.rect.exactCenterY() > box.bottom - screenH * 0.10f &&
-                        s.rect.exactCenterY() < box.bottom + screenH * 0.05f
-                }
-                if (near.size == 1) consider(6, near[0], "图片弹窗关闭钮", "E6")
-            }
-        }
-
-        val hit = best
-        if (hit != null && bestTier >= 5 && weakCount > 1) {
-            lastPopupDebug = "popup-ambiguous nodes=${snaps.size} weak=$weakCount"
-            return null
-        }
-        if (hit != null) {
-            lastPopupDebug = "popup-hit $bestTag「${hit.why}」nodes=${snaps.size} weak=$weakCount"
-            return hit
-        }
-        lastPopupDebug = "popup-no-match nodes=${snaps.size} texts=${texts.size}" +
-            " card=${if (cardOk) "ok" else "no"} mk=${marketingTexts.size}"
-        return null
-    }
-
-    /** 像对话框的卡片：不铺满屏、居中、面积 8%~55%，且自身不可点 */
-    private fun looksLikeDialogCard(s: Snap, w: Int, h: Int): Boolean {
-        if (s.clickable) return false
-        val r = s.rect
-        if (r.width() <= 0 || r.height() <= 0) return false
-        val area = r.width().toFloat() * r.height() / (w.toFloat() * h)
-        return area in 0.08f..0.55f &&
-            r.width() >= w * 0.30f && r.width() <= w * 0.92f &&
-            r.height() >= h * 0.12f && r.height() <= h * 0.55f &&
-            r.exactCenterX() in (w * 0.30f)..(w * 0.70f) &&
-            r.exactCenterY() in (h * 0.25f)..(h * 0.78f)
-    }
-
-    /**
-     * 业务弹窗关键词扫描。card 为 null 时只看屏幕中央区；给了卡片就只看卡片范围。
-     * 返回命中的原文（用于日志），没有返回 null。
-     */
-    private fun businessWordIn(snaps: List<Snap>, w: Int, h: Int, card: Rect?, extra: List<String> = emptyList()): String? {
-        for (s in snaps) {
-            val t = s.text ?: continue
-            val cx = s.rect.exactCenterX()
-            val cy = s.rect.exactCenterY()
-            val inScope = if (card == null) {
-                cx > w * 0.30f && cx < w * 0.70f && cy > h * 0.18f && cy < h * 0.88f
-            } else {
-                cx > card.left - w * 0.04f && cx < card.right + w * 0.04f &&
-                    cy > card.top - h * 0.02f && cy < card.bottom + h * 0.02f
-            }
-            if (!inScope) continue
-            if (POPUP_BUSINESS_WORDS.any { t.contains(it, ignoreCase = true) }) return t
-            if (extra.any { t.contains(it, ignoreCase = true) }) return t
-        }
-        return null
-    }
-
-    /** 节点快照：一次 BFS 拿到 rect / 类名 / 文本 / 可点，避免反复跨进程读节点 */
-    private class Snap(
-        val node: AccessibilityNodeInfo,
-        val rect: Rect,
-        val cls: String,
-        val text: String?,
-        val clickable: Boolean,
-    )
-
-    private fun collectSnaps(root: AccessibilityNodeInfo, screenW: Int, screenH: Int): List<Snap> {
-        val out = ArrayList<Snap>(POPUP_SCAN_NODES)
-        val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
-        queue.add(root to 0)
-        while (queue.isNotEmpty() && out.size < POPUP_SCAN_NODES) {
-            val (node, depth) = queue.removeFirst()
-            val f = factsOf(node)
-            val r = f.rect
-            // 负宽高（滚动动画里的数码轮）与越界节点（WebView 常用 Integer.MIN_VALUE
-            // 表示"未布局"）直接丢弃，否则会把包围盒拉爆
-            if (!r.isEmpty && r.width() > 0 && r.height() > 0 &&
-                r.left > -screenW && r.right < screenW * 2 &&
-                r.top > -screenH && r.bottom < screenH * 2
-            ) {
-                out.add(
-                    Snap(
-                        node = node,
-                        rect = Rect(r),
-                        cls = f.cls,
-                        text = f.label,
-                        clickable = f.clickable,
-                    )
-                )
-            }
-            // 超过 MAX_DEPTH 不再往下钻：信息流列表嵌套极深，
-            // 每多一层就是一轮跨进程读属性，而弹窗关闭钮不会埋在十几层以下
-            if (depth < MAX_DEPTH) {
-                for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it to depth + 1) }
-            }
-        }
-        return out
-    }
-
-    /** 关闭候选的形状与位置校验；返回非空表示形状合格（内容为尺寸描述） */
-    private fun closeCandidate(s: Snap, w: Int, h: Int): String? {
-        val cw = s.rect.width().toFloat()
-        val ch = s.rect.height().toFloat()
-        if (cw <= 0f || ch <= 0f) return null
-        if (cw > w * 0.14f || ch > h * 0.08f) return null
-        if (cw < w * 0.02f || ch < h * 0.008f) return null
-        val cx = s.rect.exactCenterX()
-        val cy = s.rect.exactCenterY()
-        if (cx < w * 0.28f || cx > w * 0.92f) return null
-        if (cy < h * 0.18f || cy > h * 0.88f) return null
-        if (NOT_CLOSE_CLS.any { s.cls.contains(it) }) return null
-        val imageLike = s.cls.contains("ImageView") || s.cls.contains("ImageButton") ||
-            s.cls == "android.view.View" || s.cls.endsWith(".View")
-        val t = s.text
-        val textClose = t != null && CLOSE_WORDS.any { t.contains(it, ignoreCase = true) }
-        if (!s.clickable && !textClose) return null
-        if (!imageLike && !textClose) return null
-        return "${cw.toInt()}x${ch.toInt()}"
-    }
-
-    /**
-     * 只做尺寸/类名闸（不看位置）：给 E5 用。
-     * 关闭“浮层活动”类按钮常贴在屏幕右缘或顶部，用普通关闭钮的位置闸会漏掉。
-     */
-    private fun closeSizeOk(s: Snap, w: Int, h: Int): Boolean {
-        val cw = s.rect.width().toFloat()
-        val ch = s.rect.height().toFloat()
-        if (cw <= 0f || ch <= 0f) return false
-        if (cw > w * 0.22f || ch > h * 0.09f) return false
-        if (cw < w * 0.02f || ch < h * 0.008f) return false
-        if (NOT_CLOSE_CLS.any { s.cls.contains(it) }) return false
-        return true
-    }
-
-    /** 候选是否贴着卡片边缘：内部控件不点，避免点到卡片里的收藏、加购图标 */
-    private fun edgeOfCard(r: Rect, card: Rect, w: Int, h: Int): Boolean {
-        val cx = r.exactCenterX()
-        val cy = r.exactCenterY()
-        val inRangeX = cx > card.left - w * 0.06f && cx < card.right + w * 0.06f
-        val inRangeY = cy > card.top - h * 0.04f && cy < card.bottom + h * 0.10f
-        if (!inRangeX || !inRangeY) return false
-        val nearEdge = Math.abs(cx - card.left) < w * 0.12f ||
-            Math.abs(cx - card.right) < w * 0.12f ||
-            Math.abs(cy - card.top) < h * 0.12f ||
-            Math.abs(cy - card.bottom) < h * 0.12f
-        return nearEdge
-    }
-
-    private fun unionRect(rects: List<Rect>): Rect? {
-        if (rects.isEmpty()) return null
-        val out = Rect(rects[0])
-        for (i in 1 until rects.size) out.union(rects[i])
-        return out
-    }
-
-    /**
      * 分隔符归一化再匹配。
      *
-     * 广告里的跳过按钮常写成「跳 过」「[跳过]」「跳·过」「跳\n过」，原样 contains 一个都
+     * 按钮文字常写成「跳 过」「[跳过]」「跳·过」「跳\n过」，原样 contains 一个都
      * 命中不了。归一化只去掉分隔符，不改变字序，所以不会把两段不相干文字拼成命中。
      */
     private fun normalizeForMatch(s: String): String = s.replace(SEPARATOR_RE, "")
@@ -535,8 +163,7 @@ class NodeScanner(
     /**
      * 文本长度上限（相对闸）。
      *
-     * 原来是固定 24 字（[SkipRule.maxTextLength]）。对「跳过」这种两个字的词，24 字等于
-     * 放进来一整句广告语——正文里提到"跳过"的句子也能过闸，这是误点最集中的地方。
+     * 固定 24 字对「跳过」这种两个字的词等于没闸——正文里提到关键字的一整句都能过。
      * 改成「命中短语长度 + [TEXT_SLACK]」，同时不超过规则的绝对上限。
      */
     private fun allowedLen(m: Match): Int {
@@ -583,74 +210,26 @@ class NodeScanner(
         const val MAX_NODES = 800
         const val TRAVERSE_TIMEOUT_MS = 400L
         const val ANCESTOR_HOPS = 6
-        const val CORNER_SCAN_NODES = 400
 
         /**
          * 相对长度闸的余量。命中「跳过」时允许节点文字最多 10 字。
          *
-         * 不是照搬参考实现的 6：开屏按钮常见「跳过 5s」「跳过广告，进入APP」（9 字）
-         * 这类带倒计时或引导语的写法，6 字会误杀；而 24（原绝对上限）对两字词又等于没闸，
-         * 「跳过广告可以领取新人红包」这种 12 字正文也放得进来。
+         * 不是照搬参考实现的 6：按钮常见「跳过 5s」「跳过广告，进入APP」（9 字）
+         * 这类带倒计时或引导语的写法，6 字会误杀；而 24（原绝对上限）对两字词又等于没闸。
          */
         const val TEXT_SLACK = 8
 
         /**
          * 分隔符正则：空白、零宽字符、全角空格、中点、常见括号与竖线。
-         * 广告里的跳过按钮常写成「跳 过」「[跳过]」「跳·过」，原样 contains 匹配不到。
+         * 按钮文字常写成「跳 过」「[跳过]」「跳·过」，原样 contains 匹配不到。
          */
         val SEPARATOR_RE =
             Regex("[\\s\\u200B-\\u200D\\uFEFF\\p{Z}·\\-_|/•\\[\\]()（）【】]+")
 
-        /** 负向关键词：出现即判定不是广告跳过按钮（宁可少点，不能误点引导页） */
+        /** 负向关键词：出现即判定不是要点的按钮（宁可少点，不能误点引导页） */
         val NEGATIVE_HINTS = listOf(
             "教程", "引导", "新手", "跳过此步", "跳过本",
             "tutorial", "guide", "walkthrough",
-        )
-
-        // ———————— 弹窗（应用内覆盖层） ————————
-
-        const val POPUP_SCAN_NODES = 500
-
-        /** 遍历深度上限，控制每次扫描的跨进程调用次数 */
-        const val MAX_DEPTH = 14
-
-        /** 节点数不超过这个值的窗口才按"独立弹窗 Activity"处理 */
-        const val SPARSE_NODES = 60
-
-        /** 纯数字/符号文本不参与卡片包围盒（价格、倒计时、数码轮） */
-        val NUMBER_ONLY = Regex("^[\\d.\\s¥￥:：]+$")
-
-        /** 关闭类文案：出现即视为按钮文字 */
-        val CLOSE_WORDS = listOf(
-            "关闭", "close", "×", "✕", "✖",
-            "我知道了", "知道了", "以后再说", "下次再说",
-            "暂不", "暂不需要", "先逛逛", "残忍拒绝", "不再提示",
-        )
-
-        /** 强关闭信号：短文本命中即直接点，不再依赖卡片证据 */
-        val STRONG_CLOSE_WORDS = listOf("关闭", "close", "×", "✕", "✖")
-
-        /** 营销文案：卡片里没有这些词，就不是营销弹窗，不点 */
-        val MARKETING_WORDS = listOf(
-            "恭喜", "获得", "已存入", "领取", "开心收下", "签到", "红包",
-            "抽奖", "膨胀", "礼包", "福利", "奖励", "无门槛", "新人专享", "免费领",
-        )
-
-        /** E5 用：关闭词后面跟着这几个词，说明关的是广告类浮层而不是业务控件 */
-        val AD_WORDS = listOf("活动", "广告", "浮层", "弹窗", "推荐", "推广", "营销")
-
-        /** 业务弹窗排除词：登录、支付、授权、隐私、订单这类弹窗点掉会打断正常操作。
-         *  业务词优先于营销词——命中就整窗放弃 */
-        val POPUP_BUSINESS_WORDS = listOf(
-            "登录", "注册", "授权", "同意", "隐私", "协议", "密码", "验证码",
-            "支付", "付款", "转账", "银行卡", "确认", "删除", "退出", "卸载",
-            "收货", "实名", "绑定", "注销", "退款", "提现", "订单",
-        )
-
-        /** 这些控件不可能是关闭按钮 */
-        val NOT_CLOSE_CLS = listOf(
-            "EditText", "SeekBar", "ProgressBar", "RecyclerView", "ListView",
-            "ScrollView", "ViewPager", "WebView",
         )
     }
 }

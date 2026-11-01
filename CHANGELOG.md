@@ -2,6 +2,28 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.0 - 2026-11-01 · 撤掉两条启发式通道，改为只执行自建规则
+
+**起因**：微信聊天窗口里出现误操作。查代码确认两条通道在聊天页都能命中：内置关键字扫描（`跳过/skip` 文本、`skip` viewId、倒计时正则）对任何 App 的任何页面生效，唯一约束是「排除屏幕中央区 + 面积 ≤12% 屏 + 文本长度闸」；弹窗通道 `tryPopupClose` 在任何内容变化后都跑，E3「文本以『关闭』开头且 ≤6 字、横向居中偏下」、E1「贴营销卡片边缘的小控件（含头像）」、E6「居中大图下一个控件」都能落在聊天内容上；`popupWindowCandidates()` 只排除自己和桌面，**输入法窗口也在扫描范围内**。
+
+**改了什么**
+1. 删除 `BuiltinRules`（`SkipRule.kt`），`builtinScanner` 与所有调用点一并移除。
+2. 删除弹窗通道整块：`tryPopupClose` / `popupWindowCandidates` / `gatePopup` / 弱证据两次确认 / `findPopupCloseTarget` + E1–E7 全部证据与常量。
+3. `NodeScanner` 只保留 `findSkipTarget`（用户 node 规则的匹配 + 位置/面积/长度闸），删掉 `findCornerButton`、`popupHit`、`lastPopupDebug` 等死代码；`hasAdHint` 参数一并去掉（没有内置命中，免位置闸的入口不存在了）。
+4. 事件入口只收 `WINDOW_STATE_CHANGED` / `WINDOW_CONTENT_CHANGED`；去掉「启动窗口 12 秒内才扫描」的开屏闸——规则是自己建的，任何时候都该生效；没有节点规则就直接返回，一次节点遍历都不做。
+5. 核验改成 `findUserTargetInAnyWindow(pkg)`：只扫**属于该 App** 的窗口，且必须拿到按该包名构建的扫描器；没有对应规则时返回 null（不拿别的规则凑数补刀）。
+6. 规则页删掉「关键字」整卡（`KeywordStore` 只喂弹窗通道，通道没了就是死配置）；`keywords.json` 与备份/恢复逻辑保留不动，老备份照样能读。
+7. 文案：无障碍服务说明、首页状态、页脚改为「只执行你从快照里点选的规则，规则按应用隔离」。
+
+**影响面**
+- 没有自建规则的应用（含微信等聊天类）：**不再有任何自动动作**。
+- 开屏广告不再被自动识别，只在「该 App 已有规则且命中」时才点。
+- 规则仍按 `app` + 可选 `activity` 过滤（`RuleStore.nodeRulesAsScannerRules` / `pathRules` / `pointRules`），跨应用一条都不套用。
+
+**没动的**：`CORNER_TAP_PKGS`（酷安 / 网易邮箱 / e海）冷启动右上角盲点仍在，属用户未要求改动的范围，待确认后再决定是否关闭。
+
+**版本** 0.17.0 / versionCode 72。
+
 ## 0.16.24 - 2026-11-01 · 包名彻底拿不到也存截图（unknown + 手动指定）
 
 - 0.16.23 只加了「指定应用」的界面，但抓取侧在 `pkg == null` 时仍然 `snap_no_pkg` 直接返回，等于路还是堵着。
