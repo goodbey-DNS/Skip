@@ -24,7 +24,17 @@ class ScreenshotOverlayView @JvmOverloads constructor(
     private var bmp: Bitmap? = null
     private var nodes: List<SnapshotStore.Node> = emptyList()
     private var selected: SnapshotStore.Node? = null
-    private var scale = 1f
+
+    /**
+     * 截图与节点坐标所在的原始像素空间（= 抓取时的屏幕分辨率）。
+     *
+     * 底图为了省内存按 inSampleSize=2 解码，位图只有原始的一半大；
+     * 而节点矩形是全屏像素。用位图宽度算缩放会让框整体偏 2 倍——
+     * 点到的控件和画出来的框对不上，长按取点的 dp 也跟着算错。
+     * 所以缩放基准必须是原始像素，不能是位图尺寸。
+     */
+    private var srcW = 0
+    private var srcH = 0
     private var longFired = false
     private var pickX = -1f
     private var pickY = -1f
@@ -33,7 +43,7 @@ class ScreenshotOverlayView @JvmOverloads constructor(
         context,
         object : android.view.GestureDetector.SimpleOnGestureListener() {
             override fun onLongPress(e: android.view.MotionEvent) {
-                val s = scale
+                val s = scaleToView()
                 if (s <= 0f) return
                 longFired = true
                 pickX = e.x / s
@@ -68,8 +78,26 @@ class ScreenshotOverlayView @JvmOverloads constructor(
     }
     private val rf = RectF()
 
-    fun setContent(bitmap: Bitmap?, nodes: List<SnapshotStore.Node>) {
+    /** 原始像素 → 视图像素的缩放比（不依赖 onDraw 是否已跑过） */
+    private fun scaleToView(): Float {
+        val sw = if (srcW > 0) srcW else bmp?.width ?: 0
+        val w = width
+        return if (w > 0 && sw > 0) w.toFloat() / sw else 1f
+    }
+
+    fun setContent(
+        bitmap: Bitmap?,
+        nodes: List<SnapshotStore.Node>,
+        srcWidth: Int = 0,
+        srcHeight: Int = 0,
+    ) {
         this.bmp = bitmap
+        // 旧快照的 meta 里没有 screenW/H：用节点包围盒的右下极值兜底，
+        // 它本来就是屏幕像素坐标，比位图尺寸（被 inSampleSize 缩过一半）准
+        this.srcW = if (srcWidth > 0) srcWidth
+        else nodes.maxOfOrNull { it.r } ?: bitmap?.width ?: 0
+        this.srcH = if (srcHeight > 0) srcHeight
+        else nodes.maxOfOrNull { it.b } ?: bitmap?.height ?: 0
         this.nodes = nodes
         selected = null
         requestLayout()
@@ -83,8 +111,11 @@ class ScreenshotOverlayView @JvmOverloads constructor(
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
-        val b = bmp
-        val h = if (b != null && w > 0) (w * b.height.toFloat() / b.width).toInt() else (200 * resources.displayMetrics.density).toInt()
+        val h = if (srcW > 0 && srcH > 0 && w > 0) {
+            (w * srcH.toFloat() / srcW).toInt()
+        } else {
+            (200 * resources.displayMetrics.density).toInt()
+        }
         setMeasuredDimension(w, h.coerceAtLeast(1))
     }
 
@@ -92,10 +123,9 @@ class ScreenshotOverlayView @JvmOverloads constructor(
         super.onDraw(canvas)
         val b = bmp ?: return
         if (width <= 0) return
-        scale = width.toFloat() / b.width
-        canvas.drawBitmap(b, null, RectF(0f, 0f, width.toFloat(), b.height * scale), viewPaint)
+        val s = scaleToView()
+        canvas.drawBitmap(b, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), viewPaint)
 
-        val s = scale
         for (n in nodes) {
             rf.set(n.l * s, n.t * s, n.r * s, n.b * s)
             if (n.clickable) canvas.drawRect(rf, clickStroke) else canvas.drawRect(rf, strokePaint)
@@ -119,7 +149,7 @@ class ScreenshotOverlayView @JvmOverloads constructor(
     override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
         if (e.action == android.view.MotionEvent.ACTION_DOWN) longFired = false
         gesture.onTouchEvent(e)
-        val s = scale
+        val s = scaleToView()
         val bx = e.x / s
         val by = e.y / s
         if (e.action == android.view.MotionEvent.ACTION_UP) {

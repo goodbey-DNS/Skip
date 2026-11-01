@@ -30,11 +30,12 @@
     <string name="settings_row_rules_sub">自建规则管理 · 快照点选生成</string>
     <string name="settings_row_ka">保活与后台</string>
     <string name="settings_row_ka_sub">静默复活 · 电池优化 · 自启动</string>
+    <string name="settings_row_version">版本</string>
+    <string name="version_label_format">v%1$s</string>
     <string name="settings_row_maintain">数据与维护</string>
     <string name="settings_row_maintain_sub">内存占用 · 清理缓存 · 清空统计 · 备份规则</string>
     <string name="maintain_title">数据与维护</string>
     <string name="clear_stats_warn_repeat">清空操作不可恢复，包含累计次数、排行榜与最近记录；保活日志不受影响。</string>
-    <string name="tab_about">关于</string>
 
     <string name="snap_channel">快照与规则</string>
     <string name="snap_notif_title">SkipAd 运行中</string>
@@ -66,15 +67,6 @@
     <string name="rule_delete_confirm">删除这条规则？</string>
 
     <string name="section_ka_settings">服务保活</string>
-    <string name="section_about">关于 SkipAd</string>
-    <string name="about_version_format">版本 v%1$s</string>
-    <string name="about_intro">安卓开屏广告自动跳过工具（类李跳跳自研版）。无障碍服务监听窗口变化，识别并自动点击「跳过」。</string>
-    <string name="section_about_privacy">隐私红线</string>
-    <string name="about_privacy_text">· 不申请 INTERNET / 存储 / 位置权限，永远\n· 所有识别与点击全部在本机完成，不上传任何数据\n· 权限清单：无障碍服务＝核心功能；通知＝掉线提醒；忽略电池优化＝降低被杀概率；WRITE_SECURE_SETTINGS＝静默复活（signature 级，须电脑 adb 手动授予）</string>
-    <string name="section_about_roadmap">开发路线</string>
-    <string name="about_roadmap_text">✅ M1 通用关键字引擎\n✅ M1.5 无障碍保活（静默复活 / 提醒模式）\n✅ M1.6 统计排行 / 电池优化 / 沉浸式\n→ M2 per-App 规则（viewId + 角落锚定坐标）与规则导入导出\n→ M3 节点快照 + 截屏点选生成规则\n→ M4 社区规则兼容 / OCR</string>
-    <string name="section_about_open">开源信息</string>
-    <string name="about_open_text">GitHub：notEatOranges/SkipAd\n许可证：MIT · 问题反馈请提 Issue\n设计文档见仓库 docs/design.md，变更记录见 CHANGELOG.md</string>
 
     <string name="section_maintain">应用维护</string>
     <string name="mem_format">内存占用约 %1$s MB · 数据库 %2$s KB</string>

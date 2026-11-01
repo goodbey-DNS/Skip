@@ -168,7 +168,11 @@ object Backup {
         var snapCount = 0
         val dirs = snaps.keys.map { it.substringBeforeLast('/') }.distinct()
         for (dir in dirs) {
-            val target = File(snapRoot, dir.substringAfter("snapshots/"))
+            val name = dir.substringAfter("snapshots/")
+            // 目录名只能是「时间戳_包名」：带分隔符或 .. 的一律丢弃。
+            // 否则一个手改过的 zip 里写 snapshots/../../xxx 就能把文件写到 filesDir 之外
+            if (name.isEmpty() || name.contains('/') || name.contains('\\') || name.contains("..")) continue
+            val target = File(snapRoot, name)
             target.mkdirs()
             var wrote = false
             listOf("meta.json", "tree.json").forEach { n ->

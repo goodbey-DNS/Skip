@@ -59,6 +59,15 @@ class SkipAccessibilityService : AccessibilityService() {
     private var userScannerKey: String? = null
 
     /**
+     * userScanner 是按哪个包构建的。
+     *
+     * 用户规则是 per-App 的，但 [findTargetInAnyWindow] 会遍历所有窗口（含浮层）。
+     * 不看包名就拿同一份扫描器过一遍，等于把 A 应用的规则套到 B 应用的控件上——
+     * 命中就点，是实打实的误点。
+     */
+    private var userScannerPkg: String? = null
+
+    /**
      * 用户自建关键字缓存：**按包名**存，弹窗通道扫哪个窗口就取哪个包的那份；
      * 关键字版本号一变整份清掉（用户改词无需重启服务）。
      */
@@ -385,6 +394,8 @@ class SkipAccessibilityService : AccessibilityService() {
         popupClickAt.clear()
         popupClickCount.clear()
         popupBlockedUntil.clear()
+        // 广告标识缓存是按窗口 id 记的，换页后旧 id 的结果没有意义
+        adHintCache.clear()
         lastWeakHit = null
         userScannerKey = null
         // 同页面重复 WSC 会在上面 early return，这里清空只在真的换页面时发生
@@ -475,6 +486,7 @@ class SkipAccessibilityService : AccessibilityService() {
             userScanner = if (nodeRules.isEmpty()) null else NodeScanner(nodeRules, factsCache).also {
                 it.verbose = Log.isLoggable(TAG, Log.VERBOSE)
             }
+            userScannerPkg = pkg
         }
 
         // 关键字不再在事件入口统一加载：弹窗通道会扫多个窗口，
@@ -711,13 +723,17 @@ class SkipAccessibilityService : AccessibilityService() {
     private fun findTargetInAnyWindow(): Triple<AccessibilityNodeInfo, String, String>? {
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
-        for (window in windows) {
+        // getWindows() 是平台类型，服务刚起来时可能为 null
+        val wins = runCatching { windows?.toList() ?: emptyList() }.getOrDefault(emptyList())
+        for (window in wins) {
             val root = window.root ?: continue
             val wp = root.packageName?.toString() ?: continue
             if (wp == packageName || wp in blacklist) continue
             // 窗口里有"广告"标识时，跳过按钮不设位置闸（微博的跳过就在右下角）
             val adHint = adHintFor(window.id, root)
-            val hit = userScanner?.findSkipTarget(root, w, h, adHint)
+            // 用户规则只对本包生效：窗口属于别的 App（浮层、对话框）时退回内置规则
+            val us = userScanner.takeIf { wp == userScannerPkg }
+            val hit = us?.findSkipTarget(root, w, h, adHint)
                 ?: builtinScanner?.findSkipTarget(root, w, h, adHint)
             if (hit != null) return Triple(hit.first, wp, "win#${window.id} ${window.type}")
             // 弹窗通道点下去之后也按同一套核验：弹窗还在说明没点掉，补刀一次
@@ -1077,7 +1093,9 @@ class SkipAccessibilityService : AccessibilityService() {
             // 但写文件不再阻塞无障碍回调
             Io.run("diag-dump") {
                 dir.mkdirs()
-                dir.listFiles()?.sortedBy { it.name }?.dropLast(20)?.forEach { it.delete() }
+                // 按修改时间留最新 20 份：文件名前缀有 match_/popup_/giveup_ 三种，
+                // 按名字排序会把三类混在一起，可能整类被删而另一类全留着
+                dir.listFiles()?.sortedBy { it.lastModified() }?.dropLast(20)?.forEach { it.delete() }
                 File(dir, "${tag}_$ts.txt").writeText(text)
             }
         } catch (e: Exception) {

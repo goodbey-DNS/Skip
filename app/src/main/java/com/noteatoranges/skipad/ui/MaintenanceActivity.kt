@@ -13,7 +13,6 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import com.noteatoranges.skipad.R
 import com.noteatoranges.skipad.db.StatsDb
-import com.noteatoranges.skipad.store.StatsStore
 import com.noteatoranges.skipad.util.AppLabels
 import com.noteatoranges.skipad.util.Backup
 import com.noteatoranges.skipad.util.Io
@@ -191,7 +190,8 @@ class MaintenanceActivity : AppCompatActivity() {
             .setNegativeButton(R.string.action_cancel, null)
             .setPositiveButton(R.string.action_confirm_clear) { _, _ ->
                 StatsDb.get(this).clear()
-                StatsStore.clear(this)
+                // 只清跳过统计。以前这里还调了 StatsStore.clear()，但它清的是保活日志，
+                // 与界面上「保活日志不受影响」的承诺相反——用户会凭空丢掉掉线记录。
                 Toast.makeText(this, R.string.clear_stats_done, Toast.LENGTH_SHORT).show()
             }
             .show()

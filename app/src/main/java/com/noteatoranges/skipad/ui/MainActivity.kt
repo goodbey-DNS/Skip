@@ -27,7 +27,7 @@ import com.noteatoranges.skipad.util.Ui
 import java.util.Locale
 
 /**
- * 单 Activity 三 Tab（悬浮底栏）：首页（状态/自检/排行榜）、设置（保活/系统权限/维护）、关于。
+ * 单 Activity 双 Tab（悬浮底栏）：首页（状态/自检/排行榜）、设置（规则/保活/维护/版本）。
  * 最近记录保留二级页（列表长，从首页排行榜卡进入）。
  */
 class MainActivity : AppCompatActivity() {
@@ -74,8 +74,8 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, MaintenanceActivity::class.java))
         }
 
-        pages = listOf(findViewById(R.id.page_home), findViewById(R.id.page_settings), findViewById(R.id.page_about))
-        tabs = listOf(findViewById(R.id.tab_home), findViewById(R.id.tab_settings), findViewById(R.id.tab_about))
+        pages = listOf(findViewById(R.id.page_home), findViewById(R.id.page_settings))
+        tabs = listOf(findViewById(R.id.tab_home), findViewById(R.id.tab_settings))
         tabs.forEachIndexed { i, tab -> tab.setOnClickListener { selectTab(i) } }
 
         // 沉浸式 + 底部安全区：内容滚到手势条底下，玻璃 Tab 栏浮在其上
@@ -105,9 +105,9 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, RecentActivity::class.java))
         }
 
-        // —— 关于 ——
-        findViewById<TextView>(R.id.about_version_text).text = try {
-            getString(R.string.about_version_format, packageManager.getPackageInfo(packageName, 0).versionName)
+        // —— 设置页底部：版本号（原「关于」页唯一的长期有用信息）——
+        findViewById<TextView>(R.id.version_text).text = try {
+            getString(R.string.version_label_format, packageManager.getPackageInfo(packageName, 0).versionName)
         } catch (e: Exception) {
             ""
         }
@@ -119,7 +119,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun glassWidth(): Int =
-        minOf(dp(300), resources.displayMetrics.widthPixels - dp(40))
+        minOf(dp(if (tabs.size <= 2) 240 else 300), resources.displayMetrics.widthPixels - dp(40))
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
 

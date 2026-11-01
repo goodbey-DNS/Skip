@@ -71,7 +71,9 @@ class SnapshotDetailActivity : AppCompatActivity() {
         val screen = SnapshotStore.loadScreen(dir)
         val bmp = screen?.let { BitmapFactory.decodeFile(it.absolutePath, BitmapFactory.Options().apply { inSampleSize = 2 }) }
         nodes = SnapshotStore.loadNodes(dir)
-        overlay.setContent(bmp, nodes)
+        // 缩放基准用抓取时的屏幕像素（meta），不能用解码位图尺寸：
+        // 位图按 inSampleSize=2 解码，只有一半大，拿它算会让控件框整体偏 2 倍
+        overlay.setContent(bmp, nodes, meta.screenW, meta.screenH)
         overlay.onNodeTapped = { node -> selectNode(node) }
         overlay.onLongTapped = { x, y -> askLongPressPoint(x, y) }
         genButton.setOnClickListener {
@@ -326,7 +328,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
                     viewId, textContains, xRatio, yRatio, anchorVid, anchorText, dxDp, dyDp,
                     nodePath, dpX, dpY,
                 ) +
-                    "\n\n只在「${meta.activity.substringAfterLast('.').ifEmpty { "本页面" }}」生效。" +
+                    "\n\n" + scopeNote() +
                     "动作默认点击，可在规则页改成返回键。"
             )
             .setPositiveButton("保存") { _, _ ->
@@ -520,6 +522,22 @@ class SnapshotDetailActivity : AppCompatActivity() {
         dpX = dpX,
         dpY = dpY,
     )
+
+    /**
+     * 规则的生效范围说明。
+     *
+     * 快照没记到 Activity 类名时（服务在该 App 上还没收到带真实类名的窗口事件），
+     * activity 存空 → 规则变成「全 App 生效」。这对用户是风险扩大，必须当面说清，
+     * 不能像以前那样写一句「只在「本页面」生效」却实际放开到整个应用。
+     */
+    private fun scopeNote(): String {
+        val act = meta.activity.trim()
+        return if (act.isEmpty()) {
+            "⚠ 这份快照没记到页面名：规则会对整个 App 生效，误点风险比限定页面大。\n建议重抓一次快照再生成。\n\n"
+        } else {
+            "只在「${act.substringAfterLast('.')}」生效。\n\n"
+        }
+    }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
 
