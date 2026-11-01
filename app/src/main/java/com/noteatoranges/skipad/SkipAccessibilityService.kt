@@ -1039,6 +1039,41 @@ class SkipAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * 只存截图的降级路径。
+     *
+     * 有些应用（货拉拉企业版）在主界面把无障碍遍历整个关掉了，节点树根本读不到；
+     * 但截图仍可截，用户长按截图取点就能建坐标规则——坐标规则不依赖控件树。
+     */
+    private fun captureScreenshotOnly(attempt: Int) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            dumpSnapFailure(attempt)
+            Toast.makeText(this, R.string.snap_too_few, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val pkg = lastFgPkg
+        val act = pkg?.let { lastActivityClass[it] } ?: ""
+        val appCtx = applicationContext
+        takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor,
+            object : TakeScreenshotCallback() {
+                override fun onResult(bitmap: Bitmap?, srcW: Int, srcH: Int) {
+                    if (bitmap == null) {
+                        Toast.makeText(appCtx, R.string.snap_shot_failed, Toast.LENGTH_SHORT).show()
+                        return
+                    }
+                    val shotW = if (srcW > 0) srcW else resources.displayMetrics.widthPixels
+                    val shotH = if (srcH > 0) srcH else resources.displayMetrics.heightPixels
+                    val name = pkg ?: "unknown"
+                    Io.run("snapshot-save") {
+                        SnapshotStore.save(appCtx, name, act, emptyList(), bitmap, shotW, shotH)
+                        bitmap.recycle()
+                        StatsStore.logEvent(appCtx, "快照（仅截图）：$name")
+                    }
+                    Toast.makeText(appCtx, R.string.snap_shot_only, Toast.LENGTH_LONG).show()
+                }
+            })
+    }
+
     private fun captureNow(attempt: Int = 0) {
         val candidates = captureCandidates()
         if (candidates.isEmpty()) {
@@ -1120,7 +1155,9 @@ class SkipAccessibilityService : AccessibilityService() {
                 mainHandler.postDelayed({ captureNow(attempt + 1) }, CAPTURE_RETRY_DELAY_MS)
                 return
             }
-            Toast.makeText(this, R.string.snap_too_few, Toast.LENGTH_SHORT).show()
+            // 还拿不到就是应用自己禁了无障碍遍历（货拉拉企业版主界面就是，
+            // 系统级 uiautomator 一样读不到）。降级：只存截图，用户仍能长按取点建坐标规则
+            captureScreenshotOnly(attempt)
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
