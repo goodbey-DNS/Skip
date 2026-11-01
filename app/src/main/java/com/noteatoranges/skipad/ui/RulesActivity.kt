@@ -265,12 +265,15 @@ class RulesActivity : AppCompatActivity() {
                 setTextColor(getColor(R.color.text_secondary))
             })
             info.addView(TextView(this).apply {
-                val scope = r.activity?.substringAfterLast('.')?.takeIf { it.isNotEmpty() }
+                // 页面类名对用户没有意义（VisitorMainTabActivity 这种），只说「这一页 / 整个 App」；
+                // 需要区分多条规则时看上面那行的匹配条件就够了
+                val scoped = !r.activity.isNullOrBlank()
                 val limits = buildString {
                     if (r.cooldownMs > 0) append("间隔 ${r.cooldownMs / 1000f} 秒")
                     if (r.maxCount > 0) append(if (isEmpty()) "最多 ${r.maxCount} 次" else "，最多 ${r.maxCount} 次")
                 }
-                text = "范围：${scope ?: "这个 App 的所有页面"}${if (limits.isEmpty()) "" else " · $limits"}"
+                text = (if (scoped) "只在那一页动手" else "整个 App 都会试") +
+                    (if (limits.isEmpty()) "" else " · $limits")
                 textSize = 11f
                 setTextColor(getColor(R.color.text_secondary))
             })
