@@ -183,7 +183,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
             row.addView(TextView(this).apply {
                 text = buildString {
                     append("#${n.idx} ${n.cls.substringAfterLast('.')}")
-                    if (n.clickable) append(" ⬅可点击")
+                    if (n.clickable) append(" ⬅能点")
                 }
                 textSize = 13f
                 setTextColor(getColor(R.color.text_primary))
@@ -191,10 +191,10 @@ class SnapshotDetailActivity : AppCompatActivity() {
             })
             row.addView(TextView(this).apply {
                 text = buildString {
-                    if (n.text.isNotEmpty()) append("文本「${n.text.take(24)}」 ")
-                    if (n.desc.isNotEmpty()) append("描述「${n.desc.take(24)}」")
-                    if (n.vid.isNotEmpty()) append("id=${n.vid.substringAfterLast('/')}")
-                    if (isEmpty()) append("(无文本)")
+                    if (n.text.isNotEmpty()) append("文字「${n.text.take(24)}」 ")
+                    if (n.desc.isNotEmpty()) append("说明「${n.desc.take(24)}」")
+                    if (n.vid.isNotEmpty()) append("编号 ${n.vid.substringAfterLast('/')}")
+                    if (isEmpty()) append("(没有文字)")
                 }
                 textSize = 12f
                 setTextColor(getColor(R.color.text_secondary))
@@ -212,13 +212,18 @@ class SnapshotDetailActivity : AppCompatActivity() {
         val opts = ArrayList<String>()
         if (n.text.isNotEmpty() || n.desc.isNotEmpty()) opts.add(OPT_TEXT)
         if (n.vid.isNotEmpty()) opts.add(OPT_VID)
+        // 无文字的图片按钮唯一的稳定定位：挂在它自己（或旁边卡片）的控件引用上，
+        // 偏移用 dp 而不是屏幕百分比，换机型/分屏/弹窗变高都不会偏。
+        // 放在「按层级」之前：它认元素不认结构，比路径稳
+        if (n.vid.isNotEmpty() || n.text.isNotEmpty() || n.desc.isNotEmpty()) opts.add(OPT_RELATIVE)
         if (n.path.isNotEmpty()) opts.add(OPT_PATH)
         opts.add(OPT_POINT)
-        // 无文字的图片按钮唯一的稳定定位：挂在它自己（或旁边卡片）的控件引用上，
-        // 偏移用 dp 而不是屏幕百分比，换机型/分屏/弹窗变高都不会偏
-        if (n.vid.isNotEmpty() || n.text.isNotEmpty() || n.desc.isNotEmpty()) opts.add(OPT_RELATIVE)
         AlertDialog.Builder(this)
-            .setTitle("为 ${meta.pkg} 生成规则")
+            .setTitle("用哪种方式找这个按钮")
+            .setMessage(
+                "按你看到的样子选：有字选第一个；没字但有 id 选第二个；" +
+                    "叉号旁边有文字选第三个。下面两个容易失效，只在没别的办法时用。"
+            )
             .setItems(opts.toTypedArray()) { _, which ->
                 when (opts[which]) {
                     OPT_TEXT -> askText(n)
@@ -267,9 +272,9 @@ class SnapshotDetailActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("长按取点")
             .setMessage(
-                "点已取：屏幕中心偏移 ${dpX.toInt()}, ${dpY.toInt()} dp。\n" +
-                    "格式：dx, dy（dp，右下为正）。可直接改数值微调。\n" +
-                    "存的是 dp 不是百分比，换分辨率也不会偏。"
+                "已取点：从屏幕中心往右 ${dpX.toInt()}、往下 ${dpY.toInt()}\n" +
+                    "单位约一根手指宽（dp），右下为正。数字可以直接改来微调；" +
+                    "存的是这个单位不是百分比，换分辨率也不会偏。"
             )
             .setView(input)
             .setPositiveButton("生成规则") { _, _ ->
@@ -291,11 +296,12 @@ class SnapshotDetailActivity : AppCompatActivity() {
             setPadding(dp(20), dp(8), dp(20), dp(8))
         }
         AlertDialog.Builder(this)
-            .setTitle("相对此控件")
+            .setTitle("选一个参照物，再填往哪边偏")
             .setMessage(
-                "锚点：${anchor.take(30)}\n\n" +
-                    "格式：dx, dy（dp）。0, 0 = 点这个控件本身；" +
-                    "要点头顶卡片下方的关闭钮，就选那张卡片再填 0, 24。"
+                "参照物：${anchor.take(24)}\n\n" +
+                    "填「往右多少, 往下多少」，单位约一根手指宽；负数就是往左/往上。\n" +
+                    "0, 0 = 就点这个参照物本身。\n" +
+                    "例：叉号在弹窗右上角，先选弹窗里的标题，再填 130, -60。"
             )
             .setView(input)
             .setPositiveButton("下一步") { _, _ ->
@@ -327,8 +333,8 @@ class SnapshotDetailActivity : AppCompatActivity() {
             setPadding(dp(20), dp(8), dp(20), dp(8))
         }
         AlertDialog.Builder(this)
-            .setTitle("匹配文字")
-            .setMessage("按「包含」匹配。倒计时数字已自动去掉，也可以手动改短。")
+            .setTitle("它上面写的哪几个字")
+            .setMessage("只要按钮文字里包含这几个字就算命中。倒计时数字已经帮你去掉，也可以自己改短。")
             .setView(input)
             .setPositiveButton("下一步") { _, _ ->
                 val t = input.text.toString().trim()
@@ -423,24 +429,24 @@ class SnapshotDetailActivity : AppCompatActivity() {
         val sb = StringBuilder()
         when {
             nodePath != null -> {
-                sb.append("方式：结构路径 $nodePath\n\n")
+                sb.append("方式：按层级找（App 改版会失效）\n$nodePath\n\n")
                 val hit = nodes.firstOrNull { it.path == nodePath }
                 if (hit == null) {
-                    sb.append("⚠ 本帧没有这个路径，规则可能不生效")
+                    sb.append("⚠ 这一帧里没找到这个层级，规则可能不生效")
                 } else {
-                    sb.append("本帧命中：#${hit.idx} ${hit.cls.substringAfterLast('.')}")
+                    sb.append("这一帧命中：#${hit.idx} ${hit.cls.substringAfterLast('.')}")
                     if (hit.text.isNotEmpty() || hit.desc.isNotEmpty()) {
                         sb.append("「${hit.text.ifEmpty { hit.desc }.take(16)}」")
                     }
                     sb.append("\n位置 (${hit.l},${hit.t}) ${hit.w}×${hit.h}")
                     if (hit.vid.isEmpty() && hit.text.isEmpty() && hit.desc.isEmpty()) {
-                        sb.append("\n这是纯图标控件，没有 id/文字——路径定位正是为它准备的")
+                        sb.append("\n这个按钮没字也没 id，只能按层级找")
                     }
-                    sb.append("\n路径跟随控件层级：App 改版后可能失效，失效时重抓快照")
+                    sb.append("\n按页面结构记的，App 改版就会失效；失效了就重新抓一张快照")
                 }
             }
             dpX != null && dpY != null -> {
-                sb.append("方式：屏幕中心偏移 ${dpX.toInt()}, ${dpY.toInt()} dp\n\n")
+                sb.append("方式：按屏幕位置，从中心往右 ${dpX.toInt()}、往下 ${dpY.toInt()}\n\n")
                 val (rw, rh) = realScreenPx()
                 val d = resources.displayMetrics.density
                 val ax = rw / 2f + dpX * d
@@ -458,29 +464,29 @@ class SnapshotDetailActivity : AppCompatActivity() {
                 }
             }
             anchorVid != null || anchorText != null -> {
-                sb.append("方式：相对控件（锚点")
-                sb.append(if (anchorVid != null) " id=$anchorVid" else " 文字「${anchorText?.take(16)}」")
-                sb.append("）偏移 ${dxDp ?: 0}, ${dyDp ?: 0} dp\n\n")
+                sb.append("方式：挨着一个参照物点，往右/往下偏移\n")
+                sb.append(if (anchorVid != null) "参照物编号 $anchorVid" else "参照物文字「${anchorText?.take(16)}」")
+                sb.append("，偏移 ${dxDp ?: 0}, ${dyDp ?: 0}\n\n")
                 val hits = nodes.filter {
                     if (anchorVid != null) it.vid.contains(anchorVid, ignoreCase = true)
                     else it.text.contains(anchorText ?: "", ignoreCase = true) ||
                         it.desc.contains(anchorText ?: "", ignoreCase = true)
                 }.sortedBy { it.w.toLong() * it.h }
                 if (hits.isEmpty()) {
-                    sb.append("⚠ 本帧没有这个锚点，规则可能不生效")
+                    sb.append("⚠ 这一帧里没找到这个参照物，规则可能不生效")
                 } else {
                     val a = hits.first()
-                    sb.append("本帧命中 ${hits.size} 个锚点，取面积最小：#${a.idx} ${a.cls.substringAfterLast('.')}")
+                    sb.append("这一帧找到 ${hits.size} 个，取面积最小：#${a.idx} ${a.cls.substringAfterLast('.')}")
                     sb.append("\n落点约 (${a.l + a.w / 2 + (dxDp ?: 0)}, ${a.b + (dyDp ?: 0)})")
                 }
             }
             viewId != null -> {
                 val hits = nodes.filter { it.vid.contains(viewId, ignoreCase = true) }
-                sb.append("方式：控件 ID 包含\n$viewId\n\n")
+                sb.append("方式：认这个编号\n$viewId\n\n")
                 if (hits.isEmpty()) {
-                    sb.append("⚠ 本帧没有节点使用这个 ID，规则可能不生效")
+                    sb.append("⚠ 这一帧里没有节点用这个编号，规则可能不生效")
                 } else {
-                    sb.append("本帧命中 ${hits.size} 个节点")
+                    sb.append("这一帧命中 ${hits.size} 个节点")
                     hits.take(3).forEach {
                         sb.append("\n#${it.idx} ${it.cls.substringAfterLast('.')} ${it.w}×${it.h}")
                     }
@@ -494,11 +500,11 @@ class SnapshotDetailActivity : AppCompatActivity() {
                     it.text.contains(textContains, ignoreCase = true) ||
                         it.desc.contains(textContains, ignoreCase = true)
                 }
-                sb.append("方式：文字包含「$textContains」\n\n")
+                sb.append("方式：文字里包含「$textContains」\n\n")
                 if (hits.isEmpty()) {
-                    sb.append("⚠ 本帧没有节点匹配，规则可能不生效")
+                    sb.append("⚠ 这一帧里没有匹配的文字，规则可能不生效")
                 } else {
-                    sb.append("本帧命中 ${hits.size} 个节点")
+                    sb.append("这一帧命中 ${hits.size} 个节点")
                     hits.take(3).forEach {
                         sb.append("\n#${it.idx} ${it.cls.substringAfterLast('.')} ")
                         sb.append("「${it.text.ifEmpty { it.desc }.take(16)}」")
@@ -511,7 +517,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
                 val yr = yRatio ?: 0f
                 val x = rw * xr
                 val y = rh * yr
-                sb.append("方式：坐标 ${(100 * xr).toInt()}%，${(100 * yr).toInt()}%\n\n")
+                sb.append("方式：屏幕的 ${(100 * xr).toInt()}%，${(100 * yr).toInt()}%\n\n")
                 // 取面积最小的包含节点：根节点覆盖全屏，取第一个永远命中根节点
                 val under = nodes.filter {
                     it.w > 0 && it.h > 0 && x >= it.l && x <= it.r && y >= it.t && y <= it.b
@@ -522,7 +528,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
                 } else {
                     sb.append("落点：没有落在任何节点上")
                 }
-                sb.append("\n\n坐标规则只在打开 App 时自动点一次。")
+                sb.append("\n\n屏幕位置规则只在打开 App 时自动点一次。")
                 sb.append("应用内的广告，请长按悬浮钮手动执行。")
             }
         }
@@ -582,9 +588,9 @@ class SnapshotDetailActivity : AppCompatActivity() {
     private fun scopeNote(): String {
         val act = meta.activity.trim()
         return if (act.isEmpty()) {
-            "⚠ 这份快照没记到页面名：规则会对整个 App 生效，误点风险比限定页面大。\n建议重抓一次快照再生成。\n\n"
+            "⚠ 这份快照没记到页面名：规则会对整个 App 生效，误点风险比只限一页大。\n建议重抓一次快照再生成。\n\n"
         } else {
-            "只在「${act.substringAfterLast('.')}」生效。\n\n"
+            "只在这一页生效（${act.substringAfterLast('.')}），换到别的页面就不动手。\n\n"
         }
     }
 
@@ -620,11 +626,11 @@ class SnapshotDetailActivity : AppCompatActivity() {
     }
 
     private companion object {
-        const val OPT_TEXT = "按文字"
-        const val OPT_VID = "按控件 ID"
-        const val OPT_PATH = "按结构路径（图标按钮推荐）"
-        const val OPT_POINT = "按坐标（屏幕比例）"
-        const val OPT_RELATIVE = "相对此控件（推荐无文字按钮）"
+        const val OPT_TEXT = "按文字：按钮上写着「跳过」"
+        const val OPT_VID = "按编号：按钮没字，但有一串 id"
+        const val OPT_PATH = "按层级：叉号没字也没 id（易失效）"
+        const val OPT_POINT = "按屏幕位置：整页读不到控件"
+        const val OPT_RELATIVE = "挨着某个元素点：叉号旁边有字"
 
         /** 抽核心词用的词表，长词在前（firstOrNull 取第一个命中） */
         val CORE_WORDS = listOf("跳过广告", "关闭", "跳过", "close", "skip", "×", "✕")
