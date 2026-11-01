@@ -2,6 +2,24 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.16.11 - 2026-11-01 · 快照尺寸与坐标空间对齐（真机实测出来的一串偏位）
+
+**怎么发现的**
+- 0.16.10 修完缩放后真机抓快照验证，框仍然「顶部基本吻合、越往下越偏下」。导出备份解开看数据，一眼就明白：`meta.json` 记的是 `screenW=1220, screenH=2453`，而节点根节点 `b=2712`、截图也是 1220×2712。
+- 2453 是 `resources.displayMetrics.heightPixels`（不含导航栏的应用可用高度），截图是整屏。拿它当纵向基准，比例差 2712/2453 = 1.106，越靠下的控件偏得越多。
+
+**改了什么**
+1. `captureNow` 的截图回调改为读 `ScreenshotResult.hardwareBuffer` 的宽高（必须在 `close()` 之前读），`SnapshotStore.save` 记这套尺寸。无截图分支（API < 30）改用 `realScreenPx()`。
+2. 新增 `realScreenPx()`（`currentWindowMetrics.bounds`，低版本 `getRealMetrics`），服务与快照页各一份。
+3. `ScreenshotOverlayView.setContent` 取 `max(meta, 节点包围盒)`：旧快照的 meta 是错的，靠节点坐标兜住，不用重抓也能对齐。
+4. **坐标规则的落点也一起修了**：`resolvePoint` 的 dp 点与屏幕比例原本用 `displayMetrics` 算，而生成侧按截图/真实屏幕算，两边差 259px（≈94dp）。现在生成与回放统一走 `realScreenPx()`。这条影响所有已存的坐标规则——旧规则在 y 方向会相对过去上移约 9% 屏高，是真机重新标一遍更稳。
+5. 长按取点改用 `overlay.contentW/H`（已校准的截图尺寸），不再读 meta。
+
+**踩坑记录**
+- `HardwareBuffer.close()` 后再读宽高不保证有效，必须在 close 前取。
+- `displayMetrics` ≠ 屏幕像素。凡是与 `dispatchGesture` 坐标、全屏截图相关的换算都必须用 `currentWindowMetrics`。
+- 备份 zip 里不含 `screen.png`，靠 `tree.json` + `meta.json` 复现问题足够——这次就是靠导出的备份定位的。
+
 ## 0.16.10 - 2026-11-01 · 去掉关于页 + 全项目复查修一批缺陷
 
 **改了什么（用户要求）**

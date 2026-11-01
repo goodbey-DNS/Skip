@@ -274,6 +274,27 @@ class SkipAccessibilityService : AccessibilityService() {
     private fun dpF(v: Float): Float = v * resources.displayMetrics.density
 
     /**
+     * 真实屏幕像素（含状态栏 / 导航栏）。
+     *
+     * dispatchGesture 的坐标和全屏截图用的都是这套空间；`displayMetrics` 给的是
+     * 应用可用区域（1220x2453，少一条导航栏）。dp 点是按「屏幕中心」存的，
+     * 用 displayMetrics 算中心会让所有坐标规则系统性上飘 129px（≈47dp）。
+     */
+    private fun realScreenPx(): Pair<Int, Int> = try {
+        val wm = getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val b = wm.currentWindowMetrics.bounds
+            b.width() to b.height()
+        } else {
+            val dm = android.util.DisplayMetrics()
+            @Suppress("DEPRECATION") wm.defaultDisplay.getRealMetrics(dm)
+            dm.widthPixels to dm.heightPixels
+        }
+    } catch (e: Exception) {
+        resources.displayMetrics.widthPixels to resources.displayMetrics.heightPixels
+    }
+
+    /**
      * 解析坐标规则的落点。
      *
      * 有锚点时按锚点控件的实际矩形算（锚点中心 + dx，锚点底边 + dy），这样换机型、
@@ -283,9 +304,8 @@ class SkipAccessibilityService : AccessibilityService() {
     private fun resolvePoint(root: AccessibilityNodeInfo?, r: com.noteatoranges.skipad.db.SkipAppRule): Pair<Float, Float>? {
         // 自由取点：存的是「相对屏幕中心的 dp」，换分辨率/密度都能换算回正确位置
         if (r.hasDpPoint) {
-            val dm = resources.displayMetrics
-            return (dm.widthPixels / 2f + dpF(r.dpX ?: 0f)) to
-                (dm.heightPixels / 2f + dpF(r.dpY ?: 0f))
+            val (sw, sh) = realScreenPx()
+            return (sw / 2f + dpF(r.dpX ?: 0f)) to (sh / 2f + dpF(r.dpY ?: 0f))
         }
         if (r.hasAnchor) {
             val anchor = findAnchorRect(root, r)
@@ -298,7 +318,9 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         val xr = r.xRatio ?: return null
         val yr = r.yRatio ?: return null
-        return resources.displayMetrics.widthPixels * xr to resources.displayMetrics.heightPixels * yr
+        // 比例也是相对真实屏幕存的（生成时用的同一套尺寸），不能混用 displayMetrics
+        val (rw, rh) = realScreenPx()
+        return rw * xr to rh * yr
     }
 
     /** 在树里找锚点控件，多个命中时取面积最小的那个（最具体的那个才是按钮本体） */
@@ -1018,16 +1040,22 @@ class SkipAccessibilityService : AccessibilityService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor,
                 object : TakeScreenshotCallback() {
-                    override fun onResult(bitmap: Bitmap?) {
+                    override fun onResult(bitmap: Bitmap?, srcW: Int, srcH: Int) {
                         val appCtx = applicationContext
                         val nodeCount = nodes.size
+                        // 宽高用截图自己的尺寸，不是 displayMetrics：
+                        // displayMetrics 给的是「应用可用高度」(1220x2453)，不含导航栏；
+                        // 截图是整屏 (1220x2712)。拿 2453 当纵向基准，越靠下的控件
+                        // 偏差越大（旧快照的框「越往下越偏下」就是这么来的）。
+                        val shotW = if (srcW > 0) srcW else w
+                        val shotH = if (srcH > 0) srcH else h
                         Io.run("snapshot-save") {
-                            val dir = SnapshotStore.save(appCtx, pkg, act, nodes, bitmap, w, h)
+                            val dir = SnapshotStore.save(appCtx, pkg, act, nodes, bitmap, shotW, shotH)
                             // 全屏图 1220×2712 一张 13MB，compress 完就没人用了，
                             // 不主动回收会一直压在 native heap，抓几次就积几十 MB
                             bitmap?.recycle()
                             StatsStore.logEvent(appCtx, "快照已保存：$pkg（$nodeCount 节点）")
-                            Log.d(TAG, "snapshot saved ${dir.path} nodes=$nodeCount")
+                            Log.d(TAG, "snapshot saved ${dir.path} nodes=$nodeCount ${shotW}x$shotH")
                         }
                         Toast.makeText(appCtx, R.string.snap_saved, Toast.LENGTH_SHORT).show()
                     }
@@ -1035,8 +1063,9 @@ class SkipAccessibilityService : AccessibilityService() {
         } else {
             val appCtx = applicationContext
             val nodeCount = nodes.size
+            val (realW, realH) = realScreenPx()
             Io.run("snapshot-save") {
-                SnapshotStore.save(appCtx, pkg, act, nodes, null, w, h)
+                SnapshotStore.save(appCtx, pkg, act, nodes, null, realW, realH)
                 StatsStore.logEvent(appCtx, "快照已保存：$pkg（$nodeCount 节点，无截图）")
             }
             Toast.makeText(appCtx, R.string.snap_saved, Toast.LENGTH_SHORT).show()
@@ -1051,6 +1080,9 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         override fun onSuccess(screenshot: AccessibilityService.ScreenshotResult) {
+            // 尺寸要在 close() 之前读：HardwareBuffer 关了之后再取宽高就不保证有效
+            val shotW = screenshot.hardwareBuffer.width
+            val shotH = screenshot.hardwareBuffer.height
             val hw = android.graphics.Bitmap.wrapHardwareBuffer(
                 screenshot.hardwareBuffer, screenshot.colorSpace
             )
@@ -1058,10 +1090,10 @@ class SkipAccessibilityService : AccessibilityService() {
             screenshot.hardwareBuffer.close()
             // 硬件位图占的是图形内存，copy 完就没用了
             hw?.recycle()
-            onResult(bitmap)
+            onResult(bitmap, shotW, shotH)
         }
 
-        abstract fun onResult(bitmap: Bitmap?)
+        abstract fun onResult(bitmap: Bitmap?, srcW: Int, srcH: Int)
     }
 
     // ———————— ————————

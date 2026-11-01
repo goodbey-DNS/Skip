@@ -187,11 +187,11 @@ class SnapshotDetailActivity : AppCompatActivity() {
                     )
                     OPT_RELATIVE -> askRelative(n)
                     else -> {
-                        val dm = resources.displayMetrics
+                        val (rw, rh) = realScreenPx()
                         confirm(
                             "point",
-                            xRatio = (n.l + n.w / 2f) / dm.widthPixels,
-                            yRatio = (n.t + n.h / 2f) / dm.heightPixels,
+                            xRatio = (n.l + n.w / 2f) / rw,
+                            yRatio = (n.t + n.h / 2f) / rh,
                         )
                     }
                 }
@@ -205,8 +205,10 @@ class SnapshotDetailActivity : AppCompatActivity() {
      */
     private fun askLongPressPoint(x: Int, y: Int) {
         val dm = resources.displayMetrics
-        val srcW = if (meta.screenW > 0) meta.screenW else dm.widthPixels
-        val srcH = if (meta.screenH > 0) meta.screenH else dm.heightPixels
+        // 用截图自身的像素尺寸（overlay 已按 meta 与节点包围盒校准过），
+        // 不用 displayMetrics：后者是不含导航栏的「应用可用高度」，中心点会偏上
+        val srcW = overlay.contentW.takeIf { it > 0 } ?: dm.widthPixels
+        val srcH = overlay.contentH.takeIf { it > 0 } ?: dm.heightPixels
         // 抓快照时的密度未必等于当前密度，按抓取尺寸比例换算成 dp 更稳
         val srcDensity = dm.density * (srcW.toFloat() / dm.widthPixels)
         val dpX = (x - srcW / 2f) / srcDensity
@@ -393,9 +395,10 @@ class SnapshotDetailActivity : AppCompatActivity() {
             }
             dpX != null && dpY != null -> {
                 sb.append("方式：屏幕中心偏移 ${dpX.toInt()}, ${dpY.toInt()} dp\n\n")
-                val dm = resources.displayMetrics
-                val ax = dm.widthPixels / 2f + dpX * dm.density
-                val ay = dm.heightPixels / 2f + dpY * dm.density
+                val (rw, rh) = realScreenPx()
+                val d = resources.displayMetrics.density
+                val ax = rw / 2f + dpX * d
+                val ay = rh / 2f + dpY * d
                 sb.append("换算到当前屏幕：(${ax.toInt()}, ${ay.toInt()})\n")
                 val under = nodes.filter {
                     it.w > 0 && it.h > 0 && ax >= it.l && ax <= it.r && ay >= it.t && ay <= it.b
@@ -457,11 +460,11 @@ class SnapshotDetailActivity : AppCompatActivity() {
                 }
             }
             else -> {
-                val dm = resources.displayMetrics
+                val (rw, rh) = realScreenPx()
                 val xr = xRatio ?: 0f
                 val yr = yRatio ?: 0f
-                val x = dm.widthPixels * xr
-                val y = dm.heightPixels * yr
+                val x = rw * xr
+                val y = rh * yr
                 sb.append("方式：坐标 ${(100 * xr).toInt()}%，${(100 * yr).toInt()}%\n\n")
                 // 取面积最小的包含节点：根节点覆盖全屏，取第一个永远命中根节点
                 val under = nodes.filter {
@@ -537,6 +540,26 @@ class SnapshotDetailActivity : AppCompatActivity() {
         } else {
             "只在「${act.substringAfterLast('.')}」生效。\n\n"
         }
+    }
+
+    /**
+     * 真实屏幕像素（含状态栏 / 导航栏）。
+     *
+     * 规则里的坐标（屏幕比例 / 相对中心 dp）都在这一套空间里生成与回放；
+     * displayMetrics 给的是不含导航栏的应用可用高度，两边混用会把落点整体抬高。
+     */
+    private fun realScreenPx(): Pair<Int, Int> = try {
+        val wm = getSystemService(android.content.Context.WINDOW_SERVICE) as android.view.WindowManager
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            val b = wm.currentWindowMetrics.bounds
+            b.width() to b.height()
+        } else {
+            val dm = android.util.DisplayMetrics()
+            @Suppress("DEPRECATION") wm.defaultDisplay.getRealMetrics(dm)
+            dm.widthPixels to dm.heightPixels
+        }
+    } catch (e: Exception) {
+        resources.displayMetrics.widthPixels to resources.displayMetrics.heightPixels
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()

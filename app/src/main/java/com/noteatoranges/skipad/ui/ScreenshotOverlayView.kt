@@ -92,12 +92,13 @@ class ScreenshotOverlayView @JvmOverloads constructor(
         srcHeight: Int = 0,
     ) {
         this.bmp = bitmap
-        // 旧快照的 meta 里没有 screenW/H：用节点包围盒的右下极值兜底，
-        // 它本来就是屏幕像素坐标，比位图尺寸（被 inSampleSize 缩过一半）准
-        this.srcW = if (srcWidth > 0) srcWidth
-        else nodes.maxOfOrNull { it.r } ?: bitmap?.width ?: 0
-        this.srcH = if (srcHeight > 0) srcHeight
-        else nodes.maxOfOrNull { it.b } ?: bitmap?.height ?: 0
+        // 节点坐标就是屏幕像素，取它与 meta 的较大值：旧快照的 meta 里 screenH 记的是
+        // 「应用可用高度」（1220x2453，不含导航栏），比真实截图（1220x2712）矮，
+        // 单独用它会把框越往下压得越偏。
+        val nodeMaxR = nodes.maxOfOrNull { it.r } ?: 0
+        val nodeMaxB = nodes.maxOfOrNull { it.b } ?: 0
+        this.srcW = maxOf(srcWidth, nodeMaxR).takeIf { it > 0 } ?: bitmap?.width ?: 0
+        this.srcH = maxOf(srcHeight, nodeMaxB).takeIf { it > 0 } ?: bitmap?.height ?: 0
         this.nodes = nodes
         selected = null
         requestLayout()
@@ -108,6 +109,10 @@ class ScreenshotOverlayView @JvmOverloads constructor(
         selected = node
         invalidate()
     }
+
+    /** 截图与节点共用的原始像素尺寸：长按取点的 dp 换算要用它，才会与画框一致 */
+    val contentW: Int get() = srcW
+    val contentH: Int get() = srcH
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
