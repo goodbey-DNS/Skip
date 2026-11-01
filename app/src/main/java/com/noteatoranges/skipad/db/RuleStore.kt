@@ -62,9 +62,9 @@ data class SkipAppRule(
     /** 动作的中文名，UI 与日志共用 */
     val actionLabel: String
         get() = when (action) {
-            SkipRule.ACTION_BACK -> "返回键"
-            SkipRule.ACTION_NONE -> "只匹配"
-            else -> "点击"
+            SkipRule.ACTION_BACK -> "按返回键"
+            SkipRule.ACTION_NONE -> "只看不动"
+            else -> "点一下"
         }
 }
 
