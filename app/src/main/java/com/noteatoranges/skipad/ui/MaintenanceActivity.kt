@@ -18,6 +18,9 @@ import com.noteatoranges.skipad.util.AppLabels
 import com.noteatoranges.skipad.util.Backup
 import com.noteatoranges.skipad.util.Io
 import com.noteatoranges.skipad.util.Ui
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 /** 数据与维护二级页：内存占用、缓存清理、统计数据清空 */
@@ -27,6 +30,8 @@ class MaintenanceActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_maintenance)
         Ui.edgeToEdge(this, findViewById(R.id.inset_top), findViewById(R.id.inset_bottom))
+        // 服务没起来时（用户刚装完就进来）也要能读到落盘日志
+        EngineTrace.init(this)
 
         findViewById<TextView>(R.id.back_button).setOnClickListener { finish() }
         findViewById<Button>(R.id.clear_cache_button).setOnClickListener {
@@ -48,6 +53,7 @@ class MaintenanceActivity : AppCompatActivity() {
             }
         }
         findViewById<Button>(R.id.engine_log_button).setOnClickListener { showEngineLog() }
+        findViewById<Button>(R.id.engine_log_export_button).setOnClickListener { exportEngineLog() }
         findViewById<Button>(R.id.engine_log_clear_button).setOnClickListener { confirmClearEngineLog() }
     }
 
@@ -59,12 +65,19 @@ class MaintenanceActivity : AppCompatActivity() {
      */
     private fun showEngineLog() {
         val lines = EngineTrace.lines()
+        val disk = EngineTrace.files()
+        val diskNote = if (disk.isEmpty()) {
+            "落盘：暂无"
+        } else {
+            "落盘：${disk.size} 份 / ${(EngineTrace.diskBytes() / 1024).coerceAtLeast(1)}KB"
+        }
         if (lines.isEmpty()) {
             AlertDialog.Builder(this)
                 .setTitle("引擎诊断")
                 .setMessage(
-                    "还没有记录。\n\n" +
-                        "服务刚重启过，或者这段时间还没有窗口事件。让目标 App 出现一次开屏广告再回来看。"
+                    "内存里还没有记录（$diskNote）。\n\n" +
+                        "服务刚重启过，或者这段时间还没有窗口事件。让目标 App 出现一次开屏广告再回来看；\n" +
+                        "如果是重启前的记录，用「导出日志」拿落盘的那份。"
                 )
                 .setPositiveButton("好", null)
                 .show()
@@ -73,12 +86,40 @@ class MaintenanceActivity : AppCompatActivity() {
         val text = lines.asReversed().joinToString("\n")
         AlertDialog.Builder(this)
             .setTitle("引擎诊断（最近 ${lines.size} 条）")
-            .setMessage(text)
+            .setMessage("$text\n\n$diskNote")
             .setPositiveButton("好", null)
             .setNeutralButton("复制全部") { _, _ ->
                 copyToClipboard(text)
             }
             .show()
+    }
+
+    /**
+     * 导出落盘日志 + 内存尾巴。
+     *
+     * 这条路径是为「事后分析」准备的：读内存记录必须先打开 App，而任何界面转储
+     * 都会抢走无障碍通道、让服务重建实例、把内存记录清空。要留证据就得先落成文件。
+     */
+    private fun exportEngineLog() {
+        val text = EngineTrace.exportText()
+        if (text.isBlank()) {
+            Toast.makeText(this, "还没有记录可导出", Toast.LENGTH_SHORT).show()
+            return
+        }
+        Io.run("engine-export") {
+            val dir = File(applicationContext.filesDir, "engine-export").apply { mkdirs() }
+            val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.CHINA).format(Date())
+            val f = File(dir, "SkipAd-engine-$ts.log")
+            val ok = runCatching { f.writeText(text); true }.getOrDefault(false)
+            runOnUiThread {
+                if (!ok) {
+                    Toast.makeText(this, "导出失败：写文件出错", Toast.LENGTH_LONG).show()
+                    return@runOnUiThread
+                }
+                Toast.makeText(this, "已导出 ${f.name}（${(f.length() / 1024).coerceAtLeast(1)}KB）", Toast.LENGTH_SHORT).show()
+                share(f, "text/plain")
+            }
+        }
     }
 
     private fun copyToClipboard(text: String) {
@@ -94,11 +135,19 @@ class MaintenanceActivity : AppCompatActivity() {
     private fun confirmClearEngineLog() {
         AlertDialog.Builder(this)
             .setTitle("清空引擎诊断？")
-            .setMessage("只清这份内存记录，不影响规则、快照和跳过统计。")
+            .setMessage(
+                "内存记录与落盘日志是两份：内存只管「刚才那一下」，落盘那份能翻到前几天。\n" +
+                    "不影响规则、快照和跳过统计。"
+            )
             .setNegativeButton("取消", null)
-            .setPositiveButton("清空") { _, _ ->
+            .setNeutralButton("只清内存") { _, _ ->
                 EngineTrace.clear()
-                Toast.makeText(this, "已清空", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "已清内存记录，落盘日志保留", Toast.LENGTH_SHORT).show()
+            }
+            .setPositiveButton("连文件一起清") { _, _ ->
+                EngineTrace.clear()
+                EngineTrace.clearFiles()
+                Toast.makeText(this, "已全部清空", Toast.LENGTH_SHORT).show()
             }
             .show()
     }
@@ -213,15 +262,15 @@ class MaintenanceActivity : AppCompatActivity() {
         }
     }
 
-    private fun share(file: java.io.File) {
+    private fun share(file: java.io.File, mime: String = "application/zip") {
         try {
             val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
             val send = Intent(Intent.ACTION_SEND).apply {
-                type = "application/zip"
+                type = mime
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            startActivity(Intent.createChooser(send, "保存或发送备份"))
+            startActivity(Intent.createChooser(send, if (mime == "application/zip") "保存或发送备份" else "发送诊断日志"))
         } catch (e: Exception) {
             Toast.makeText(this, "分享失败：${e.message}", Toast.LENGTH_LONG).show()
         }

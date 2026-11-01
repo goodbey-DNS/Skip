@@ -82,6 +82,9 @@ class SkipAccessibilityService : AccessibilityService() {
     /** 每个 App 上次执行规则时的页面，用于判断“换页” */
     private val stateActivity = HashMap<String, String>()
 
+    /** 每个 App 上次记「未命中原因」的时间，同包 [MISS_TRACE_GAP_MS] 内不重复记 */
+    private val lastMissAt = HashMap<String, Long>()
+
     /** 快照广播只注册一次：onServiceConnected 可能被系统重复回调，重复注册会导致一次点击抓多张 */
     private var snapshotRegistered = false
 
@@ -197,6 +200,9 @@ class SkipAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        // 落盘日志要在任何 trace 之前就绪，否则服务起来头几条记录只进内存，
+        // 而内存记录恰恰是最容易被 dump 踢掉的那一份
+        EngineTrace.init(this)
         // 连接留痕：装了新包之后服务是否真的起来了，只能靠这一行判断
         val ver = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()
         traceI("service-connected $ver")
@@ -256,6 +262,8 @@ class SkipAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // 记账攒在内存里，服务被杀就丢了：退出前补一次落盘
+        runCatching { RuleStore.flushHits(this) }
         com.noteatoranges.skipad.util.CaptureBubble.hide(this)
         inst = null
         if (snapshotRegistered) {
@@ -353,6 +361,55 @@ class SkipAccessibilityService : AccessibilityService() {
     private fun traceD(msg: String) {
         EngineTrace.add(msg)
         Log.d(TAG, msg)
+    }
+
+    // ———————— 规则记账 ————————
+
+    /** 记账已排队，避免一次跳转连开多个延迟任务 */
+    private var hitFlushScheduled = false
+
+    /**
+     * 记一次「这条规则真的点掉了东西」。
+     *
+     * 只记用户规则：内置规则是引擎自己的一部分，用户无法也不需要去维护它，
+     * 给它记账只会把「已 90 天未命中」的噪音堆进列表。
+     *
+     * 证据记的是命中节点当时的形态（类名 + 尺寸 + 原文），用来事后区分
+     * 「点对了关闭钮」和「点到了一段含关键字的正文」——后者在记账里长一个样，
+     * 只有看形状才分得出来。
+     */
+    private fun recordRuleHit(rule: SkipRule, node: AccessibilityNodeInfo) {
+        if (!rule.id.startsWith("user:")) return
+        // 复用本轮的节点属性缓存：这里读 text/class/bounds 是一次跨进程往返，
+        // 扫描时已经读过一遍，再读一遍纯属浪费
+        val f = runCatching { factsCache.of(node) }.getOrNull() ?: return
+        val label = f.label ?: ""
+        val cls = f.cls.substringAfterLast('.')
+        val evidence = "$cls ${f.rect.width()}x${f.rect.height()} 「${label.take(24)}」"
+        RuleStore.noteHit(rule.id.removePrefix("user:"), evidence)
+        if (hitFlushScheduled) return
+        hitFlushScheduled = true
+        // 延迟合并：一次跳转会连来好几个事件，每条都写盘等于每次开屏都序列化一遍规则表
+        mainHandler.postDelayed({
+            hitFlushScheduled = false
+            runCatching { RuleStore.flushHits(this@SkipAccessibilityService) }
+        }, HIT_FLUSH_DELAY_MS)
+    }
+
+    /**
+     * 未命中原因落痕。
+     *
+     * 以前只在 verbose 下记 `scan ... reject=...`，而 verbose 默认关着——
+     * 于是「规则为什么没生效」这个问题在真机上永远没有答案。
+     * 现在只要有明确拒绝理由就记一条，同包 3 秒最多一条，防止信息流里刷屏。
+     */
+    private fun traceMiss(pkg: String, dbg: String?) {
+        if (dbg == null) return
+        if (!dbg.contains("reject=") && !dbg.contains("EXCLUDE")) return
+        val now = SystemClock.elapsedRealtime()
+        if (now - (lastMissAt[pkg] ?: 0L) < MISS_TRACE_GAP_MS) return
+        lastMissAt[pkg] = now
+        traceD("miss $pkg $dbg")
     }
 
     private fun traceI(msg: String) {
@@ -703,6 +760,7 @@ class SkipAccessibilityService : AccessibilityService() {
         val cost = SystemClock.elapsedRealtime() - t0
         if (hit == null) {
             traceV("scan $pkg ${cost}ms: $dbg")
+            traceMiss(pkg, dbg)
             return
         }
         val detail = hit.first.text?.toString()
@@ -735,6 +793,7 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         lastSkipWindow = windowKeyFor(pkg, event, root)
         lastSkipAt = now
+        recordRuleHit(rule, hit.first)
         pending = PendingSkip(lastSkipWindow ?: "", pkg, detail, 0, ruleId = rule.id)
         val token = pending
         mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
@@ -1482,6 +1541,12 @@ class SkipAccessibilityService : AccessibilityService() {
         const val UNBIND_RECOVER_DELAY_MS = 1500L
         const val VERIFY_DELAY_MS = 800L
         const val MAX_RETRY = 2
+
+        /** 记账落盘延迟：一次跳转的多个事件合并成一次写盘 */
+        const val HIT_FLUSH_DELAY_MS = 5000L
+
+        /** 未命中原因的最小记录间隔：信息流里一秒能扫十几次，不节流会把日志刷满 */
+        const val MISS_TRACE_GAP_MS = 3000L
 
         /**
          * 开屏窗口：App 从别的 App 切到前台后的这段时间，只在这段时间里允许词表（内置 + 手输）。

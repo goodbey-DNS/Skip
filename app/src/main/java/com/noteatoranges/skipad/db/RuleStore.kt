@@ -77,6 +77,19 @@ data class SkipAppRule(
      * 「只按文字/控件匹配」的旧行为，宁可少一层约束，也不要拿错的约束误杀。
      */
     val zoneLand: Boolean? = null,
+    /**
+     * 记账三件套：最近命中时间、累计次数、命中时的节点证据。
+     *
+     * 加这三个字段，是因为规则库最大的问题不是「写得不全」而是「不知道哪条已经死了」——
+     * 一条规则可以安静地失效半年，界面上它和刚建的那条长得一模一样。
+     * 有 lastHitAt 之后，列表能直接显示「已 92 天未命中」，判死权仍然留给人。
+     *
+     * lastEvidence 记的是命中节点当时的形态（类名 + 尺寸 + 原文），
+     * 用来区分「点对了关闭钮」和「点到了一段含关键字的正文」。
+     */
+    val lastHitAt: Long = 0L,
+    val hitCount: Int = 0,
+    val lastEvidence: String? = null,
 ) {
     val hasAnchor: Boolean get() = !anchorVid.isNullOrBlank() || !anchorText.isNullOrBlank()
     val hasPath: Boolean get() = !nodePath.isNullOrBlank()
@@ -148,6 +161,9 @@ object RuleStore {
             zoneB = if (j.has("zoneB")) j.optDouble("zoneB").toFloat() else null,
             // 旧规则没有这个字段：当作「不知道方向」，回放时按不校验处理（见 zoneFor）
             zoneLand = if (j.has("zoneLand")) j.optBoolean("zoneLand") else null,
+            lastHitAt = j.optLong("lastHitAt", 0L),
+            hitCount = j.optInt("hitCount", 0),
+            lastEvidence = j.optString("lastEvidence").takeIf { it.isNotEmpty() },
         )
     }
 
@@ -195,7 +211,7 @@ object RuleStore {
         return parsed.toMutableList()
     }
 
-    private fun write(context: Context, rules: List<SkipAppRule>) {
+    fun write(context: Context, rules: List<SkipAppRule>, bump: Boolean = true) {
         val arr = JSONArray()
         rules.forEach { r ->
             arr.put(JSONObject().apply {
@@ -230,6 +246,9 @@ object RuleStore {
                 r.zoneR?.let { put("zoneR", it.toDouble()) }
                 r.zoneB?.let { put("zoneB", it.toDouble()) }
                 r.zoneLand?.let { put("zoneLand", it) }
+                if (r.lastHitAt > 0L) put("lastHitAt", r.lastHitAt)
+                if (r.hitCount > 0) put("hitCount", r.hitCount)
+                r.lastEvidence?.let { put("lastEvidence", it) }
             })
         }
         // 原子写：先落临时文件再改名。直接 writeText 若中途被杀，会留下半截 JSON，
@@ -241,10 +260,61 @@ object RuleStore {
             f.delete()
             tmp.renameTo(f)
         }
-        bumpVersion(context)
+        if (bump) bumpVersion(context)
     }
 
     fun all(context: Context): List<SkipAppRule> = read(context).sortedByDescending { it.createdAt }
+
+    // ———————— 命中记账 ————————
+
+    private data class PendingHit(val at: Long, val evidence: String, val count: Int)
+
+    /**
+     * 攒着待落盘的命中记录。
+     *
+     * 不直接写盘：命中发生在无障碍回调里，一次开屏跳转会连着来好几个事件，
+     * 每次都 read+write 整个 rules.json 是主线程上的灾难（几百条规则序列化）。
+     * 先攒着，由服务延迟几秒合并刷一次。
+     *
+     * count 要累加而不是覆盖：同一条规则在 5 秒窗口里连中两次（比如两页开屏）
+     * 只留最后一次，hitCount 就成了「刷盘次数」而不是「命中次数」。
+     */
+    private val pendingHits = java.util.concurrent.ConcurrentHashMap<String, PendingHit>()
+
+    /** 记一次命中（只记用户规则，内置规则不进来） */
+    fun noteHit(ruleId: String, evidence: String) {
+        val hit = PendingHit(System.currentTimeMillis(), evidence.take(80), 1)
+        pendingHits.merge(ruleId, hit) { old, new -> PendingHit(new.at, new.evidence, old.count + 1) }
+    }
+
+    fun hasPendingHits(): Boolean = pendingHits.isNotEmpty()
+
+    /**
+     * 把攒下的命中写回规则文件。
+     *
+     * bump=false：记账不改匹配条件，没必要让服务重建扫描器——重建要重新编译正则，
+     * 还会打断当前窗口的冷却状态。但写完必须同步更新内存缓存，否则下一次 flush
+     * 会拿着旧的 hitCount 再写一遍，累加就丢了。
+     */
+    @Synchronized
+    fun flushHits(context: Context) {
+        if (pendingHits.isEmpty()) return
+        val snap = HashMap<String, PendingHit>()
+        for (k in pendingHits.keys.toList()) {
+            pendingHits.remove(k)?.let { snap[k] = it }
+        }
+        if (snap.isEmpty()) return
+        val rules = read(context)
+        var changed = false
+        val out = rules.map { r ->
+            val h = snap[r.id] ?: return@map r
+            changed = true
+            r.copy(hitCount = r.hitCount + h.count, lastHitAt = h.at, lastEvidence = h.evidence)
+        }
+        if (!changed) return
+        write(context, out, bump = false)
+        cache = out
+    }
 
     /** 只保留一条：同 App 同匹配条件的重复规则没有意义 */
     fun add(context: Context, rule: SkipAppRule) {

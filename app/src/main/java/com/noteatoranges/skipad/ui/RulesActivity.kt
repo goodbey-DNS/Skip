@@ -332,9 +332,34 @@ class RulesActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 规则记账行：这条规则多久没动手了。
+     *
+     * 返回 null = 不显示。刚建不到 7 天的规则一律不说，否则新用户一进列表满屏
+     * 「从未命中」，等于把所有规则都标成可疑。超过 30 天没命中的用警示色，
+     * 但仍然不自动删——判死权留给用户，这里只负责把事实摆出来。
+     */
+    private fun hitLineOf(r: com.noteatoranges.skipad.db.SkipAppRule): Pair<String, Boolean>? {
+        val now = System.currentTimeMillis()
+        val day = 86_400_000L
+        if (r.lastHitAt > 0L) {
+            val days = ((now - r.lastHitAt) / day).toInt()
+            val whenText = when {
+                days <= 0 -> "今天命中过"
+                days == 1 -> "昨天命中过"
+                else -> "$days 天前命中过"
+            }
+            val total = if (r.hitCount > 1) " · 共 ${r.hitCount} 次" else ""
+            val ev = r.lastEvidence?.takeIf { it.isNotBlank() }?.let { " · 上次点的是 ${it.take(22)}" } ?: ""
+            return (whenText + total + ev) to (days >= 30)
+        }
+        val age = ((now - r.createdAt) / day).toInt()
+        if (age < 7) return null
+        return "从未命中（建了 $age 天）" to (age >= 30)
+    }
+
     /** 单条规则：匹配条件 / 动作 / 页面范围 / 换动作 / 开关 / 删除 */
-    private fun buildRuleRow(r: com.noteatoranges.skipad.db.SkipAppRule): View {
-        val row = LinearLayout(this).apply {
+    private fun buildRuleRow(r: com.noteatoranges.skipad.db.SkipAppRule): View {        val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
             setPadding(0, dp(8), 0, dp(8))
@@ -385,6 +410,17 @@ class RulesActivity : AppCompatActivity() {
             textSize = 11f
             setTextColor(getColor(R.color.text_secondary))
         })
+        // 记账行：这条规则还活着吗。
+        // 规则库最大的问题不是写得全不全，是没法判断哪条已经死了——
+        // 一条规则可以安静失效半年，界面上它和刚建的那条长得一模一样
+        hitLineOf(r)?.let { (line, dead) ->
+            info.addView(TextView(this).apply {
+                text = line
+                textSize = 11f
+                setTextColor(getColor(if (dead) R.color.status_off else R.color.text_secondary))
+                setPadding(0, dp(2), 0, 0)
+            })
+        }
         row.addView(info)
         // 改动作：点击 → 返回键 → 只匹配，循环切换（有些弹窗只有返回键能关）
         info.addView(TextView(this).apply {

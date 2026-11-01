@@ -55,6 +55,15 @@ data class SkipRule(
     val cooldownMs: Long = 0L,
     /** 同一条规则累计动作次数上限，0 = 不限（换页面时清零） */
     val maxCount: Int = 0,
+    /**
+     * 命中节点附近必须出现的文案（自身、父节点或兄弟节点任一命中即可）。
+     *
+     * 专治「倒计时数字被当成按钮」：开屏页右上角常年挂着一个孤零零的「5」，
+     * 单看文本它就是个数字，正则 `^\d+s?$` 一抓一大把——正文里的楼层号、价格、
+     * 消息数都能中。真实结构是「数字 + 紧邻的跳过文案」，两个节点互为兄弟或父子。
+     * 空列表 = 不做这项校验（用户规则一律为空，不进这条路径）。
+     */
+    val neighborHints: List<String> = emptyList(),
 ) {
     companion object {
         const val ACTION_CLICK = "click"
@@ -69,6 +78,12 @@ data class SkipRule(
  * 0.17.0 曾把这一组整块删掉，原因是它没有场景边界，在聊天页、信息流里也会跑。
  * 0.17.1 按「开屏 = App 刚切到前台的头几秒」这个硬边界收回来：窗口之外一条都不用，
  * 于是它的形态约束（位置闸/面积闸/长度闸/负向词）只需要对付开屏页那一种布局。
+ *
+ * 0.17.29 补了两处实测出来的缺口（依据是 2026-11-01 的对照实验：关掉内置词表后
+ * 五个 App 冷启动零命中，说明开屏成败全压在这一组上，漏一类就是整类漏掉）：
+ * - 广告 SDK 的关闭按钮大多不带 skip 字样（csj_btn_close / topon_btn_close / ksad_*），
+ *   原来只认 "skip"，等于把聚合 SDK 的开屏全放过；
+ * - 倒计时数字单看文本没有判别力，必须和旁边的跳过文案成对出现。
  */
 object BuiltinRules {
 
@@ -79,6 +94,22 @@ object BuiltinRules {
         SkipRule(
             id = "ad-skip-viewid",
             viewIds = listOf("skip"),
+            cooldownMs = BUILTIN_COOLDOWN_MS,
+            maxCount = BUILTIN_MAX_COUNT,
+        ),
+        // 主流广告 SDK 的关闭钮命名集合。这些都是各家 SDK 的固定前缀，
+        // 跨版本改名概率远低于业务代码；命中走 viewId 通道，免文本与位置闸
+        SkipRule(
+            id = "ad-sdk-viewid",
+            viewIds = listOf(
+                "tt_splash_skip",   // 穿山甲开屏
+                "csj_btn_close",    // 穿山甲通用关闭
+                "csj_ad_logo",      // 穿山甲广告角标（可点，点了也算关）
+                "topon_",           // TopOn 聚合
+                "ksad_skip",        // 快手联盟
+                "gdt_",             // 优量汇
+                "hiad_",            // 华为广告
+            ),
             cooldownMs = BUILTIN_COOLDOWN_MS,
             maxCount = BUILTIN_MAX_COUNT,
         ),
@@ -101,6 +132,20 @@ object BuiltinRules {
                 "(?i)skip[\\s\\d]*(s|sec|秒)?",
                 "\\d+\\s*(s|S|秒)\\s*(之|后|後)?\\s*跳过",
             ),
+            cooldownMs = BUILTIN_COOLDOWN_MS,
+            maxCount = BUILTIN_MAX_COUNT,
+        ),
+        // 纯倒计时数字单独成一条，不能并进上面那条：上面那两条正则能匹配任意位置的
+        // 「skip 5s」，一旦共用一个 zone，按钮挪到屏幕下方就全废了。这条只管数字，
+        // 才敢上位置 + 邻近文案两道约束
+        SkipRule(
+            id = "splash-countdown-num",
+            regex = true,
+            patterns = listOf("^\\s*\\d{1,2}\\s*(s|S|秒)?\\s*$"),
+            // 倒计时按钮固定在顶部两角，给一个宽裕的带：横向右侧 40% 起、纵向顶部 45% 内
+            zone = RectF(0.4f, 0f, 1f, 0.45f),
+            // 数字本身不是按钮，旁边必须有跳过/关闭字样才算
+            neighborHints = listOf("跳过", "跳過", "关闭", "關閉", "skip", "スキップ"),
             cooldownMs = BUILTIN_COOLDOWN_MS,
             maxCount = BUILTIN_MAX_COUNT,
         ),

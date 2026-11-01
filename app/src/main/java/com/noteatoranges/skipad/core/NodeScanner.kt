@@ -155,6 +155,9 @@ class NodeScanner(
                         val zoneOk = zone == null || zoneHit(zone, f.rect, screenW, screenH)
                         if (!zoneOk) {
                             reject = "「${text?.take(12)}」不在记录的位置"
+                        } else if (!neighborHasHint(node, matched.node.rule.neighborHints)) {
+                            // 倒计时数字这类「旁边必须有跳过文案」的规则：孤立数字不点
+                            reject = "「${text?.take(12)}」附近没有跳过文案"
                         } else if (zone == null && !byViewId && !matched.node.rule.allowCenter && inCenter) {
                             reject = "「${text?.take(12)}」在中央区域(cx=${cx.toInt()},cy=${cy.toInt()})"
                         } else if (area in 1f..screenArea * matched.node.rule.maxAreaRatio) {
@@ -278,10 +281,44 @@ class NodeScanner(
         return null
     }
 
+    /**
+     * 命中节点附近是否出现指定文案（自身 / 父节点 / 兄弟节点）。
+     *
+     * 只向上看两层：开屏页的倒计时与跳过文案通常是同一容器里的两个子节点
+     * （父 → 数字 + 文案），或者文案在外层横栏里。再往上就是整张广告图，
+     * 那里的文字和这个数字没有判别关系，看得越远误判越多。
+     *
+     * hints 为空 = 不校验，直接放行（用户规则与普通内置词都走这条，
+     * 只有倒计时数字那条规则带了 hints）。
+     */
+    private fun neighborHasHint(node: AccessibilityNodeInfo, hints: List<String>): Boolean {
+        if (hints.isEmpty()) return true
+        fun hit(t: String?): Boolean =
+            t != null && hints.any { t.contains(it, ignoreCase = true) }
+
+        var cur: AccessibilityNodeInfo = node
+        var hops = 0
+        while (hops < NEIGHBOR_HOPS) {
+            val parent: AccessibilityNodeInfo = cur.parent ?: return false
+            if (hit(factsOf(parent).label)) return true
+            for (i in 0 until parent.childCount) {
+                val sib = parent.getChild(i) ?: continue
+                if (sib == cur) continue
+                if (hit(factsOf(sib).label)) return true
+            }
+            cur = parent
+            hops++
+        }
+        return false
+    }
+
     private companion object {
         const val MAX_NODES = 800
         const val TRAVERSE_TIMEOUT_MS = 400L
         const val ANCESTOR_HOPS = 6
+
+        /** 邻近文案校验向上看几层（见 neighborHasHint） */
+        const val NEIGHBOR_HOPS = 2
 
         /**
          * 相对长度闸的余量。命中「跳过」时允许节点文字最多 10 字。
