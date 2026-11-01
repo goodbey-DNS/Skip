@@ -208,25 +208,45 @@ class SnapshotDetailActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 点完一个节点之后怎么记它。
+     *
+     * 以前是把五种定位方式一次性摊给用户选（按文字/按编号/按层级/按位置/挨着某元素），
+     * 等于让人判断「这个按钮有没有 id、结构路径可不可用」——这些在界面上根本看不见，
+     * 用户只能猜。而引擎匹配是「文字 或 编号」任一命中即可，既然能同时存，就不用二选一。
+     *
+     * 现在的原则：看得见的证据优先，问得越少越好。
+     * - 有文字 → 问关键词（顺便把编号也存上，任一个命中都算）
+     * - 没文字有编号 → 直接存，不问
+     * - 纯图标 → 才问一次「旁边有没有字」
+     */
     private fun showGenerateDialog(n: SnapshotStore.Node) {
+        val hasText = n.text.isNotEmpty() || n.desc.isNotEmpty()
+        when {
+            hasText -> askText(n)
+            n.vid.isNotEmpty() -> confirm("node", viewId = n.vid)
+            else -> askFallback(n)
+        }
+    }
+
+    /** 纯图标按钮：问一句「旁边有没有字」，比让人看懂五种定位方式容易得多 */
+    private fun askFallback(n: SnapshotStore.Node) {
         val opts = ArrayList<String>()
-        if (n.text.isNotEmpty() || n.desc.isNotEmpty()) opts.add(OPT_TEXT)
-        if (n.vid.isNotEmpty()) opts.add(OPT_VID)
-        // 无文字的图片按钮唯一的稳定定位：挂在它自己（或旁边卡片）的控件引用上，
-        // 偏移用 dp 而不是屏幕百分比，换机型/分屏/弹窗变高都不会偏。
-        // 放在「按层级」之前：它认元素不认结构，比路径稳
-        if (n.vid.isNotEmpty() || n.text.isNotEmpty() || n.desc.isNotEmpty()) opts.add(OPT_RELATIVE)
-        if (n.path.isNotEmpty()) opts.add(OPT_PATH)
-        opts.add(OPT_POINT)
+        opts.add("旁边有字——再点一下那个字")
+        opts.add("都没有——就按现在的位置记")
+        // 结构路径最容易在改版后失配，藏到最后一项，不进主流程
+        if (n.path.isNotEmpty()) opts.add("按结构位置记（进阶，改版就失效）")
         AlertDialog.Builder(this)
-            .setTitle("用哪种方式找这个按钮")
-            // 不能同时用 setMessage + setItems：AlertDialog 里两者互斥，
-            // 实测选项列表会被说明文字顶掉，对话框里只剩一段话、根本没法选
+            .setTitle("这个按钮没有文字也没有编号")
+            .setMessage("它在屏幕上是个纯图标，只能靠位置认。选一种记法：")
             .setItems(opts.toTypedArray()) { _, which ->
-                when (opts[which]) {
-                    OPT_TEXT -> askText(n)
-                    OPT_VID -> confirm("node", viewId = n.vid)
-                    OPT_PATH -> confirm(
+                when (which) {
+                    0 -> askAnchor(n)
+                    1 -> {
+                        val (rw, rh) = realScreenPx()
+                        confirm("point", xRatio = (n.l + n.w / 2f) / rw, yRatio = (n.t + n.h / 2f) / rh)
+                    }
+                    else -> confirm(
                         "node",
                         nodePath = n.path,
                         nodeWinId = n.winId,
@@ -234,18 +254,52 @@ class SnapshotDetailActivity : AppCompatActivity() {
                         nodeWDp = (n.w / resources.displayMetrics.density).toInt(),
                         nodeHDp = (n.h / resources.displayMetrics.density).toInt(),
                     )
-                    OPT_RELATIVE -> askRelative(n)
-                    else -> {
-                        val (rw, rh) = realScreenPx()
-                        confirm(
-                            "point",
-                            xRatio = (n.l + n.w / 2f) / rw,
-                            yRatio = (n.t + n.h / 2f) / rh,
-                        )
-                    }
                 }
             }
             .show()
+    }
+
+    /**
+     * 选一个「旁边有字」的元素当锚点，偏移自动算。
+     *
+     * 以前让用户手填「往右多少、往下多少」，单位是 dp —— 没人知道那是什么，
+     * 提示里写着 0, 0，于是大家都照着填 0, 0。现在从这一页的文字里挑一个，
+     * 两块矩形一减就是偏移，用户只需要认得「那个字」。
+     */
+    private fun askAnchor(target: SnapshotStore.Node) {
+        val candidates = nodes.filter { it.text.isNotEmpty() || it.desc.isNotEmpty() }
+            .sortedByDescending { it.text.isNotEmpty() }
+            .take(30)
+        if (candidates.isEmpty()) {
+            Toast.makeText(this, "这一页没有能当参照的文字", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val labels = candidates.map { c ->
+            val t = c.text.ifEmpty { c.desc }
+            "#${c.idx} 「${t.take(18)}」"
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("点一下它旁边那个字")
+            .setItems(labels) { _, which -> useAnchor(target, candidates[which]) }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun useAnchor(target: SnapshotStore.Node, anchor: SnapshotStore.Node) {
+        val density = resources.displayMetrics.density
+        if (density <= 0f) return
+        // 与 SkipAccessibilityService.resolvePoint 的落点算法对齐：
+        // 落点 = 锚点中心X + dx、锚点底边Y + dy
+        val dx = ((target.l + target.w / 2f) - (anchor.l + anchor.w / 2f)) / density
+        val dy = ((target.t + target.h / 2f) - (anchor.t + anchor.h)) / density
+        val hasVid = anchor.vid.isNotEmpty()
+        confirm(
+            "point",
+            anchorVid = if (hasVid) anchor.vid else null,
+            anchorText = if (hasVid) null else anchor.text.ifEmpty { anchor.desc }.takeIf { it.isNotEmpty() },
+            dxDp = dx.toInt(),
+            dyDp = dy.toInt(),
+        )
     }
 
     /**
@@ -285,40 +339,6 @@ class SnapshotDetailActivity : AppCompatActivity() {
             .show()
     }
 
-    /** 相对控件坐标：落点 = 锚点中心 X + dx、锚点底边 Y + dy，单位 dp */
-    private fun askRelative(n: SnapshotStore.Node) {
-        val anchor = n.vid.ifEmpty { n.text.ifEmpty { n.desc } }
-        val input = EditText(this).apply {
-            setText("0, 0")
-            setSelection(text.length)
-            setPadding(dp(20), dp(8), dp(20), dp(8))
-        }
-        AlertDialog.Builder(this)
-            .setTitle("选一个参照物，再填往哪边偏")
-            .setMessage(
-                "参照物：${anchor.take(24)}\n\n" +
-                    "填「往右多少, 往下多少」，单位约一根手指宽；负数就是往左/往上。\n" +
-                    "0, 0 = 点这个参照物的下边缘正中间（不是它的中心）。\n" +
-                    "例：叉号在弹窗右上角，先选弹窗里的标题，再填 130, -60。"
-            )
-            .setView(input)
-            .setPositiveButton("下一步") { _, _ ->
-                val parts = input.text.toString().split(",", "，")
-                val dx = parts.getOrNull(0)?.trim()?.toIntOrNull() ?: 0
-                val dy = parts.getOrNull(1)?.trim()?.toIntOrNull() ?: 0
-                val hasVid = n.vid.isNotEmpty()
-                confirm(
-                    "point",
-                    anchorVid = if (hasVid) n.vid else null,
-                    anchorText = if (hasVid) null else n.text.ifEmpty { n.desc }.takeIf { it.isNotEmpty() },
-                    dxDp = dx,
-                    dyDp = dy,
-                )
-            }
-            .setNegativeButton("取消", null)
-            .show()
-    }
-
     /**
      * 文字规则先让用户确认匹配词：开屏按钮常写成"3 秒后跳过"，
      * 原样保存明天变"5 秒后跳过"就失效，所以默认抽出核心词再让用户改。
@@ -340,7 +360,14 @@ class SnapshotDetailActivity : AppCompatActivity() {
                     Toast.makeText(this, "文字不能为空", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
-                confirm("node", textContains = t, zone = zoneOf(n))
+                // 同时带编号：文字和编号在引擎里是「或」的关系（NodeScanner.firstMatch），
+                // 广告改版换了文案但编号没变时，这一条还能命中；编号变了文字也还在兜着
+                confirm(
+                    "node",
+                    viewId = n.vid.takeIf { it.isNotEmpty() },
+                    textContains = t,
+                    zone = zoneOf(n),
+                )
             }
             .setNegativeButton("取消", null)
             .show()
@@ -408,6 +435,11 @@ class SnapshotDetailActivity : AppCompatActivity() {
                     ),
                 )
                 Toast.makeText(this, R.string.rule_saved, Toast.LENGTH_SHORT).show()
+                // 规则列表是按 App 分组的、默认收起。不告诉它该展开哪个组，
+                // 用户回列表只能看到一行「某App · N 条」，找不到自己刚加的东西
+                getSharedPreferences("rules_ui", MODE_PRIVATE).edit()
+                    .putString(RulesActivity.PREF_EXPAND_PKG, meta.pkg)
+                    .apply()
             }
             .setNegativeButton("取消", null)
             .show()
@@ -663,12 +695,6 @@ class SnapshotDetailActivity : AppCompatActivity() {
     }
 
     private companion object {
-        const val OPT_TEXT = "按文字：按钮上写着「跳过」这类字"
-        const val OPT_VID = "按编号：没字，但有一串 id（最稳）"
-        const val OPT_PATH = "按层级找：叉号没字没 id（易失效）"
-        const val OPT_POINT = "按屏幕位置：整页读不到控件（最盲）"
-        const val OPT_RELATIVE = "挨着某个元素点：叉号旁边有文字"
-
         /** 抽核心词用的词表，长词在前（firstOrNull 取第一个命中） */
         val CORE_WORDS = listOf("跳过广告", "关闭", "跳过", "close", "skip", "×", "✕")
     }
