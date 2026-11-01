@@ -64,8 +64,8 @@
     <string name="snapshots_empty">还没有快照——广告在屏上时，下拉通知栏点「抓取快照」</string>
     <string name="entry_rules">快照与规则 ›</string>
     <string name="rule_title">跳过规则</string>
-    <string name="rule_kind_node">节点点击</string>
-    <string name="rule_kind_point">坐标点击</string>
+    <string name="rule_kind_node">找按钮</string>
+    <string name="rule_kind_point">点位置</string>
     <string name="rule_by_vid">按控件 ID 生成规则</string>
     <string name="rule_by_text">按文本生成规则</string>
     <string name="rule_by_point">按坐标生成规则</string>
