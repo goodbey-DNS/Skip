@@ -7,5 +7,6 @@
     <color name="text_secondary">#6B7280</color>
     <color name="status_on">#16A34A</color>
     <color name="status_off">#DC2626</color>
-    <color name="launcher_bg">#16A34A</color>
+    <!-- 图标底色：雾蓝，与前景插画（白上衣 + 深藏青头发）同时拉开对比 -->
+    <color name="launcher_bg">#DCE8F3</color>
 </resources>
