@@ -210,11 +210,13 @@ class SkipAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** 悬浮窗点击：隐藏圆钮 → 广播抓取（服务同应用接收）→ 弹回 */
-    fun bubbleClicked() {        com.noteatoranges.skipad.util.CaptureBubble.hide(this)
+    /** 悬浮钮点击：隐藏圆钮 → 广播抓取（服务同应用接收）→ 弹回 */
+    fun bubbleClicked() {
+        com.noteatoranges.skipad.util.CaptureBubble.hide(this)
+        // 250ms 在部分 ROM 上不够：圆钮移除后焦点/窗口列表还在变，取到的树是空的
         mainHandler.postDelayed({
             sendBroadcast(Intent(ACTION_TAKE_SNAPSHOT).setPackage(packageName))
-        }, 250)
+        }, BUBBLE_HIDE_DELAY_MS)
         mainHandler.postDelayed({
             if (com.noteatoranges.skipad.util.CaptureBubble.isEnabled(this)) {
                 com.noteatoranges.skipad.util.CaptureBubble.apply(this)
@@ -963,18 +965,71 @@ class SkipAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun captureNow() {
-        var root = rootInActiveWindow
-        // 兜底：活动窗口还是系统层时，从窗口列表里找第一个应用窗口
-        if (root == null || root.packageName?.toString() == "com.android.systemui") {
-            root = windows.firstOrNull {
-                it.root != null && it.root.packageName?.toString() !in setOf(
-                    "com.android.systemui", packageName
-                )
-            }?.root ?: run {
-                Toast.makeText(this, R.string.snap_failed, Toast.LENGTH_SHORT).show()
+    /**
+     * 挑一个能抓的窗口：优先别的 App（活动窗口 → 其余窗口按是否活动排序），
+     * 实在只有自己在前台时退回抓自己（手动抓取自测用）。拿不到返回 null，由调用方重试。
+     */
+    private fun pickCaptureRoot(): AccessibilityNodeInfo? {
+        val others = ArrayList<AccessibilityNodeInfo>(4)
+        val selfRoots = ArrayList<AccessibilityNodeInfo>(2)
+        fun consider(node: AccessibilityNodeInfo?) {
+            if (node == null) return
+            val p = node.packageName?.toString() ?: return
+            if (p == SYSTEM_UI_PKG) return
+            if (p == packageName) selfRoots.add(node) else others.add(node)
+        }
+        consider(runCatching { rootInActiveWindow }.getOrNull())
+        runCatching { windows?.toList().orEmpty() }.getOrDefault(emptyList())
+            .sortedByDescending { it.isActive }
+            .forEach { consider(runCatching { it.root }.getOrNull()) }
+        return others.firstOrNull() ?: selfRoots.firstOrNull()
+    }
+
+    /**
+     * 抓不到窗口时把现场写进外部目录。
+     * release 包读不到 logcat（部分 ROM 直接关掉），这里是唯一能事后查的证据。
+     */
+    private fun dumpSnapFailure(attempt: Int) {
+        runCatching {
+            val base = getExternalFilesDir(null) ?: filesDir
+            val dir = File(base, "diag")
+            dir.mkdirs()
+            val sb = StringBuilder()
+            sb.append("time=").append(System.currentTimeMillis()).append('\n')
+            sb.append("attempt=").append(attempt).append('\n')
+            val act = runCatching { rootInActiveWindow }.getOrNull()
+            sb.append("activeRoot pkg=").append(act?.packageName)
+                .append(" cls=").append(act?.className).append('\n')
+            val wins = runCatching { windows?.toList().orEmpty() }.getOrDefault(emptyList())
+            sb.append("windowCount=").append(wins.size).append('\n')
+            for ((i, w) in wins.withIndex()) {
+                val wr = runCatching { w.root }.getOrNull()
+                sb.append("win#").append(i)
+                    .append(" id=").append(w.id)
+                    .append(" type=").append(w.type)
+                    .append(" active=").append(w.isActive)
+                    .append(" pkg=").append(wr?.packageName)
+                    .append(" rootNull=").append(wr == null)
+                    .append(" bounds=").append(w.bounds)
+                    .append('\n')
+            }
+            File(dir, "snapfail_${System.currentTimeMillis()}.txt").writeText(sb.toString())
+        }
+    }
+
+    private fun captureNow(attempt: Int = 0) {
+        val root = pickCaptureRoot()
+        if (root == null) {
+            // 点悬浮钮会先把圆钮藏起来，这一瞬间窗口在重排，
+            // rootInActiveWindow 与 window.getRoot() 都可能返回 null。
+            // 以前这里直接报错，HyperOS + Android 17 上这就是「抓不到」的主因。
+            if (attempt < CAPTURE_MAX_RETRY) {
+                mainHandler.postDelayed({ captureNow(attempt + 1) }, CAPTURE_RETRY_DELAY_MS)
                 return
             }
+            dumpSnapFailure(attempt)
+            Toast.makeText(this, R.string.snap_failed, Toast.LENGTH_SHORT).show()
+            return
         }
         val pkg = root.packageName?.toString() ?: return
         val act = lastActivityClass[pkg] ?: ""
@@ -1284,6 +1339,16 @@ class SkipAccessibilityService : AccessibilityService() {
         const val SNAP_CHANNEL = "snapshot"
         const val SNAP_NOTIF_ID = 2001
         const val ACTION_TAKE_SNAPSHOT = "com.noteatoranges.skipad.TAKE_SNAPSHOT"
+
+        /** 系统界面窗口：抓快照时要跳过 */
+        const val SYSTEM_UI_PKG = "com.android.systemui"
+
+        /** 点悬浮钮后等多久再抓：圆钮移除后窗口在重排，马上抓会取到空树 */
+        const val BUBBLE_HIDE_DELAY_MS = 350L
+
+        /** 抓不到窗口时的重试次数与间隔（总等待 ≈ 3×320ms，用户基本感觉不到） */
+        const val CAPTURE_MAX_RETRY = 3
+        const val CAPTURE_RETRY_DELAY_MS = 320L
 
         val CORNER_TAP_PKGS = setOf(
             "com.coolapk.market",

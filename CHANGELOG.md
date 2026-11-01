@@ -2,6 +2,26 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.16.14 - 2026-11-01 · 修「手动抓取失败：没找到可抓取的应用窗口」
+
+**现场**
+- 新设备（M098FE / Android 17 / HyperOS）在货拉拉弹窗广告上点悬浮钮，Toast「快照失败：没找到可抓取的应用窗口」。当时版本 0.16.12。
+- 那台设备上 `dumpsys accessibility` 里能看到 1 个 TYPE_APPLICATION 窗口，说明系统侧窗口正常；release 包读不到 logcat（ROM 关了），只能靠推理 + 事后落盘。
+
+**根因**
+- 旧逻辑是「一次性判断」：`rootInActiveWindow` 为 null 或 systemui 时，去 `windows` 里找带 root 的非系统窗口，找不到就立刻报错。
+- 而点悬浮钮会先 `CaptureBubble.hide()`：圆钮移除后窗口在重排，这一瞬间 `rootInActiveWindow` 和 `window.getRoot()` 都可能是 null。250ms 的等待在部分 ROM 上不够，于是"明明有窗口却报没有"。
+
+**改了什么**
+1. `captureNow` 拆出 `pickCaptureRoot()`，失败后每 320ms 重试一次，最多 3 次（总等待不到 1 秒），全部失败才提示。
+2. `pickCaptureRoot` 统一取窗口：先活动窗口，再按 `isActive` 排序遍历 `windows`；优先别的 App，只剩自己时才抓自己（原来会抓到 SkipAd 自己的界面）。
+3. 点悬浮钮到发广播的等待 250ms → 350ms。
+4. 彻底失败时把现场写进 `Android/data/…/files/diag/snapfail_<ts>.txt`（窗口数、每个窗口的 type/包名/root 是否为空/边界）。release 包读不到 logcat 时，这是唯一能事后查的证据，adb 可直接拉。
+5. 失败文案改为「读不到当前页面的控件，稍等一秒再点一次」——原文案把瞬时问题说成了"没有窗口"，误导排查方向。
+
+**影响面**
+- 抓取链路改动，不影响自动跳过。规则、快照、统计数据不受影响。
+
 ## 0.16.13 - 2026-11-01 · 换应用图标
 
 **改了什么**
