@@ -87,8 +87,15 @@ object SnapshotStore {
         return dir
     }
 
+    /**
+     * 快照目录列表。
+     *
+     * 只认带 meta.json 的目录：保存过程中被系统杀掉会留下半截目录（有 screen.png、
+     * 没 meta.json），它在列表里占一行却既没有标题也打不开，点了像坏了一样。
+     */
     fun list(context: Context): List<File> =
-        File(context.filesDir, "snapshots").listFiles()?.filter { it.isDirectory }
+        File(context.filesDir, "snapshots").listFiles()
+            ?.filter { it.isDirectory && File(it, "meta.json").exists() }
             ?.sortedByDescending { it.name } ?: emptyList()
 
     fun loadMeta(dir: File): Meta? {
@@ -172,8 +179,12 @@ object SnapshotStore {
         dir.deleteRecursively()
     }
 
-    /** 只留最近 30 份 */
+    /** 只留最近 30 份（用原始目录列表，半截目录也要被清掉，不然会一直留着） */
     private fun prune(context: Context) {
-        list(context).drop(30).forEach { it.deleteRecursively() }
+        File(context.filesDir, "snapshots").listFiles()
+            ?.filter { it.isDirectory }
+            ?.sortedByDescending { it.name }
+            ?.drop(30)
+            ?.forEach { it.deleteRecursively() }
     }
 }

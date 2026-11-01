@@ -45,25 +45,38 @@ class RecentActivity : AppCompatActivity() {
         val appContext = applicationContext
         Thread {
             val events = StatsDb.get(appContext).recent(200)
-            runOnUiThread { render(events) }
+            // 应用名与图标在后台线程先取好：这一步是 PackageManager 跨进程查询，
+            // 200 行列表在主线程逐行查会让页面卡住好几秒；而 AppLabels 的缓存只留 30 个，
+            // 行数一多就会边淘汰边查，等于每行都查一次
+            val rows = events.map { e ->
+                val info = AppLabels.get(appContext, e.pkg)
+                Row(info.label, info.icon, e.detail, e.ts)
+            }
+            runOnUiThread { render(rows) }
         }.start()
     }
 
-    private fun render(events: List<StatsDb.Event>) {
+    private data class Row(
+        val label: String,
+        val icon: android.graphics.drawable.Drawable?,
+        val detail: String,
+        val ts: Long,
+    )
+
+    private fun render(rows: List<Row>) {
         container.removeAllViews()
-        if (events.isEmpty()) {
+        if (rows.isEmpty()) {
             emptyText.visibility = View.VISIBLE
             return
         }
         emptyText.visibility = View.GONE
-        for (e in events) {
+        for (r in rows) {
             val row = layoutInflater.inflate(R.layout.item_recent, container, false)
-            val info = AppLabels.get(this, e.pkg)
-            row.findViewById<TextView>(R.id.app_name).text = info.label
-            row.findViewById<ImageView>(R.id.app_icon).setImageDrawable(info.icon)
-            row.findViewById<TextView>(R.id.time_text).text = timeFmt.format(Date(e.ts))
+            row.findViewById<TextView>(R.id.app_name).text = r.label
+            row.findViewById<ImageView>(R.id.app_icon).setImageDrawable(r.icon)
+            row.findViewById<TextView>(R.id.time_text).text = timeFmt.format(Date(r.ts))
             row.findViewById<TextView>(R.id.detail_text).text =
-                getString(R.string.times_format_detail, e.detail)
+                getString(R.string.times_format_detail, r.detail)
             container.addView(row)
         }
     }
