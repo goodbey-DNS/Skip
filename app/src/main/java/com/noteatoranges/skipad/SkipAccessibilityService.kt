@@ -979,8 +979,9 @@ class SkipAccessibilityService : AccessibilityService() {
             if (p == packageName) selfRoots.add(node) else others.add(node)
         }
         consider(runCatching { rootInActiveWindow }.getOrNull())
-        runCatching { windows?.toList().orEmpty() }.getOrDefault(emptyList())
-            .sortedByDescending { it.isActive }
+        val wins: List<AccessibilityWindowInfo> =
+            runCatching { windows?.toList() }.getOrNull() ?: emptyList()
+        wins.sortedByDescending { it.isActive }
             .forEach { consider(runCatching { it.root }.getOrNull()) }
         return others.firstOrNull() ?: selfRoots.firstOrNull()
     }
@@ -1000,17 +1001,21 @@ class SkipAccessibilityService : AccessibilityService() {
             val act = runCatching { rootInActiveWindow }.getOrNull()
             sb.append("activeRoot pkg=").append(act?.packageName)
                 .append(" cls=").append(act?.className).append('\n')
-            val wins = runCatching { windows?.toList().orEmpty() }.getOrDefault(emptyList())
+            val wins: List<AccessibilityWindowInfo> =
+                runCatching { windows?.toList() }.getOrNull() ?: emptyList()
             sb.append("windowCount=").append(wins.size).append('\n')
             for ((i, w) in wins.withIndex()) {
                 val wr = runCatching { w.root }.getOrNull()
+                // AccessibilityWindowInfo 只有 getBoundsInScreen(Rect)，没有 getBounds()
+                val rect = Rect()
+                runCatching { w.getBoundsInScreen(rect) }
                 sb.append("win#").append(i)
                     .append(" id=").append(w.id)
                     .append(" type=").append(w.type)
                     .append(" active=").append(w.isActive)
                     .append(" pkg=").append(wr?.packageName)
                     .append(" rootNull=").append(wr == null)
-                    .append(" bounds=").append(w.bounds)
+                    .append(" bounds=").append(rect)
                     .append('\n')
             }
             File(dir, "snapfail_${System.currentTimeMillis()}.txt").writeText(sb.toString())
