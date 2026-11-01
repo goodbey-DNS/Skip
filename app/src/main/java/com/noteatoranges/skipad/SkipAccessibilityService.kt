@@ -456,7 +456,6 @@ class SkipAccessibilityService : AccessibilityService() {
                 if (freshSwitch && ep !in blacklist) {
                     // 用户 point 规则优先
                     RuleStore.pointRules(this, ep, act).forEach { r -> schedulePointTaps(ep, r) }
-                    if (ep in CORNER_TAP_PKGS) scheduleCornerTaps(ep)
                 }
                 lastFgPkg = ep
             }
@@ -772,58 +771,6 @@ class SkipAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun scheduleCornerTaps(pkg: String) {
-        Log.d(TAG, "corner scheduled $pkg")
-        CORNER_TAP_DELAYS.forEachIndexed { i, delay ->
-            mainHandler.postDelayed({
-                val root = rootInActiveWindow ?: return@postDelayed
-                if (root.packageName?.toString() != pkg) return@postDelayed
-                val actCls = lastActivityClass[pkg] ?: ""
-                // 只认 ad / splash；原先还认 launch，LauncherActivity / SplashGuideActivity
-                // 这类正常入口页也会被当成开屏而向后上角盲点三下。
-                if (!actCls.contains("ad", true) && !actCls.contains("splash", true)) {
-                    Log.d(TAG, "corner#${i + 1} $pkg skip: 非广告/开屏窗口(act=$actCls)")
-                    return@postDelayed
-                }
-                // 再加一道实证闸：有可读内容但看不到广告 SDK 痕迹就不点
-                // （纯 WebView / 游戏渲染读不到任何信息时返回 null，仍然放行）
-                if (adSignature(root) == false) {
-                    Log.d(TAG, "corner#${i + 1} $pkg skip: 窗口有内容但无广告特征(act=$actCls)")
-                    return@postDelayed
-                }
-                val ok = clicker?.clickPoint(
-                    resources.displayMetrics.widthPixels * CORNER_X_RATIO,
-                    resources.displayMetrics.heightPixels * CORNER_Y_RATIO,
-                ) ?: false
-                Log.d(TAG, "corner#${i + 1} $pkg ok=$ok act=$actCls")
-            }, delay)
-        }
-    }
-
-    /**
-     * 盲点前的实证闸，三态：
-     * null = 窗口里读不到任何信息（纯 WebView / 游戏渲染），盲点是唯一手段，放行；
-     * true = 有广告 SDK 痕迹，放行；
-     * false = 有可读内容但不像广告，拒绝——这是防误点的关键。
-     */
-    private fun adSignature(root: AccessibilityNodeInfo): Boolean? {
-        var sawContent = false
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var n = 0
-        while (queue.isNotEmpty() && n < AD_SIGNATURE_SCAN_NODES) {
-            val node = queue.removeFirst()
-            n++
-            val vid = node.viewIdResourceName?.lowercase(java.util.Locale.ROOT) ?: ""
-            val txt = node.text?.toString() ?: node.contentDescription?.toString()
-            if (vid.isNotEmpty() || !txt.isNullOrBlank()) sawContent = true
-            if (vid.isNotEmpty() && AD_VIEWID_HINTS.any { vid.contains(it) }) return true
-            if (!txt.isNullOrBlank() && AD_TEXT_HINTS.any { txt.contains(it, ignoreCase = true) }) return true
-            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
-        }
-        return if (sawContent) false else null
-    }
-
     // ———————— 快照 ————————
 
     private fun postWorkNotification() {
@@ -838,7 +785,9 @@ class SkipAccessibilityService : AccessibilityService() {
             .setContentText(getString(R.string.snap_notif_text))
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .addAction(0, getString(R.string.snap_action), pi)
+            // 整条通知都能点：以前只有右侧那个 action 能点，很多人压根看不到它
+            .setContentIntent(pi)
+            .addAction(R.drawable.ic_stat_keepalive, getString(R.string.snap_action), pi)
             .build()
         try {
             val nm = androidx.core.app.NotificationManagerCompat.from(this)
@@ -1306,8 +1255,6 @@ class SkipAccessibilityService : AccessibilityService() {
          * 再长就会覆盖到开屏页跳过去之后的主界面，那正是误点开始的地方。
          */
         const val SPLASH_WINDOW_MS = 4000L
-        const val CORNER_X_RATIO = 0.93f
-        const val CORNER_Y_RATIO = 0.065f
         const val SNAP_CHANNEL = "snapshot"
         const val SNAP_NOTIF_ID = 2001
         const val ACTION_TAKE_SNAPSHOT = "com.noteatoranges.skipad.TAKE_SNAPSHOT"
@@ -1324,21 +1271,6 @@ class SkipAccessibilityService : AccessibilityService() {
         /** 抓不到窗口时的重试次数与间隔（总等待 ≈ 3×320ms，用户基本感觉不到） */
         const val CAPTURE_MAX_RETRY = 3
         const val CAPTURE_RETRY_DELAY_MS = 320L
-
-        val CORNER_TAP_PKGS = setOf(
-            "com.coolapk.market",
-            "com.netease.mail",
-            "com.ehai",
-        )
-        val CORNER_TAP_DELAYS = longArrayOf(900L, 1900L, 2900L)
-
-        /** 广告 SDK 的 viewId 特征（穿山甲 / 快手 / 广点通 / 百度 / Sigmob / 小米） */
-        val AD_VIEWID_HINTS = listOf(
-            "tt_splash", "ksad", "gdt_", "baidu_ad", "sigmob", "miui_ad",
-            "adview", "splash_ad", "ad_container",
-        )
-        val AD_TEXT_HINTS = listOf("广告", "Sponsored")
-        const val AD_SIGNATURE_SCAN_NODES = 200
 
         /** 坐标规则的重试节拍（相对 delayMs）：一次落空不等于失败，再补三拍 */
         val POINT_RETRY_OFFSETS = longArrayOf(0L, 600L, 1200L, 1800L)
