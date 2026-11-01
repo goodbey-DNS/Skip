@@ -2,6 +2,20 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.12 - 2026-11-01 · 删掉三处盲点；通知整条可点
+
+**删除冷启动右上角盲点**
+- 删 `CORNER_TAP_PKGS`（酷安 / 网易邮箱 / e 海）、`CORNER_TAP_DELAYS`、`scheduleCornerTaps()`、`adSignature()` 及 `AD_VIEWID_HINTS` / `AD_TEXT_HINTS` / `AD_SIGNATURE_SCAN_NODES` / `CORNER_X_RATIO` / `CORNER_Y_RATIO`。
+- 这是最后一条「不来自快照/规则、按写死坐标点」的自动路径。删完之后引擎的动作只有三类来源：开屏窗口内的词表、快照生成的规则、用户点按手动执行。
+
+**通知栏**
+- 起因：用户反馈「文字太长，无法直接点击抓取快照」。实测 HyperOS 上该通知折叠时**不显示 action 按钮**（只有右侧展开箭头），所以只有按钮能点等于点不到。
+- 改为 `setContentIntent(pi)`：整条通知点一下就抓快照；action 仍保留，并补上图标（原来 icon=0）。
+- 正文 `snap_notif_text` 缩短为「点一下抓取当前页面」。
+- 实测：点通知本体 → `capture attempt=0 candidates=1 pkg=com.android.settings` → `snapshot saved nodes=22`。
+
+**版本** 0.17.12 / versionCode 84。
+
 ## 0.17.11 - 2026-11-01 · 开屏窗口收到 4 秒、内容节流 600ms、点掉即关窗
 
 **背景**：用户反馈「接触到的开屏都是马上出现」，不需要为延迟出现的广告留 6 秒余量，反而该收紧，减少主界面暴露。
