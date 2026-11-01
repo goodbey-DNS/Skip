@@ -513,6 +513,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 // 「切到这个 App」：前一个出现在屏幕上的是别的包（含桌面）就算
                 val freshSwitch = prevShown != ep
                 lastShownPkg = ep
+                Log.v(TAG, "wsc $ep prev=$prevShown fresh=$freshSwitch cls=${event.className}")
                 // 开屏窗口只从「真的切到这个 App 的那一刻」起算：开屏页跳主界面会再来一个
                 // WSC，若每次都刷新，主界面前 6 秒也会被当成开屏——那正是误点的来源
                 if (freshSwitch) {
@@ -553,6 +554,7 @@ class SkipAccessibilityService : AccessibilityService() {
             if (ep != null && ep != packageName && ep != SYSTEM_UI_PKG && countsAsForeground(ep)) {
                 lastFgPkg = ep
                 if (ep != lastShownPkg && ep !in blacklist) {
+                    Log.v(TAG, "wcc-switch $ep prev=$lastShownPkg")
                     lastShownPkg = ep
                     lastStateChangeAt[ep] = SystemClock.elapsedRealtime()
                 }
