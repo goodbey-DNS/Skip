@@ -98,8 +98,16 @@ object KeepAlive {
         return cur.split(':').any { sameService(it, me) }
     }
 
-    /** 运行态：系统当前真实绑定着本服务（比配置态可信，ROM 拦自启时配置在但没绑定） */
+    /**
+     * 运行态：系统当前真实绑定着本服务（比配置态可信，ROM 拦自启时配置在但没绑定）。
+     *
+     * 先看同进程里的服务实例——这是最直接的证据。无障碍管理器那份列表在部分 ROM 上
+     * 并不可靠：本次在 HyperOS 上实测到「dumpsys accessibility 显示已绑定」但
+     * `getEnabledAccessibilityServiceList` 里查不到本服务，只看列表会一直误判掉线。
+     * 列表查询留作兜底（服务刚起来、实例还没赋值的那一瞬间会走到）。
+     */
     fun isRunningNow(context: Context): Boolean {
+        if (SkipAccessibilityService.instance != null) return true
         val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
             ?: return false
         val me = serviceComponent(context)

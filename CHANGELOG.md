@@ -2,6 +2,16 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.16.9 - 2026-11-01 · 运行态判断改用服务实例
+
+**根因（0.16.6 的修复没修干净）**
+- 0.16.6 把标识格式统一了，但 `isRunningNow` 仍然只查 `AccessibilityManager.getEnabledAccessibilityServiceList(FEEDBACK_ALL_MASK)`。HyperOS 上实测：`dumpsys accessibility` 显示服务已绑定，主界面却仍显示「⚠ 设置里已开启，但服务没连上（上次连上 1 分钟前）」——那份列表里查不到本服务。
+- 后果是主界面状态长期显示错误，回前台自动恢复也会每 30 秒触发一次无谓的 `checkAndRecover`。
+
+**改了什么**
+- `isRunningNow` 先看同进程的 `SkipAccessibilityService.instance`（`@Volatile`，服务连上时赋值、onDestroy 清空）。这是最直接的证据，不依赖任何系统列表。列表查询保留为兜底，只覆盖「服务刚起来、实例还没赋值」那一瞬间。
+- 版本 0.16.9 / versionCode 56。
+
 ## 0.16.8 - 2026-11-01 · 自启动说明去掉写死的「荣耀」
 
 **改了什么**
