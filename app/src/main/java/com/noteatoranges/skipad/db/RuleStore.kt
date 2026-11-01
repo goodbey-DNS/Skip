@@ -1,7 +1,9 @@
 package com.noteatoranges.skipad.db
 
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.RectF
+import com.noteatoranges.skipad.core.EngineTrace
 import com.noteatoranges.skipad.core.SkipRule
 import org.json.JSONArray
 import org.json.JSONObject
@@ -65,6 +67,16 @@ data class SkipAppRule(
     val zoneT: Float? = null,
     val zoneR: Float? = null,
     val zoneB: Float? = null,
+    /**
+     * 记录 zone 时屏幕是不是横的。
+     *
+     * zone 是「四边占屏比例」，比例只在同一方向上可比：竖屏时按钮在右上角
+     * （宽 85%–98%、高 40%–53%），转成横屏后同一物理位置换算出来是
+     * 宽 39%–46%、高 87%–98%，用竖屏的比例去校验必然失配 —— 规则看起来「已启用」，
+     * 实际一次都不会命中。存下方向，回放时方向不一致就不拿它当证据，退回
+     * 「只按文字/控件匹配」的旧行为，宁可少一层约束，也不要拿错的约束误杀。
+     */
+    val zoneLand: Boolean? = null,
 ) {
     val hasAnchor: Boolean get() = !anchorVid.isNullOrBlank() || !anchorText.isNullOrBlank()
     val hasPath: Boolean get() = !nodePath.isNullOrBlank()
@@ -134,6 +146,8 @@ object RuleStore {
             zoneT = if (j.has("zoneT")) j.optDouble("zoneT").toFloat() else null,
             zoneR = if (j.has("zoneR")) j.optDouble("zoneR").toFloat() else null,
             zoneB = if (j.has("zoneB")) j.optDouble("zoneB").toFloat() else null,
+            // 旧规则没有这个字段：当作「不知道方向」，回放时按不校验处理（见 zoneFor）
+            zoneLand = if (j.has("zoneLand")) j.optBoolean("zoneLand") else null,
         )
     }
 
@@ -215,6 +229,7 @@ object RuleStore {
                 r.zoneT?.let { put("zoneT", it.toDouble()) }
                 r.zoneR?.let { put("zoneR", it.toDouble()) }
                 r.zoneB?.let { put("zoneB", it.toDouble()) }
+                r.zoneLand?.let { put("zoneLand", it) }
             })
         }
         // 原子写：先落临时文件再改名。直接 writeText 若中途被杀，会留下半截 JSON，
@@ -347,9 +362,31 @@ object RuleStore {
                     maxCount = r.maxCount,
                     // 只给文字规则加位置约束：viewId / 结构路径已经精确指向控件本身，
                     // 再加位置反而会在布局微调后把规则判死
-                    zone = if (r.textContains != null) r.zone else null,
+                    zone = if (r.textContains != null) zoneFor(context, r) else null,
                 )
             }
+
+    /**
+     * 回放时的位置证据：只有「跟记录时同一屏幕方向」才算数。
+     *
+     * 比例只在同一方向下可比。竖屏记录时按钮在右上（宽 85%–98%、高 40%–53%），
+     * 横屏回放算出来是宽 39%–46%、高 87%–98%，拿旧比例去校验会使整条规则静默失配。
+     * 与其用错的约束去误杀，不如在这一层放弃约束 —— 文字/控件匹配本身还在生效。
+     *
+     * 旧规则（0.17.24 及以前）没有方向字段：没有证据说它错，沿用原行为不动，
+     * 免得升级本身变成一次行为回归。
+     */
+    private fun zoneFor(context: Context, r: SkipAppRule): RectF? {
+        val z = r.zone ?: return null
+        val recorded = r.zoneLand ?: return z
+        val now = context.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        if (recorded == now) return z
+        EngineTrace.add(
+            "zone-skip ${r.id} 记录时${if (recorded) "横屏" else "竖屏"}、当前" +
+                "${if (now) "横屏" else "竖屏"}，位置校验不参与本轮"
+        )
+        return null
+    }
 
     /** 坐标类规则：某 App（某页面）下生效的 */
     fun pointRules(context: Context, app: String, activity: String?): List<SkipAppRule> =

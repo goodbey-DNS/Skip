@@ -73,7 +73,8 @@ object BuiltinRules {
         SkipRule(
             id = "splash-common-text",
             // zh-CN/zh-TW/ja/ko/en 常见"跳过"文案；contains 匹配天然覆盖"跳过 3""Skip 5s"
-            patterns = listOf("跳过", "跳過", "スキップ", "건너떄기", "skip"),
+            // 韩语是 건너뛰기（ttwi-），此前误写成 건너떄기，韩语界面永远匹配不到
+            patterns = listOf("跳过", "跳過", "スキップ", "건너뛰기", "skip"),
             cooldownMs = BUILTIN_COOLDOWN_MS,
             maxCount = BUILTIN_MAX_COUNT,
         ),

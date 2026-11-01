@@ -21,6 +21,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.noteatoranges.skipad.core.BuiltinRules
 import com.noteatoranges.skipad.core.ClickPerformer
+import com.noteatoranges.skipad.core.EngineTrace
 import com.noteatoranges.skipad.core.NodeFactsCache
 import com.noteatoranges.skipad.core.NodeScanner
 import com.noteatoranges.skipad.core.SkipRule
@@ -181,7 +182,16 @@ class SkipAccessibilityService : AccessibilityService() {
 
     private val snapshotReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == ACTION_TAKE_SNAPSHOT) takeSnapshot()
+            if (intent.action != ACTION_TAKE_SNAPSHOT) return
+            // 广播接收器里抛出的异常没有上层接盘，直接带走整个进程 ——
+            // 而进程一死，无障碍服务跟着掉线，用户看到的就是「跳着跳着不跳了」。
+            // 抓快照要读截图、要跨进程遍历节点，都是可能抛的地方，必须兜住
+            try {
+                takeSnapshot()
+            } catch (t: Throwable) {
+                traceW("snapshot-fail", t)
+                bubbleToast("抓取失败：${t.javaClass.simpleName}")
+            }
         }
     }
 
@@ -189,7 +199,7 @@ class SkipAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         // 连接留痕：装了新包之后服务是否真的起来了，只能靠这一行判断
         val ver = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()
-        Log.i(TAG, "service-connected $ver")
+        traceI("service-connected $ver")
         clicker = ClickPerformer(this)
         homePkgs = findHomePackages()
         blacklist = PACKAGE_BLACKLIST + homePkgs
@@ -235,7 +245,7 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
-        Log.i(TAG, "service-unbind")
+        traceI("service-unbind")
         val appContext = applicationContext
         Thread {
             SystemClock.sleep(UNBIND_RECOVER_DELAY_MS)
@@ -266,13 +276,22 @@ class SkipAccessibilityService : AccessibilityService() {
         com.noteatoranges.skipad.util.CaptureBubble.hide(this)
         // 250ms 在部分 ROM 上不够：圆钮移除后焦点/窗口列表还在变，取到的树是空的
         mainHandler.postDelayed({
-            sendBroadcast(Intent(ACTION_TAKE_SNAPSHOT).setPackage(packageName))
+            try {
+                sendBroadcast(Intent(ACTION_TAKE_SNAPSHOT).setPackage(packageName))
+            } catch (t: Throwable) {
+                traceW("snapshot-broadcast-fail", t)
+            }
         }, BUBBLE_HIDE_DELAY_MS)
         mainHandler.postDelayed({
-            if (com.noteatoranges.skipad.util.CaptureBubble.isEnabled(this)) {
-                com.noteatoranges.skipad.util.CaptureBubble.apply(this)
-                com.noteatoranges.skipad.util.CaptureBubble.onClick = { bubbleClicked() }
-                com.noteatoranges.skipad.util.CaptureBubble.onLongClick = { bubbleLongClicked() }
+            // 悬浮窗可能被系统拒绝（权限被收回、窗口数超限），抛出来会带走进程
+            try {
+                if (com.noteatoranges.skipad.util.CaptureBubble.isEnabled(this)) {
+                    com.noteatoranges.skipad.util.CaptureBubble.apply(this)
+                    com.noteatoranges.skipad.util.CaptureBubble.onClick = { bubbleClicked() }
+                    com.noteatoranges.skipad.util.CaptureBubble.onLongClick = { bubbleLongClicked() }
+                }
+            } catch (t: Throwable) {
+                traceW("bubble-restore-fail", t)
             }
         }, 1500)
     }
@@ -312,14 +331,38 @@ class SkipAccessibilityService : AccessibilityService() {
                 else -> clicker?.clickPoint(point.first, point.second) == true
             }
             if (fired) ok++
-            Log.d(
-                TAG,
-                "manual-point ${r.id} ${r.actionLabel} $pkg" +
+            traceD("manual-point ${r.id} ${r.actionLabel} $pkg" +
                     " (${(point.first / resources.displayMetrics.widthPixels * 100).toInt()}%," +
                     "${(point.second / resources.displayMetrics.heightPixels * 100).toInt()}%) ok=$fired",
             )
         }
         bubbleToast("已执行 ${rules.size} 条坐标规则（成功 $ok）")
+    }
+
+    // ———————— 日志：logcat + 进程内痕迹 ————————
+    //
+    // 每个决策点都要留两处痕：logcat 给连着电脑的时候看，EngineTrace 给
+    // 「手机上出问题、没电脑」的时候看。少了后者，日志缓冲被 ROM 关掉的机型
+    // （adb logcat 读出 0 字节）上就完全无法回答「刚才为什么不跳」。
+
+    private fun traceV(msg: String) {
+        EngineTrace.add(msg)
+        Log.v(TAG, msg)
+    }
+
+    private fun traceD(msg: String) {
+        EngineTrace.add(msg)
+        Log.d(TAG, msg)
+    }
+
+    private fun traceI(msg: String) {
+        EngineTrace.add(msg)
+        Log.i(TAG, msg)
+    }
+
+    private fun traceW(msg: String, t: Throwable? = null) {
+        EngineTrace.add(if (t == null) msg else "$msg :: ${t.javaClass.simpleName}: ${t.message}")
+        Log.w(TAG, msg, t)
     }
 
     /** 1dp 对应的像素，锚点偏移用 */
@@ -367,7 +410,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 return (anchor.exactCenterX() + dp(r.dxDp ?: 0)) to
                     (anchor.bottom.toFloat() + dp(r.dyDp ?: 0))
             }
-            Log.d(TAG, "anchor-miss ${r.id} vid=${r.anchorVid} text=${r.anchorText}")
+            traceD("anchor-miss ${r.id} vid=${r.anchorVid} text=${r.anchorText}")
             if (r.xRatio == null || r.yRatio == null) return null
         }
         val xr = r.xRatio ?: return null
@@ -417,11 +460,11 @@ class SkipAccessibilityService : AccessibilityService() {
     private fun gate(key: String, cooldownMs: Long, maxCount: Int, now: Long): Boolean {
         val st = ruleState.getOrPut(key) { RuleRun() }
         if (maxCount > 0 && st.count >= maxCount) {
-            Log.v(TAG, "gate-max $key ${st.count}/$maxCount")
+            traceV("gate-max $key ${st.count}/$maxCount")
             return false
         }
         if (cooldownMs > 0 && st.lastAt > 0 && now - st.lastAt < cooldownMs) {
-            Log.v(TAG, "gate-cd $key ${now - st.lastAt}ms/${cooldownMs}ms")
+            traceV("gate-cd $key ${now - st.lastAt}ms/${cooldownMs}ms")
             return false
         }
         st.lastAt = now
@@ -450,7 +493,7 @@ class SkipAccessibilityService : AccessibilityService() {
     private fun clickNodeOnce(node: AccessibilityNodeInfo): Boolean {
         val key = rectKeyOf(node)
         if (key in clickedRects) {
-            Log.v(TAG, "click-dup $key")
+            traceV("click-dup $key")
             return false
         }
         val ok = clicker?.click(node) == true
@@ -504,7 +547,7 @@ class SkipAccessibilityService : AccessibilityService() {
         try {
             handleEvent(event)
         } catch (t: Throwable) {
-            Log.w(TAG, "event-fail type=${event.eventType} pkg=${event.packageName}", t)
+            traceW("event-fail type=${event.eventType} pkg=${event.packageName}", t)
         }
     }
 
@@ -523,7 +566,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 // 「切到这个 App」：前一个出现在屏幕上的是别的包（含桌面）就算
                 val freshSwitch = prevShown != ep
                 lastShownPkg = ep
-                Log.v(TAG, "wsc $ep prev=$prevShown fresh=$freshSwitch cls=${event.className}")
+                traceV("wsc $ep prev=$prevShown fresh=$freshSwitch cls=${event.className}")
                 // 开屏窗口只从「真的切到这个 App 的那一刻」起算：开屏页跳主界面会再来一个
                 // WSC，若每次都刷新，主界面前 6 秒也会被当成开屏——那正是误点的来源
                 if (freshSwitch) {
@@ -571,7 +614,7 @@ class SkipAccessibilityService : AccessibilityService() {
                     if (now - last > SPLASH_FALLBACK_GAP_MS) {
                         if (splashFallbackAt.size > 50) splashFallbackAt.clear()
                         splashFallbackAt[ep] = now
-                        Log.v(TAG, "wcc-switch $ep prev=$lastShownPkg")
+                        traceV("wcc-switch $ep prev=$lastShownPkg")
                         lastShownPkg = ep
                         lastStateChangeAt[ep] = now
                         // 坐标规则也要排一次：不走窗口切换事件的应用（计算器这类）
@@ -612,7 +655,7 @@ class SkipAccessibilityService : AccessibilityService() {
         if (splashState[pkg] != splash) {
             if (splashState.size > 50) splashState.clear()
             splashState[pkg] = splash
-            Log.v(TAG, "splash-window $pkg ${if (splash) "open" else "closed"}")
+            traceV("splash-window $pkg ${if (splash) "open" else "closed"}")
         }
 
         // 刷新用户规则扫描器（规则版本 / 包名 / 页面任一变化就重建）
@@ -659,26 +702,26 @@ class SkipAccessibilityService : AccessibilityService() {
         // 不能凭感觉（上限是 TRAVERSE_TIMEOUT_MS=400ms）
         val cost = SystemClock.elapsedRealtime() - t0
         if (hit == null) {
-            Log.v(TAG, "scan $pkg ${cost}ms: $dbg")
+            traceV("scan $pkg ${cost}ms: $dbg")
             return
         }
         val detail = hit.first.text?.toString()
             ?: hit.first.contentDescription?.toString()
             ?: hit.first.viewIdResourceName
             ?: hit.second.id
-        Log.d(TAG, "match $pkg ${cost}ms: $dbg")
+        traceD("match $pkg ${cost}ms: $dbg")
 
         val rule = hit.second
         // 冷却 / 次数上限：拦在这里，误点的代价远大于漏跳
         if (!gate("$pkg|${rule.id}", rule.cooldownMs, rule.maxCount, now)) return
         if (rule.action == SkipRule.ACTION_NONE) {
-            Log.d(TAG, "match-only $pkg 「$detail」 规则=${rule.id}")
+            traceD("match-only $pkg 「$detail」 规则=${rule.id}")
             return
         }
         // 这个位置本轮已经点过了：直接放过。放在 dumpTree 之前——否则每个后续事件
         // 都会重写一份诊断树，并且走到 action-fail 把自己的日志污染成「点击失败」
         if (rectKeyOf(hit.first) in clickedRects) {
-            Log.v(TAG, "match-dup $pkg 规则=${rule.id}")
+            traceV("match-dup $pkg 规则=${rule.id}")
             return
         }
         dumpTree(root, pkg, "match")
@@ -687,7 +730,7 @@ class SkipAccessibilityService : AccessibilityService() {
             else -> clickNodeOnce(hit.first)
         }
         if (!fired) {
-            Log.d(TAG, "action-fail $pkg ${rule.action} 规则=${rule.id}")
+            traceD("action-fail $pkg ${rule.action} 规则=${rule.id}")
             return
         }
         lastSkipWindow = windowKeyFor(pkg, event, root)
@@ -707,6 +750,17 @@ class SkipAccessibilityService : AccessibilityService() {
      * 那是实打实的跨应用误点。规则按 App 建，核验也只认那个 App。
      */
     private fun verifySkip() {
+        // 这个方法由 postDelayed 反复调度：异常没人接盘就是整个进程倒下，
+        // 而进程一死无障碍服务跟着掉线。补刀手势、跨窗口读节点都在这条路上
+        try {
+            verifySkipOnce()
+        } catch (t: Throwable) {
+            traceW("verify-fail", t)
+            pending = null
+        }
+    }
+
+    private fun verifySkipOnce() {
         val p = pending ?: return
         val found = if (p.path != null) {
             findByPathAnyWindow(p.pkg, p.path, 0)?.let { Triple(it, p.pkg, "path") }
@@ -718,12 +772,12 @@ class SkipAccessibilityService : AccessibilityService() {
             Io.run("stats-insert") { StatsDb.get(appCtx).insert(p.pkg, p.detail) }
             // 点掉了就立即关窗：开屏都是立刻出现，多等一秒就是在主界面上多扫一秒
             splashClosedAt[p.pkg] = SystemClock.elapsedRealtime()
-            Log.d(TAG, "verified ${p.pkg} 「${p.detail}」 (attempts=${p.attempts})")
+            traceD("verified ${p.pkg} 「${p.detail}」 (attempts=${p.attempts})")
             pending = null
             return
         }
         if (p.attempts >= p.maxRetry) {
-            Log.d(TAG, "giveup ${p.pkg} 「${p.detail}」目标仍在(${found.second}), 已补刀${p.attempts}次不记账")
+            traceD("giveup ${p.pkg} 「${p.detail}」目标仍在(${found.second}), 已补刀${p.attempts}次不记账")
             dumpTree(rootInActiveWindow, p.pkg, "giveup")
             pending = null
             return
@@ -733,7 +787,7 @@ class SkipAccessibilityService : AccessibilityService() {
         found.first.getBoundsInScreen(rect)
         if (!rect.isEmpty) {
             val ok = clicker?.clickPoint(rect.exactCenterX(), rect.exactCenterY()) ?: false
-            Log.d(TAG, "retry#${p.attempts} ${p.pkg} gesture ok=$ok win=${found.second}")
+            traceD("retry#${p.attempts} ${p.pkg} gesture ok=$ok win=${found.second}")
         }
         mainHandler.postDelayed({ if (pending === p) verifySkip() }, VERIFY_DELAY_MS)
     }
@@ -854,44 +908,49 @@ class SkipAccessibilityService : AccessibilityService() {
         var aborted = false
         POINT_RETRY_OFFSETS.forEachIndexed { i, off ->
             mainHandler.postDelayed({
-                if (aborted) return@postDelayed
-                // 必须和主扫描链路用同一套 root 兜底：部分 ROM 上 rootInActiveWindow 恒为
-                // null，只认它的话坐标规则在那些机器上一次都不会触发（0.17.4 修的是同一个坑）
-                val root = currentRootOf(pkg) ?: return@postDelayed
-                val now = SystemClock.elapsedRealtime()
-                // 盲点时间盒：窗口出现超过 8 秒还在按坐标点，说明早就不是开屏了，
-                // 这时候点下去是拿用户的操作界面赌运气。只作用于坐标规则——
-                // 按文字/控件匹配的规则有自己的形状闸，不需要这层
-                val born = lastStateChangeAt[pkg]
-                if (born != null && now - born > POINT_MAX_WINDOW_AGE_MS) {
-                    Log.d(TAG, "point-skip ${r.id} $pkg 窗口已 ${now - born}ms，超过盲点时间盒")
-                    aborted = true
-                    return@postDelayed
-                }
-                if (i == 0) {
-                    if (!gate("$pkg|${r.id}", r.cooldownMs, r.maxCount, now)) {
+                // postDelayed 的 runnable 抛异常没有人接：Handler 直接把进程带走。
+                // 坐标规则要读跨进程节点、要投递手势，都是会抛的地方
+                try {
+                    if (aborted) return@postDelayed
+                    // 必须和主扫描链路用同一套 root 兜底：部分 ROM 上 rootInActiveWindow 恒为
+                    // null，只认它的话坐标规则在那些机器上一次都不会触发（0.17.4 修的是同一个坑）
+                    val root = currentRootOf(pkg) ?: return@postDelayed
+                    val now = SystemClock.elapsedRealtime()
+                    // 盲点时间盒：窗口出现超过 8 秒还在按坐标点，说明早就不是开屏了，
+                    // 这时候点下去是拿用户的操作界面赌运气。只作用于坐标规则——
+                    // 按文字/控件匹配的规则有自己的形状闸，不需要这层
+                    val born = lastStateChangeAt[pkg]
+                    if (born != null && now - born > POINT_MAX_WINDOW_AGE_MS) {
+                        traceD("point-skip ${r.id} $pkg 窗口已 ${now - born}ms，超过盲点时间盒")
                         aborted = true
                         return@postDelayed
                     }
-                    gateOpened = true
-                } else if (!gateOpened) {
-                    return@postDelayed
-                }
-                val point = resolvePoint(root, r) ?: return@postDelayed
-                val fired = when (r.action) {
-                    SkipRule.ACTION_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
-                    SkipRule.ACTION_NONE -> {
-                        Log.d(TAG, "point-match-only ${r.id} $pkg")
-                        true
+                    if (i == 0) {
+                        if (!gate("$pkg|${r.id}", r.cooldownMs, r.maxCount, now)) {
+                            aborted = true
+                            return@postDelayed
+                        }
+                        gateOpened = true
+                    } else if (!gateOpened) {
+                        return@postDelayed
                     }
-                    else -> clicker?.clickPoint(point.first, point.second) ?: false
+                    val point = resolvePoint(root, r) ?: return@postDelayed
+                    val fired = when (r.action) {
+                        SkipRule.ACTION_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
+                        SkipRule.ACTION_NONE -> {
+                            traceD("point-match-only ${r.id} $pkg")
+                            true
+                        }
+                        else -> clicker?.clickPoint(point.first, point.second) ?: false
+                    }
+                    traceD("point#${i + 1} ${r.id} ${r.actionLabel} $pkg ok=$fired" +
+                            " (${(point.first / resources.displayMetrics.widthPixels * 100).toInt()}%," +
+                            "${(point.second / resources.displayMetrics.heightPixels * 100).toInt()}%)",
+                    )
+                } catch (t: Throwable) {
+                    aborted = true
+                    traceW("point-fail ${r.id} $pkg", t)
                 }
-                Log.d(
-                    TAG,
-                    "point#${i + 1} ${r.id} ${r.actionLabel} $pkg ok=$fired" +
-                        " (${(point.first / resources.displayMetrics.widthPixels * 100).toInt()}%," +
-                        "${(point.second / resources.displayMetrics.heightPixels * 100).toInt()}%)",
-                )
             }, r.delayMs + off)
         }
     }
@@ -1059,6 +1118,17 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     private fun captureNow(attempt: Int = 0) {
+        // 抓快照会在多处被 postDelayed 调度（收起通知栏后、重试等待后），
+        // 那些回调里抛异常同样会带走进程。统一在这里兜住
+        try {
+            captureNowUnsafe(attempt)
+        } catch (t: Throwable) {
+            traceW("capture-fail attempt=$attempt", t)
+            bubbleToast("抓取失败：${t.javaClass.simpleName}")
+        }
+    }
+
+    private fun captureNowUnsafe(attempt: Int = 0) {
         // 再试一次拿前台包名：hide 之后活动窗口就是目标 App
         runCatching { rootInActiveWindow?.packageName?.toString() }
             .getOrNull()
@@ -1076,7 +1146,7 @@ class SkipAccessibilityService : AccessibilityService() {
             // 一个窗口都拿不到（应用禁了无障碍，连自己的悬浮钮也刚被移除）：
             // 只要知道前台是哪个 App，就还能只存截图
             val fg = lastFgPkg
-            Log.i(TAG, "capture-empty attempts=$attempt fg=$fg")
+            traceI("capture-empty attempts=$attempt fg=$fg")
             captureScreenshotOnly(attempt, fg ?: UNKNOWN_PKG)
             return
         }
@@ -1087,7 +1157,7 @@ class SkipAccessibilityService : AccessibilityService() {
             it.second.packageName?.toString() != packageName
         }?.second?.packageName?.toString()
         val pkg = otherPkg ?: lastFgPkg ?: UNKNOWN_PKG
-        Log.i(TAG, "capture attempt=$attempt candidates=${candidates.size} pkg=$pkg otherPkg=$otherPkg")
+        traceI("capture attempt=$attempt candidates=${candidates.size} pkg=$pkg otherPkg=$otherPkg")
         val act = lastActivityClass[pkg] ?: ""
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
@@ -1148,7 +1218,7 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         // 系统界面、加载中的空白页只能抓到一两个节点，存下来是垃圾。
         // 也可能是这一帧只有个空壳弹窗——给重试机会，主窗口的树稍后才就绪
-        Log.i(TAG, "capture nodes=${nodes.size} pkg=$pkg windows=${windowRoots.size}")
+        traceI("capture nodes=${nodes.size} pkg=$pkg windows=${windowRoots.size}")
         if (nodes.size < 3) {
             if (attempt < CAPTURE_MAX_RETRY) {
                 mainHandler.postDelayed({ captureNow(attempt + 1) }, CAPTURE_RETRY_DELAY_MS)
@@ -1177,7 +1247,7 @@ class SkipAccessibilityService : AccessibilityService() {
                             // 不主动回收会一直压在 native heap，抓几次就积几十 MB
                             bitmap?.recycle()
                             StatsStore.logEvent(appCtx, "快照已保存：$pkg（$nodeCount 节点）")
-                            Log.d(TAG, "snapshot saved ${dir.path} nodes=$nodeCount ${shotW}x$shotH")
+                            traceD("snapshot saved ${dir.path} nodes=$nodeCount ${shotW}x$shotH")
                         }
                         Toast.makeText(appCtx, R.string.snap_saved, Toast.LENGTH_SHORT).show()
                     }
@@ -1198,7 +1268,7 @@ class SkipAccessibilityService : AccessibilityService() {
     private inner abstract class TakeScreenshotCallback :
         AccessibilityService.TakeScreenshotCallback {
         override fun onFailure(errorCode: Int) {
-            Log.w("SkipAdEngine", "takeScreenshot failed: $errorCode")
+            traceW("takeScreenshot failed: $errorCode")
             // 截图失败原来只写日志：用户点了没反应，也不知道为什么
             com.noteatoranges.skipad.util.CaptureBubble.apply(this@SkipAccessibilityService)
             Toast.makeText(
@@ -1260,7 +1330,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 File(dir, "${tag}_$ts.txt").writeText(text)
             }
         } catch (e: Exception) {
-            Log.w(TAG, "dumpTree failed", e)
+            traceW("dumpTree failed", e)
         }
     }
 
@@ -1318,19 +1388,19 @@ class SkipAccessibilityService : AccessibilityService() {
             val node = findByPathAnyWindow(pkg, r.nodePath ?: continue, r.nodeWinId) ?: continue
             // 类名/尺寸校验：页面改版后同一条路径可能指向别的控件，宁可不错
             if (!nodeMatches(r, node)) {
-                Log.v(TAG, "path-skip ${r.id} 控件已变（${node.className}）")
+                traceV("path-skip ${r.id} 控件已变（${node.className}）")
                 continue
             }
             if (!gate("$pkg|${r.id}", r.cooldownMs, r.maxCount, now)) continue
             if (r.action == SkipRule.ACTION_NONE) {
-                Log.d(TAG, "path-match-only ${r.id} path=${r.nodePath} $pkg")
+                traceD("path-match-only ${r.id} path=${r.nodePath} $pkg")
                 continue
             }
             val fired = when (r.action) {
                 SkipRule.ACTION_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
                 else -> clickNodeOnce(node)
             }
-            Log.d(TAG, "path-rule ${r.id} path=${r.nodePath} $pkg ok=$fired")
+            traceD("path-rule ${r.id} path=${r.nodePath} $pkg ok=$fired")
             if (!fired) continue
             val key = "$pkg#path/${r.nodePath}"
             lastSkipWindow = key

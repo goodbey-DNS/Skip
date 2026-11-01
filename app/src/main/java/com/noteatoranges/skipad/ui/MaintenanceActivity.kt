@@ -12,6 +12,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import com.noteatoranges.skipad.R
+import com.noteatoranges.skipad.core.EngineTrace
 import com.noteatoranges.skipad.db.StatsDb
 import com.noteatoranges.skipad.util.AppLabels
 import com.noteatoranges.skipad.util.Backup
@@ -46,6 +47,60 @@ class MaintenanceActivity : AppCompatActivity() {
                 confirmImport(latest, "最近备份 ${latest.name}")
             }
         }
+        findViewById<Button>(R.id.engine_log_button).setOnClickListener { showEngineLog() }
+        findViewById<Button>(R.id.engine_log_clear_button).setOnClickListener { confirmClearEngineLog() }
+    }
+
+    /**
+     * 引擎诊断：最近若干条决策痕迹，时间倒序（最新的在最上面）。
+     *
+     * 这是不连电脑也能回答「刚才为什么没跳过」的唯一入口 ——
+     * 部分机型把 logcat 缓冲区整个关掉，外部日志工具读不到任何东西。
+     */
+    private fun showEngineLog() {
+        val lines = EngineTrace.lines()
+        if (lines.isEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("引擎诊断")
+                .setMessage(
+                    "还没有记录。\n\n" +
+                        "服务刚重启过，或者这段时间还没有窗口事件。让目标 App 出现一次开屏广告再回来看。"
+                )
+                .setPositiveButton("好", null)
+                .show()
+            return
+        }
+        val text = lines.asReversed().joinToString("\n")
+        AlertDialog.Builder(this)
+            .setTitle("引擎诊断（最近 ${lines.size} 条）")
+            .setMessage(text)
+            .setPositiveButton("好", null)
+            .setNeutralButton("复制全部") { _, _ ->
+                copyToClipboard(text)
+            }
+            .show()
+    }
+
+    private fun copyToClipboard(text: String) {
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("SkipAd 引擎诊断", text))
+            Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "复制失败：${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun confirmClearEngineLog() {
+        AlertDialog.Builder(this)
+            .setTitle("清空引擎诊断？")
+            .setMessage("只清这份内存记录，不影响规则、快照和跳过统计。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("清空") { _, _ ->
+                EngineTrace.clear()
+                Toast.makeText(this, "已清空", Toast.LENGTH_SHORT).show()
+            }
+            .show()
     }
 
     private val pickBackup = registerForActivityResult(

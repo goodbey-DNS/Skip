@@ -592,6 +592,14 @@ class SnapshotDetailActivity : AppCompatActivity() {
         zoneT = zone?.top,
         zoneR = zone?.right,
         zoneB = zone?.bottom,
+        // 记下这颗按钮是在什么方向下量的：比例只在同一方向下可比，
+        // 横竖屏互转会整条失配（见 RuleStore.zoneFor）
+        zoneLand = zone?.let {
+            val (rw, rh) = realScreenPx()
+            val w = if (meta.screenW > 0) meta.screenW else rw
+            val h = if (meta.screenH > 0) meta.screenH else rh
+            w > h
+        },
     )
 
     /**

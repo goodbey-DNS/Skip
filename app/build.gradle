@@ -4,20 +4,21 @@ plugins {
 
 android {
     namespace 'com.noteatoranges.skipad'
-    // 36?AGP 9.x ????????????????? API ? 31?targetSdk ?? 34
+    // compileSdk 36：跟随 AGP 要求；targetSdk 压在 34，避免新系统行为（前台服务类型、
+    // 后台调度限制）在没验证过的前提下被动生效
     compileSdk 36
 
     defaultConfig {
         applicationId "com.noteatoranges.skipad"
         minSdk 26
         targetSdk 34
-        versionCode 96
-        versionName "0.17.24"
+        versionCode 97
+        versionName "0.17.25"
     }
 
-    // ?????CI ? GitHub Secrets ?? keystore ??????????
-    // ?????????????????????????????
-    // ???????????? signingConfig ????????? debug ???
+    // 签名来自 CI 的 GitHub Secrets（KEYSTORE_B64 / KEYSTORE_PASSWORD），
+    // 本地没有这两个环境变量时不做任何签名配置，交给 Gradle 默认行为
+    // ——因此本地构建出的包和 CI 出的包签名不同，不能互相覆盖安装
     def ciStoreB64 = System.getenv("KEYSTORE_B64")
     def ciStorePwd = System.getenv("KEYSTORE_PASSWORD")
 
@@ -37,12 +38,13 @@ android {
             if (ciStoreB64 && ciStorePwd) signingConfig signingConfigs.ci
         }
         release {
-            // ??????????????????/?????????????????
+            // 不开启混淆：本项目零第三方 SDK，代码量小，混淆收益低；
+            // 保留符号便于自己看堆栈
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // ????? release?debug ?? android:debuggable=true??????
-            // run-as ??????attach ???????CI ? release ?????? debug ???
-            // keystore??????????
+            // release 必须不可调试：debuggable=true 时拿到手机的人可以 run-as 读私有数据、
+            // attach 调试器改内存。对一个常驻无障碍服务的 App 来说这不是能留的口子，
+            // CI 里还有一步 apksigner/aapt2 校验，产物可调试会直接让发布失败
             if (ciStoreB64 && ciStorePwd) signingConfig signingConfigs.ci
         }
     }
@@ -52,7 +54,7 @@ android {
     }
 }
 
-// Kotlin 2.x ? compilerOptions??? kotlinOptions ????
+// Kotlin 2.x 已移除 kotlinOptions，统一用 compilerOptions
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
@@ -60,7 +62,7 @@ kotlin {
 }
 
 dependencies {
-    // M1 ???????????? material/compose?????????
+    // 依赖刻意压到最小：不引 material / compose，界面用原生 View 拼
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
 }
