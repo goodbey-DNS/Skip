@@ -112,8 +112,68 @@ class KeepAliveSettingsActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 跳各家 ROM 的「自启动 / 后台运行」管理页。
+     *
+     * 这些都是私有组件，名字各家不同且会随系统版本变，所以按「本机厂商最可能先命中」
+     * 的顺序排，逐个试，全失败才退回应用详情页。
+     */
     private fun openAutostartSettings() {
         val candidates = listOf(
+            // 小米 / Redmi（HyperOS、MIUI）
+            Intent().setComponent(
+                ComponentName(
+                    "com.miui.securitycenter",
+                    "com.miui.permcenter.autostart.AutoStartManagementActivity"
+                )
+            ),
+            Intent("miui.intent.action.OP_AUTO_START")
+                .addCategory(Intent.CATEGORY_DEFAULT),
+            // OPPO / 一加 / realme（ColorOS）
+            Intent().setComponent(
+                ComponentName(
+                    "com.coloros.safecenter",
+                    "com.coloros.safecenter.permission.startup.StartupAppListActivity"
+                )
+            ),
+            Intent().setComponent(
+                ComponentName(
+                    "com.coloros.safecenter",
+                    "com.coloros.safecenter.startupapp.StartupAppListActivity"
+                )
+            ),
+            Intent().setComponent(
+                ComponentName(
+                    "com.oppo.safe",
+                    "com.oppo.safe.permission.startup.StartupAppListActivity"
+                )
+            ),
+            Intent().setComponent(
+                ComponentName(
+                    "com.oneplus.security",
+                    "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity"
+                )
+            ),
+            // vivo / iQOO（OriginOS、Funtouch）
+            Intent().setComponent(
+                ComponentName(
+                    "com.vivo.permissionmanager",
+                    "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"
+                )
+            ),
+            Intent().setComponent(
+                ComponentName(
+                    "com.iqoo.secure",
+                    "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager"
+                )
+            ),
+            Intent().setComponent(
+                ComponentName(
+                    "com.iqoo.secure",
+                    "com.iqoo.secure.safeguard.PurviewTabActivity"
+                )
+            ),
+            // 荣耀 / 华为
             Intent("hihonor.intent.action.HSM_STARTUPAPP_MANAGER")
                 .setPackage("com.hihonor.systemmanager"),
             Intent("hihonor.intent.action.HSM_STARTUPAPP_MANAGER"),
@@ -129,14 +189,23 @@ class KeepAliveSettingsActivity : AppCompatActivity() {
                     "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"
                 )
             ),
+            // 三星
+            Intent().setComponent(
+                ComponentName(
+                    "com.samsung.android.lool",
+                    "com.samsung.android.sm.ui.battery.BatteryActivity"
+                )
+            ),
         )
         for (i in candidates) {
             try {
                 startActivity(i)
                 return
             } catch (e: Exception) {
+                // 组件不存在就试下一个；全部失败才退到应用详情
             }
         }
+        Toast.makeText(this, "这台机型没找到自启动设置页，已在应用详情里，手动找「自启动/后台运行」", Toast.LENGTH_LONG).show()
         openAppInfo()
     }
 

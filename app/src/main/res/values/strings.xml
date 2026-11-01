@@ -6,6 +6,7 @@
     <string name="status_on">✓ 已开启，正在自动跳过开屏广告</string>
     <string name="status_off">✗ 未开启，点下方按钮去系统设置开启</string>
     <string name="status_not_bound">⚠ 设置里已开启，但服务没连上——点「立即自检」，或把无障碍开关关开一次</string>
+    <string name="status_not_bound_ago">⚠ 设置里已开启，但服务没连上（上次连上 %1$d 分钟前）——点「立即自检」，或把无障碍开关关开一次</string>
     <string name="action_enable">去开启无障碍服务</string>
     <string name="action_open_settings">查看无障碍设置</string>
     <string name="action_check_now">立即自检</string>
@@ -30,7 +31,7 @@
     <string name="settings_row_ka">保活与后台</string>
     <string name="settings_row_ka_sub">静默复活 · 电池优化 · 自启动</string>
     <string name="settings_row_maintain">数据与维护</string>
-    <string name="settings_row_maintain_sub">内存占用 · 清理缓存 · 清空统计</string>
+    <string name="settings_row_maintain_sub">内存占用 · 清理缓存 · 清空统计 · 备份规则</string>
     <string name="maintain_title">数据与维护</string>
     <string name="clear_stats_warn_repeat">清空操作不可恢复，包含累计次数、排行榜与最近记录；保活日志不受影响。</string>
     <string name="tab_about">关于</string>

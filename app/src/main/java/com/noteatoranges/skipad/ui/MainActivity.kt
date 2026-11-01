@@ -46,6 +46,10 @@ class MainActivity : AppCompatActivity() {
     private var bottomInsetPx = 0
     private var currentTab = 0
 
+    /** 最近一次「进前台自动尝试恢复」的时刻；30 秒内不重复触发 */
+    private var lastAutoCheckAt = 0L
+    private val AUTO_CHECK_GAP_MS = 30_000L
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -114,11 +118,6 @@ class MainActivity : AppCompatActivity() {
         selectTab(0)
     }
 
-    override fun onResume() {
-        super.onResume()
-        refresh()
-    }
-
     private fun glassWidth(): Int =
         minOf(dp(300), resources.displayMetrics.widthPixels - dp(40))
 
@@ -139,15 +138,51 @@ class MainActivity : AppCompatActivity() {
         // 用户在无障碍设置里看到「已开启」、自检却说掉线，就会以为 App 在乱报
         val inSettings = KeepAlive.isEnabledInSettings(this)
         val running = KeepAlive.isRunningNow(this)
-        val (textId, colorId) = when {
-            running -> R.string.status_on to R.color.status_on
-            inSettings -> R.string.status_not_bound to R.color.status_off
-            else -> R.string.status_off to R.color.status_off
+        when {
+            running -> {
+                statusText.setText(R.string.status_on)
+                statusText.setTextColor(getColor(R.color.status_on))
+            }
+            inSettings -> {
+                statusText.text = notBoundText()
+                statusText.setTextColor(getColor(R.color.status_off))
+            }
+            else -> {
+                statusText.setText(R.string.status_off)
+                statusText.setTextColor(getColor(R.color.status_off))
+            }
         }
-        statusText.setText(textId)
-        statusText.setTextColor(getColor(colorId))
         actionButton.setText(if (inSettings) R.string.action_open_settings else R.string.action_enable)
         loadStatsAsync()
+    }
+
+    /** 「设置里开着但没连上」的提示，带上距上次真正连上的分钟数 */
+    private fun notBoundText(): String {
+        val at = KeepAlive.lastConnectedAt(this)
+        if (at <= 0L) return getString(R.string.status_not_bound)
+        val min = ((System.currentTimeMillis() - at) / 60_000L).coerceAtLeast(1L)
+        return getString(R.string.status_not_bound_ago, min)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refresh()
+        autoRecoverIfDropped()
+    }
+
+    /**
+     * 回到前台时如果发现「设置里开着但服务没连上」，立刻试一次恢复。
+     *
+     * 15 分钟一次的周期 Job 最慢要等一刻钟，用户打开 App 就是最好的时机。
+     * 30 秒内只自动试一次，避免来回切页面时反复弹 Toast。
+     */
+    private fun autoRecoverIfDropped() {
+        if (!KeepAlive.isEnabledInSettings(this)) return
+        if (KeepAlive.isRunningNow(this)) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastAutoCheckAt < AUTO_CHECK_GAP_MS) return
+        lastAutoCheckAt = now
+        runCheck { }
     }
 
     private fun runCheck(onDone: () -> Unit) {

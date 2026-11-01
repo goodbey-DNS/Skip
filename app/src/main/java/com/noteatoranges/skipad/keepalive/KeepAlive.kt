@@ -49,6 +49,21 @@ object KeepAlive {
     private const val RESURRECT_PER_HOUR = 6
     private const val PREF_KA = "keepalive"
     private const val KEY_RESURRECT_TS = "resurrect_ts"
+    private const val KEY_LAST_CONN = "last_conn_at"
+
+    /**
+     * 记下「服务最后一次真的连上」的时间。
+     *
+     * 断线感知靠这个：进程被杀时没有任何回调可写，只能反过来记「最后活着的时刻」。
+     * 主界面拿它算「上次连上 N 分钟前」，用户一眼能看出是刚掉的还是压根没起来。
+     */
+    fun markConnected(context: Context) {
+        context.getSharedPreferences(PREF_KA, Context.MODE_PRIVATE)
+            .edit().putLong(KEY_LAST_CONN, System.currentTimeMillis()).apply()
+    }
+
+    fun lastConnectedAt(context: Context): Long =
+        context.getSharedPreferences(PREF_KA, Context.MODE_PRIVATE).getLong(KEY_LAST_CONN, 0L)
 
     @Volatile
     private var lastResurrectAt = 0L

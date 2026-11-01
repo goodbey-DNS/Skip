@@ -2,6 +2,20 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.16.7 - 2026-11-01 · 维护页功能小字 + 自启动覆盖小米/OPPO/vivo + 断线感知
+
+**改了什么**
+- 设置页「数据与维护」的副标题从「内存占用 · 清理缓存 · 清空统计」改成「内存占用 · 清理缓存 · 清空统计 · 备份规则」——这一行是用户唯一能一眼看到该页有什么的地方，原来漏了备份。
+- **自启动跳转补齐厂商**（`openAutostartSettings`）。原来只有荣耀/华为的两三个 Intent，小米、OPPO、vivo 全都退化成跳应用详情页。现在按「本机最可能先命中」的顺序排：小米 `com.miui.securitycenter/com.miui.permcenter.autostart.AutoStartManagementActivity` + `miui.intent.action.OP_AUTO_START`；OPPO/一加 `com.coloros.safecenter`（两个 Activity）、`com.oppo.safe`、`com.oneplus.security`；vivo/iQOO `com.vivo.permissionmanager`、`com.iqoo.secure`（两个 Activity）；荣耀/华为保持原样；三星 `com.samsung.android.lool`。全部失败时给一句提示再退应用详情。
+- **断线感知**：
+  - `KeepAlive.markConnected` 在服务连上时记时间戳（进程被杀时没有任何回调可写，只能反过来记「最后活着的时刻」）。
+  - 主界面三态的第二态带上分钟数：「⚠ 设置里已开启，但服务没连上（上次连上 %1$d 分钟前）」。
+  - 回前台自动尝试恢复（`autoRecoverIfDropped`）：配置态开着但运行态没连上就立刻跑一次 `checkAndRecover`，30 秒内不重复触发。原来只能等 15 分钟的周期 Job 或手动点自检。
+- 版本 0.16.7 / versionCode 54。
+
+**为什么**
+- 用户要求：维护页小字加上备份；保活补 OPPO、vivo；断线感知继续完善。
+
 ## 0.16.6 - 2026-11-01 · 修「设置里开着但自检说掉线」+ 状态三态
 
 **根因**

@@ -156,6 +156,7 @@ class SkipAccessibilityService : AccessibilityService() {
         blacklist = PACKAGE_BLACKLIST + findHomePackages()
         KeepAlive.scheduleJob(this)
         StatsStore.logEvent(this, getString(R.string.ka_log_connected))
+        KeepAlive.markConnected(this)
         postWorkNotification()
         inst = this
         if (com.noteatoranges.skipad.util.CaptureBubble.isEnabled(this)) {
