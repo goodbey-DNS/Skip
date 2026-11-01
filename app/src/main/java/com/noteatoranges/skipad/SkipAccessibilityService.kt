@@ -168,6 +168,12 @@ class SkipAccessibilityService : AccessibilityService() {
         KeepAlive.markConnected(this)
         postWorkNotification()
         inst = this
+        // 服务重启后（换包、重新绑定）先补一次前台包名，不然要等到下一次切页事件才有值。
+        // 目标 App 禁了无障碍读不到窗口时，降级抓取就靠这个值认 App
+        runCatching { rootInActiveWindow?.packageName?.toString() }
+            .getOrNull()
+            ?.takeIf { it != packageName && it != SYSTEM_UI_PKG }
+            ?.let { lastFgPkg = it }
         if (com.noteatoranges.skipad.util.CaptureBubble.isEnabled(this)) {
             com.noteatoranges.skipad.util.CaptureBubble.apply(this)
             com.noteatoranges.skipad.util.CaptureBubble.onClick = { bubbleClicked() }
@@ -467,6 +473,13 @@ class SkipAccessibilityService : AccessibilityService() {
             type != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
             type != AccessibilityEvent.TYPE_WINDOWS_CHANGED
         ) return
+
+        // 非切页事件也顺手记住前台包名：目标 App 禁了无障碍时，窗口 root 全为 null，
+        // 抓取只能靠这个值判断"用户在哪个 App 里"，光靠 WSC 在服务重启后会丢
+        if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val ep = event.packageName?.toString()
+            if (ep != null && ep != packageName && ep != SYSTEM_UI_PKG) lastFgPkg = ep
+        }
 
         val now = SystemClock.elapsedRealtime()
         if (now - lastHandleAt < THROTTLE_MS) return
@@ -1088,9 +1101,13 @@ class SkipAccessibilityService : AccessibilityService() {
             Toast.makeText(this, R.string.snap_failed, Toast.LENGTH_SHORT).show()
             return
         }
-        // 包名优先取窗口自己的；取不到就用最后记录的前台包（弹窗窗口常常没有 packageName）。
-        // 以前这里 `?: return` 静默退出：点了没反应、不报错、不落盘，最难查的一种
-        val pkg = candidates.first().second.packageName?.toString() ?: lastFgPkg
+        // 包名优先取「不是自己」的窗口；取不到再用最后记录的前台包。
+        // 降级场景（应用禁了无障碍）里窗口 root 全为 null，候选里只剩自己的悬浮钮，
+        // 以前会把自己的包名当成目标 App，抓出来的快照 app 字段就错了
+        val otherPkg = candidates.firstOrNull {
+            it.second.packageName?.toString() != packageName
+        }?.second?.packageName?.toString()
+        val pkg = otherPkg ?: lastFgPkg
         if (pkg == null) {
             Toast.makeText(this, R.string.snap_no_pkg, Toast.LENGTH_SHORT).show()
             return
@@ -1109,7 +1126,12 @@ class SkipAccessibilityService : AccessibilityService() {
             windowRoots.add(id to r)
             if (windowRoots.size > POPUP_SCAN_WINDOWS) break
         }
-        if (windowRoots.isEmpty()) windowRoots.add(0 to candidates.first().second)
+        if (windowRoots.isEmpty()) {
+            // 目标 App 的窗口一个都拿不到（它自己把无障碍遍历禁了）：只存截图，
+            // 不能拿自己的悬浮钮根充数——那会把 SkipAd 的界面当成目标 App 存进去
+            captureScreenshotOnly(attempt, pkg)
+            return
+        }
 
         val nodes = ArrayList<SnapshotStore.Node>(SNAPSHOT_MAX_NODES)
         var idx = 0

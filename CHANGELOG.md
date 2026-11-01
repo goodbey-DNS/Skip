@@ -2,6 +2,22 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.16.20 - 2026-11-01 · 降级快照的包名改为「非自己 + 前台包」
+
+**现象**（0.16.19 实测）
+- 货拉拉前台点抓，快照显示 `com.noteatoranges.skipad · 0 节点`——把自己当成了目标 App。
+
+**原因**
+- 货拉拉禁了无障碍遍历，它的窗口 root 全是 null，`captureCandidates()` 里只剩我们自己的悬浮钮窗口。
+- 旧逻辑 `val pkg = candidates.first()...` 直接取了这个自己——因为按 `self` 排序后它确实排第一（只有它一个）。
+- 另一条：`windowRoots` 为空时会把 `candidates.first()`（自己的根）塞进去当兜底，等于把 SkipAd 界面当成目标应用存下来。
+
+**改了什么**
+1. 包名改为「候选里第一个不属于自己的包」→ 其次 `lastFgPkg`；两者都为空才提示 `snap_no_pkg`。
+2. `windowRoots` 为空时不再塞自己的根，直接走 `captureScreenshotOnly(attempt, pkg)`。
+3. `lastFgPkg` 补两条来源：非 WSC 事件也记录 `event.packageName`；`onServiceConnected` 时用 `rootInActiveWindow` 初始化一次（服务重启后不用等下次切页）。
+- 版本 0.16.20 / versionCode 67。
+
 ## 0.16.19 - 2026-11-01 · 修降级快照存成 unknown
 
 - 0.16.18 真机验证：Toast 正确、快照确实生成，但列表里显示 `unknown · 0 节点`。
