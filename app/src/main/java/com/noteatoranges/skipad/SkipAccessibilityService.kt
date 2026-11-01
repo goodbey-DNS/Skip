@@ -114,6 +114,15 @@ class SkipAccessibilityService : AccessibilityService() {
 
     /** 每个 App 最近一次"新窗口出现"的时间与前台 Activity 类名 */
     private val lastStateChangeAt = HashMap<String, Long>()
+
+    /**
+     * 本轮开屏已经点掉的时间点。
+     *
+     * 开屏都是立刻出现，点掉就该立即收手：不等满 [SPLASH_WINDOW_MS]，主界面零暴露。
+     * 下一次真的切到这个 App 时 `lastStateChangeAt` 会刷新成更大的值，窗口自动重开，
+     * 所以这里不需要清理。
+     */
+    private val splashClosedAt = HashMap<String, Long>()
     private val lastActivityClass = HashMap<String, String>()
 
     /** 本页面已点过的控件矩形（分桶后的键），换页面清空。见 [clickNodeOnce] */
@@ -490,10 +499,12 @@ class SkipAccessibilityService : AccessibilityService() {
         val pkg = root.packageName?.toString() ?: event.packageName?.toString() ?: return
         if (pkg in blacklist || pkg == packageName) return
 
-        // 开屏窗口：只从「真的切到这个 App 的那一刻」起算 SPLASH_WINDOW_MS。
-        // 窗口内才允许内置关键字；窗口外只认快照生成的用户规则
+        // 开屏窗口：只从「真的切到这个 App 的那一刻」起算 SPLASH_WINDOW_MS；
+        // 本轮已经点掉过一次就立即收手（splashClosedAt），不等满窗口
         val sinceSwitch = lastStateChangeAt[pkg]
-        val splash = sinceSwitch != null && now - sinceSwitch <= SPLASH_WINDOW_MS
+        val splash = sinceSwitch != null &&
+            now - sinceSwitch <= SPLASH_WINDOW_MS &&
+            sinceSwitch > (splashClosedAt[pkg] ?: 0L)
 
         // 刷新用户规则扫描器（规则版本 / 包名 / 页面任一变化就重建）
         val ver = RuleStore.version(this)
@@ -592,6 +603,8 @@ class SkipAccessibilityService : AccessibilityService() {
         if (found == null) {
             val appCtx = applicationContext
             Io.run("stats-insert") { StatsDb.get(appCtx).insert(p.pkg, p.detail) }
+            // 点掉了就立即关窗：开屏都是立刻出现，多等一秒就是在主界面上多扫一秒
+            splashClosedAt[p.pkg] = SystemClock.elapsedRealtime()
             Log.d(TAG, "verified ${p.pkg} 「${p.detail}」 (attempts=${p.attempts})")
             pending = null
             return
@@ -1267,8 +1280,8 @@ class SkipAccessibilityService : AccessibilityService() {
         const val THROTTLE_MS = 300L
         const val COOLDOWN_MS = 4000L
 
-        /** 内容变化事件的最小间隔：滑动信息流时一秒能来几十个，没必要每个都扫 */
-        const val CONTENT_THROTTLE_MS = 900L
+        /** 内容变化事件的最小间隔：开屏既然立刻出现，600ms 能更早命中；单次扫描实测 4–41ms */
+        const val CONTENT_THROTTLE_MS = 600L
 
         /** 找锚点控件的遍历上限：锚点通常就在弹窗里，不用扫全树 */
         const val ANCHOR_SCAN_NODES = 600
@@ -1287,11 +1300,12 @@ class SkipAccessibilityService : AccessibilityService() {
         const val MAX_RETRY = 2
 
         /**
-         * 开屏窗口：App 从别的 App 切到前台后的这段时间，只在这段时间里允许内置关键字。
-         * 用户实测开屏广告多是 2–5 秒，这里给到 6 秒；再多就会盖住开屏页跳过去之后的
-         * 主界面，那正是误点开始的地方。
+         * 开屏窗口：App 从别的 App 切到前台后的这段时间，只在这段时间里允许词表（内置 + 手输）。
+         *
+         * 用户实测开屏都是"立刻出现"，所以收到 4 秒：冷启动首帧通常 0.5–2 秒，留够余量；
+         * 再长就会覆盖到开屏页跳过去之后的主界面，那正是误点开始的地方。
          */
-        const val SPLASH_WINDOW_MS = 6000L
+        const val SPLASH_WINDOW_MS = 4000L
         const val CORNER_X_RATIO = 0.93f
         const val CORNER_Y_RATIO = 0.065f
         const val SNAP_CHANNEL = "snapshot"
