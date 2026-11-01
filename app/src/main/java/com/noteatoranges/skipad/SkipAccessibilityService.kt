@@ -574,6 +574,10 @@ class SkipAccessibilityService : AccessibilityService() {
                         Log.v(TAG, "wcc-switch $ep prev=$lastShownPkg")
                         lastShownPkg = ep
                         lastStateChangeAt[ep] = now
+                        // 坐标规则也要排一次：不走窗口切换事件的应用（计算器这类）
+                        // 只靠 WSC 分支排的话，它们的坐标规则一次都不会执行
+                        RuleStore.pointRules(this, ep, lastActivityClass[ep].orEmpty())
+                            .forEach { r -> schedulePointTaps(ep, r) }
                     }
                 }
             }

@@ -509,6 +509,21 @@ class SnapshotDetailActivity : AppCompatActivity() {
                         sb.append("\n#${it.idx} ${it.cls.substringAfterLast('.')} ")
                         sb.append("「${it.text.ifEmpty { it.desc }.take(16)}」")
                     }
+                    // 文字规则运行时仍受位置闸约束（页面正中那片多半是正文，不点）。
+                    // 用户选的按钮若正好在中央，规则就会一条都不触发而他又不知道为什么，
+                    // 所以保存前当面说清楚，并给出能用的替代方式
+                    val (sw, sh) = meta.screenW to meta.screenH
+                    val cw = if (sw > 0) sw else realScreenPx().first
+                    val ch = if (sh > 0) sh else realScreenPx().second
+                    val centerHit = hits.firstOrNull {
+                        val cx = it.l + it.w / 2f
+                        val cy = it.t + it.h / 2f
+                        cx > cw * 0.3f && cx < cw * 0.7f && cy > ch * 0.2f && cy < ch * 0.8f
+                    }
+                    if (centerHit != null) {
+                        sb.append("\n\n⚠ 这个按钮在页面正中，运行时会被当成正文跳过、不会点。\n")
+                        sb.append("它确实是要点的按钮，请改用「按编号」或「按层级找」。")
+                    }
                 }
             }
             else -> {

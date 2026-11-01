@@ -313,7 +313,7 @@ object RuleStore {
                 SkipRule(
                     id = "user:${r.id}",
                     patterns = listOfNotNull(r.textContains),
-                    viewIds = listOfNotNull(r.viewId?.lowercase()),
+                    viewIds = listOfNotNull(r.viewId?.lowercase(java.util.Locale.ROOT)),
                     maxAreaRatio = 0.3f,
                     action = r.action,
                     cooldownMs = r.cooldownMs,
