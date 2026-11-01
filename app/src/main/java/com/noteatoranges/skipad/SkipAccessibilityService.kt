@@ -1113,26 +1113,17 @@ class SkipAccessibilityService : AccessibilityService() {
             // 只要知道前台是哪个 App，就还能只存截图
             val fg = lastFgPkg
             Log.i(TAG, "capture-empty attempts=$attempt fg=$fg")
-            if (fg != null) {
-                captureScreenshotOnly(attempt, fg)
-                return
-            }
-            dumpSnapFailure(attempt)
-            Toast.makeText(this, R.string.snap_failed, Toast.LENGTH_SHORT).show()
+            captureScreenshotOnly(attempt, fg ?: UNKNOWN_PKG)
             return
         }
-        // 包名优先取「不是自己」的窗口；取不到再用最后记录的前台包。
-        // 降级场景（应用禁了无障碍）里窗口 root 全为 null，候选里只剩自己的悬浮钮，
-        // 以前会把自己的包名当成目标 App，抓出来的快照 app 字段就错了
+        // 包名优先取「不是自己」的窗口；取不到再用最后记录的前台包；
+        // 两者都没有（应用把无障碍整个屏蔽了，连事件都不发）时存成 unknown，
+        // 让用户在快照详情页手动指定目标应用——不能在这里直接报错把路堵死
         val otherPkg = candidates.firstOrNull {
             it.second.packageName?.toString() != packageName
         }?.second?.packageName?.toString()
-        val pkg = otherPkg ?: lastFgPkg
+        val pkg = otherPkg ?: lastFgPkg ?: UNKNOWN_PKG
         Log.i(TAG, "capture attempt=$attempt candidates=${candidates.size} pkg=$pkg otherPkg=$otherPkg")
-        if (pkg == null) {
-            Toast.makeText(this, R.string.snap_no_pkg, Toast.LENGTH_SHORT).show()
-            return
-        }
         val act = lastActivityClass[pkg] ?: ""
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
@@ -1461,6 +1452,9 @@ class SkipAccessibilityService : AccessibilityService() {
 
         /** 系统界面窗口：抓快照时要跳过 */
         const val SYSTEM_UI_PKG = "com.android.systemui"
+
+        /** 抓取时认不出目标应用（应用屏蔽了无障碍）时占位，用户可在这之后手动指定 */
+        const val UNKNOWN_PKG = "unknown"
 
         /** 点悬浮钮后等多久再抓：圆钮移除后窗口在重排，马上抓会取到空树 */
         const val BUBBLE_HIDE_DELAY_MS = 350L

@@ -2,6 +2,13 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.16.24 - 2026-11-01 · 包名彻底拿不到也存截图（unknown + 手动指定）
+
+- 0.16.23 只加了「指定应用」的界面，但抓取侧在 `pkg == null` 时仍然 `snap_no_pkg` 直接返回，等于路还是堵着。
+- 改为 `val pkg = otherPkg ?: lastFgPkg ?: UNKNOWN_PKG`，`UNKNOWN_PKG = "unknown"`；候选窗口为空的分支也直接走 `captureScreenshotOnly(attempt, fg ?: UNKNOWN_PKG)`。
+- 于是货拉拉这种「屏蔽无障碍 + 不发事件」的应用：抓 → 存截图（pkg=unknown）→ 详情页点「目标应用」选货拉拉 → 长按截图取点 → 坐标规则落到正确 App。
+- 版本 0.16.24 / versionCode 71。
+
 ## 0.16.23 - 2026-11-01 · 降级快照让用户指定目标应用
 
 **日志确认**（0.16.22，Redmi / Android 15）
