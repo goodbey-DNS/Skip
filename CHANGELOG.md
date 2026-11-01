@@ -2,6 +2,13 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.16.19 - 2026-11-01 · 修降级快照存成 unknown
+
+- 0.16.18 真机验证：Toast 正确、快照确实生成，但列表里显示 `unknown · 0 节点`。
+- 原因：`captureScreenshotOnly` 里自己又读了一次 `lastFgPkg`（null），把调用方已经算好的包名扔了。`SnapshotStore` 的 meta.pkg 就是规则的 `app` 字段——存成 unknown 的规则不会在任何应用生效，等于白抓。
+- 改为把 `pkg` 作为参数传进去，`captureScreenshotOnly(attempt, pkg)`。
+- 版本 0.16.19 / versionCode 66。
+
 ## 0.16.18 - 2026-11-01 · 找到真正的限制：货拉拉自己禁用了无障碍遍历
 
 **证据链（Redmi / Android 15）**

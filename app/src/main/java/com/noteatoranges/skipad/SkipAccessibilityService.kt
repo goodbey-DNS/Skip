@@ -1045,14 +1045,15 @@ class SkipAccessibilityService : AccessibilityService() {
      * 有些应用（货拉拉企业版）在主界面把无障碍遍历整个关掉了，节点树根本读不到；
      * 但截图仍可截，用户长按截图取点就能建坐标规则——坐标规则不依赖控件树。
      */
-    private fun captureScreenshotOnly(attempt: Int) {
+    private fun captureScreenshotOnly(attempt: Int, pkg: String) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             dumpSnapFailure(attempt)
             Toast.makeText(this, R.string.snap_too_few, Toast.LENGTH_SHORT).show()
             return
         }
-        val pkg = lastFgPkg
-        val act = pkg?.let { lastActivityClass[it] } ?: ""
+        // pkg 必须用调用方算好的那个：这里如果重新读 lastFgPkg，命不中就会存成 unknown，
+        // 而规则里的 app 字段就是它——unknown 的规则永远不会生效
+        val act = lastActivityClass[pkg] ?: ""
         val appCtx = applicationContext
         takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor,
             object : TakeScreenshotCallback() {
@@ -1063,11 +1064,10 @@ class SkipAccessibilityService : AccessibilityService() {
                     }
                     val shotW = if (srcW > 0) srcW else resources.displayMetrics.widthPixels
                     val shotH = if (srcH > 0) srcH else resources.displayMetrics.heightPixels
-                    val name = pkg ?: "unknown"
                     Io.run("snapshot-save") {
-                        SnapshotStore.save(appCtx, name, act, emptyList(), bitmap, shotW, shotH)
+                        SnapshotStore.save(appCtx, pkg, act, emptyList(), bitmap, shotW, shotH)
                         bitmap.recycle()
-                        StatsStore.logEvent(appCtx, "快照（仅截图）：$name")
+                        StatsStore.logEvent(appCtx, "快照（仅截图）：$pkg")
                     }
                     Toast.makeText(appCtx, R.string.snap_shot_only, Toast.LENGTH_LONG).show()
                 }
@@ -1157,7 +1157,7 @@ class SkipAccessibilityService : AccessibilityService() {
             }
             // 还拿不到就是应用自己禁了无障碍遍历（货拉拉企业版主界面就是，
             // 系统级 uiautomator 一样读不到）。降级：只存截图，用户仍能长按取点建坐标规则
-            captureScreenshotOnly(attempt)
+            captureScreenshotOnly(attempt, pkg)
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
