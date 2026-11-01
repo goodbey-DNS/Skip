@@ -139,11 +139,11 @@ class SnapshotDetailActivity : AppCompatActivity() {
         }
         infoText.text = buildString {
             append("#${node.idx} ${node.cls.substringAfterLast('.')}")
-            if (node.clickable) append(" · 可点击")
+            if (node.clickable) append(" · 能点")
             append("\n")
-            if (node.text.isNotEmpty()) append("文本「${node.text.take(30)}」 ")
-            if (node.desc.isNotEmpty()) append("描述「${node.desc.take(30)}」")
-            if (node.vid.isNotEmpty()) append("\nid=${node.vid}")
+            if (node.text.isNotEmpty()) append("文字「${node.text.take(30)}」 ")
+            if (node.desc.isNotEmpty()) append("说明「${node.desc.take(30)}」")
+            if (node.vid.isNotEmpty()) append("\n编号 ${node.vid.substringAfterLast('/')}")
             append("\n位置 (${node.l},${node.t}) ${node.w}×${node.h}")
         }
         genButton.isEnabled = true
@@ -220,10 +220,8 @@ class SnapshotDetailActivity : AppCompatActivity() {
         opts.add(OPT_POINT)
         AlertDialog.Builder(this)
             .setTitle("用哪种方式找这个按钮")
-            .setMessage(
-                "按你看到的样子选：有字选第一个；没字但有 id 选第二个；" +
-                    "叉号旁边有文字选第三个。下面两个容易失效，只在没别的办法时用。"
-            )
+            // 不能同时用 setMessage + setItems：AlertDialog 里两者互斥，
+            // 实测选项列表会被说明文字顶掉，对话框里只剩一段话、根本没法选
             .setItems(opts.toTypedArray()) { _, which ->
                 when (opts[which]) {
                     OPT_TEXT -> askText(n)
@@ -626,11 +624,11 @@ class SnapshotDetailActivity : AppCompatActivity() {
     }
 
     private companion object {
-        const val OPT_TEXT = "按文字：按钮上写着「跳过」"
-        const val OPT_VID = "按编号：按钮没字，但有一串 id"
-        const val OPT_PATH = "按层级：叉号没字也没 id（易失效）"
-        const val OPT_POINT = "按屏幕位置：整页读不到控件"
-        const val OPT_RELATIVE = "挨着某个元素点：叉号旁边有字"
+        const val OPT_TEXT = "按文字：按钮上写着「跳过」这类字"
+        const val OPT_VID = "按编号：没字，但有一串 id（最稳）"
+        const val OPT_PATH = "按层级找：叉号没字没 id（易失效）"
+        const val OPT_POINT = "按屏幕位置：整页读不到控件（最盲）"
+        const val OPT_RELATIVE = "挨着某个元素点：叉号旁边有文字"
 
         /** 抽核心词用的词表，长词在前（firstOrNull 取第一个命中） */
         val CORE_WORDS = listOf("跳过广告", "关闭", "跳过", "close", "skip", "×", "✕")
