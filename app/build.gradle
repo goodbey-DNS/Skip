@@ -11,8 +11,8 @@ android {
         applicationId "com.noteatoranges.skipad"
         minSdk 26
         targetSdk 34
-        versionCode 75
-        versionName "0.17.3"
+        versionCode 76
+        versionName "0.17.4"
     }
 
     // ?????CI ? GitHub Secrets ?? keystore ??????????

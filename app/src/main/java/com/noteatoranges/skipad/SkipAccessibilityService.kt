@@ -161,10 +161,18 @@ class SkipAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * 桌面包名：**只取默认桌面**，不能取所有声明 CATEGORY_HOME 的应用。
+     *
+     * AOSP 的 `com.android.settings.FallbackHome` 也声明了 CATEGORY_HOME（系统无桌面时的
+     * 兜底桌面），用 queryIntentActivities 会把整个「设置」拉进黑名单——设置里所有规则
+     * 从此一条都不生效，而且完全静默。0.17.x 排查链路断点就是踩在这里。
+     */
     private fun findHomePackages(): Set<String> = try {
         val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-        packageManager.queryIntentActivities(home, 0)
-            .mapTo(mutableSetOf()) { it.activityInfo.packageName }
+        val def = packageManager.resolveActivity(home, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+        val p = def?.activityInfo?.packageName
+        if (p.isNullOrBlank()) emptySet() else setOf(p)
     } catch (e: Exception) {
         emptySet()
     }
