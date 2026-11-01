@@ -426,8 +426,23 @@ class SkipAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
+    /**
+     * 单次事件里的任何异常都不许把服务打死。
+     *
+     * 服务一崩，系统就把它记进 `crashed services` 并不再重新绑定，除非用户手动关开无障碍
+     * 开关；期间通知还挂在栏里，点它毫无反应（0.17.12 在淘宝页就是这个现象）。漏跳一个
+     * 广告无所谓，服务死掉是整条链路停摆。
+     */
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
+        try {
+            handleEvent(event)
+        } catch (t: Throwable) {
+            Log.w(TAG, "event-fail type=${event.eventType} pkg=${event.packageName}", t)
+        }
+    }
+
+    private fun handleEvent(event: AccessibilityEvent) {
         val type = event.eventType
 
         // —— 坐标点按调度（必须最先做）：冷启动切换瞬间 rootInActiveWindow 往往还是
@@ -1147,12 +1162,21 @@ class SkipAccessibilityService : AccessibilityService() {
         return null
     }
 
-    /** 沿子索引路径下钻，末端节点要有有效矩形才算命中 */
+    /**
+     * 沿子索引路径下钻，末端节点要有有效矩形才算命中。
+     *
+     * **必须先判 childCount**：AccessibilityNodeInfo.getChild(i) 在 i 越界时不会返回 null，
+     * 而是在系统内部 `LongArray.get` 抛 ArrayIndexOutOfBoundsException，直接把整个无障碍
+     * 服务打死（系统随后把它记进 crashed services，不再重新绑定）。0.17.12 在淘宝页反复
+     * 崩溃、通知点不动就是这个越界，堆栈在 ArrayUtils.checkBounds。
+     */
     private fun findByPath(root: AccessibilityNodeInfo, path: String): AccessibilityNodeInfo? {
         var cur: AccessibilityNodeInfo = root
         for (seg in path.split('/')) {
             val i = seg.toIntOrNull() ?: return null
-            cur = cur.getChild(i) ?: return null
+            val count = runCatching { cur.childCount }.getOrDefault(0)
+            if (i < 0 || i >= count) return null
+            cur = runCatching { cur.getChild(i) }.getOrNull() ?: return null
         }
         val r = Rect()
         cur.getBoundsInScreen(r)
