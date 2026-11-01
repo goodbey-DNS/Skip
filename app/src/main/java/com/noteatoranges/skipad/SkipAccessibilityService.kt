@@ -162,6 +162,16 @@ class SkipAccessibilityService : AccessibilityService() {
 
     /** 每个 App 上一次记录的开屏窗口状态：只在翻转时打日志，避免每个事件刷屏 */
     private val splashState = HashMap<String, Boolean>()
+
+    /**
+     * 每个 App 上次由「内容变化兜底」打开开屏窗的时刻。
+     *
+     * 兜底路径靠「事件包名 != 上一次出现在屏幕上的包」判切 App，而内容变化事件比
+     * 窗口切换事件来得早、来得密：只要 lastShownPkg 因为任何原因滞后一拍，App 内
+     * 换页（点搜索框、弹面板）就会被当成「又切进来了」，开屏窗重开 4 秒——词表就在
+     * 非开屏页面上跑了一遍。这里加一个分钟级闹钟，同样的漏只补一次。
+     */
+    private val splashFallbackAt = HashMap<String, Long>()
     private val lastActivityClass = HashMap<String, String>()
 
     /** 本页面已点过的控件矩形（分桶后的键），换页面清空。见 [clickNodeOnce] */
@@ -554,9 +564,17 @@ class SkipAccessibilityService : AccessibilityService() {
             if (ep != null && ep != packageName && ep != SYSTEM_UI_PKG && countsAsForeground(ep)) {
                 lastFgPkg = ep
                 if (ep != lastShownPkg && ep !in blacklist) {
-                    Log.v(TAG, "wcc-switch $ep prev=$lastShownPkg")
-                    lastShownPkg = ep
-                    lastStateChangeAt[ep] = SystemClock.elapsedRealtime()
+                    val now = SystemClock.elapsedRealtime()
+                    // 同一 App 一分钟内只补一次：内容变化事件比窗口事件密集得多，
+                    // 不卡额度就会把「App 内换页」当成「刚切进来」，开屏窗反复重开
+                    val last = splashFallbackAt[ep] ?: 0L
+                    if (now - last > SPLASH_FALLBACK_GAP_MS) {
+                        if (splashFallbackAt.size > 50) splashFallbackAt.clear()
+                        splashFallbackAt[ep] = now
+                        Log.v(TAG, "wcc-switch $ep prev=$lastShownPkg")
+                        lastShownPkg = ep
+                        lastStateChangeAt[ep] = now
+                    }
                 }
             }
         }
@@ -1397,6 +1415,14 @@ class SkipAccessibilityService : AccessibilityService() {
 
         /** 盲点时间盒：窗口出现超过这个时长就不再按坐标点（正常开屏早该过去了） */
         const val POINT_MAX_WINDOW_AGE_MS = 8000L
+
+        /**
+         * 「内容变化兜底」打开开屏窗的最小间隔。
+         *
+         * 这条路径只用来接住「启动时不发窗口切换事件」的应用（计算器这类）。
+         * 一分钟一次足够覆盖冷启动，又能挡住 App 内换页把开屏窗反复重开。
+         */
+        const val SPLASH_FALLBACK_GAP_MS = 60_000L
 
         /** 节点矩形去重的分桶宽度（px）：相邻两帧的 bounds 会抖 1~2px，精确相等去不掉重复 */
         const val RECT_BUCKET_PX = 8

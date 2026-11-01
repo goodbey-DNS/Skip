@@ -2,6 +2,31 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.21 - 2026-11-01 · 「内容变化兜底」把 App 内换页当成切 App，开屏窗反复重开
+
+真机复现（0.17.20 的 `wsc` / `wcc-switch` 日志）：
+
+```
+14:27:14.250 wcc-switch com.android.settings prev=com.miui.home
+14:27:14.251 splash-window com.android.settings open
+14:27:14.313 wsc com.android.settings prev=com.android.settings fresh=false
+```
+
+`WINDOW_CONTENT_CHANGED` 比 `WINDOW_STATE_CHANGED` **早到 60ms**。兜底分支判「切 App」用的是
+`事件包名 != lastShownPkg`，此刻 `lastShownPkg` 还是桌面 → 直接开了 4 秒开屏窗。同一个机制在
+App 内部换页（点搜索框、弹面板）也会触发，因为只要 `lastShownPkg` 滞后一拍，下一次内容变化就是
+一次「切换」。开屏窗一开，词表就在非开屏页面上跑一遍——正是 0.17.0 要消灭的那类风险。
+
+**修法**：兜底路径加一分钟额度（`SPLASH_FALLBACK_GAP_MS = 60s`），同一 App 只补一次。
+这条路径本来只用来接住「启动不发窗口切换事件」的应用（计算器这类），冷启动一次就够；
+真正的切 App 由 `WINDOW_STATE_CHANGED` 走精确路径，不受影响。代价是：不发窗口事件的应用
+在一分钟内二次启动拿不到开屏窗（漏跳，不误点）。
+
+**顺带留下两条 V 级诊断**：`wsc <pkg> prev= fresh= cls=` 与 `wcc-switch <pkg> prev=`，
+排查「开屏窗为什么开了/没开」时直接看这两行。
+
+**版本** 0.17.21 / versionCode 93。
+
 ## 0.17.19 - 2026-11-01 · 静态走查 9 处，含「开屏只生效第一次」和「输入法让开屏窗重开」
 
 用户要求「检查完善是否还有 bug」，这一版只修代码，不加功能。按「会让功能失效 / 会产生误点」筛，其余没动。
