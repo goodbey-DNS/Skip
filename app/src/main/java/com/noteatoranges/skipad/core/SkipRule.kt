@@ -19,6 +19,14 @@ data class SkipRule(
     val viewIds: List<String> = emptyList(),
     val maxTextLength: Int = 24,
     val maxAreaRatio: Float = 0.12f,
+    /**
+     * 是否允许命中屏幕中央的主体区。
+     *
+     * 内置通用词（“跳过”）必须保留位置闸：正文里出现“跳过”四个字不该被当成按钮。
+     * 但用户手输的词是明确指定——“K50”“放弃福利”这些就是他要点的东西，
+     * 而开屏页的按钮又常摆在中央，再卡位置闸就把用户写的话吹了。
+     */
+    val allowCenter: Boolean = false,
     val enabled: Boolean = true,
     /** 命中后的动作：click（默认）/ back（返回键）/ none（只记录不动手） */
     val action: String = ACTION_CLICK,

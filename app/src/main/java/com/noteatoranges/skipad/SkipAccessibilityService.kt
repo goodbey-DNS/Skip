@@ -653,8 +653,11 @@ class SkipAccessibilityService : AccessibilityService() {
             val (hits, excludes) = KeywordStore.forApp(this, pkg)
             val rules = ArrayList<SkipRule>()
             if (builtinOn) rules.addAll(BuiltinRules.defaults())
-            // 只有命中词才有意义；只写了排除词时没有可命中的东西，整组不建
-            if (hits.isNotEmpty()) rules.add(SkipRule(id = "kw:$pkg", patterns = hits))
+            // 只有命中词才有意义；只写了排除词时没有可命中的东西，整组不建。
+            // allowCenter：用户手输的词免位置闸——他要点的就是这个，开屏按钮也常在中央
+            if (hits.isNotEmpty()) {
+                rules.add(SkipRule(id = "kw:$pkg", patterns = hits, allowCenter = true))
+            }
             kwScanner = if (rules.isEmpty()) null else NodeScanner(rules, factsCache, excludes).also {
                 it.verbose = Log.isLoggable(TAG, Log.VERBOSE)
             }

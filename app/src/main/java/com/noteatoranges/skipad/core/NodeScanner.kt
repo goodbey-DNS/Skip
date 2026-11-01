@@ -134,7 +134,7 @@ class NodeScanner(
                         val cy = rect.exactCenterY()
                         val inCenter = cx > screenW * 0.3f && cx < screenW * 0.7f &&
                             cy > screenH * 0.2f && cy < screenH * 0.8f
-                        if (!byViewId && inCenter) {
+                        if (!byViewId && !matched.node.rule.allowCenter && inCenter) {
                             reject = "「${text?.take(12)}」在中央区域(cx=${cx.toInt()},cy=${cy.toInt()})"
                         } else if (area in 1f..screenArea * matched.node.rule.maxAreaRatio) {
                             lastDebug = "HIT「${(text ?: vid)?.take(20)}」面积${pct}% 规则=${matched.node.rule.id}" +
