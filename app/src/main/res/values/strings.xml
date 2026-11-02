@@ -1,9 +1,9 @@
 <resources>
-    <string name="app_name">SkipAd</string>
+    <string name="app_name">大小姐</string>
     <string name="app_subtitle">开屏广告自动跳过 · 零联网权限 · 本地识别</string>
 
     <string name="section_status">无障碍服务</string>
-    <string name="status_on">✓ 已开启，只按你从快照里建的规则动手</string>
+    <string name="status_on">✓ 已开启，自建规则与内置跳过词都在工作</string>
     <string name="status_off">✗ 未开启，点下方按钮去系统设置开启</string>
     <string name="status_not_bound">⚠ 设置里已开启，但服务没连上——点「立即自检」，或把无障碍开关关开一次</string>
     <string name="status_not_bound_ago">⚠ 设置里已开启，但服务没连上（上次连上 %1$d 分钟前）——点「立即自检」，或把无障碍开关关开一次</string>
@@ -38,7 +38,7 @@
     <string name="clear_stats_warn_repeat">清空操作不可恢复，包含累计次数、排行榜与最近记录；保活日志不受影响。</string>
 
     <string name="snap_channel">快照与规则</string>
-    <string name="snap_notif_title">SkipAd 运行中</string>
+    <string name="snap_notif_title">大小姐 运行中</string>
     <string name="snap_notif_text">点一下抓取当前页面</string>
     <string name="snapshot_selected">选中的元素</string>
     <string name="snapshot_pick_hint">点选截图上的元素（或下方列表），然后生成跳过规则</string>
@@ -93,7 +93,7 @@
     <string name="section_ka_mode">当前保活模式</string>
     <string name="keepalive_mode_silent">静默复活已就绪：掉线 / 开机 / 升级后自动重新开启</string>
     <string name="keepalive_mode_notify">提醒模式：掉线时发通知提醒（不自动开启）</string>
-    <string name="ka_mode_explain">静默复活需要电脑 adb 授权一次 WRITE_SECURE_SETTINGS（signature 级权限，正常安装拿不到），授权后本 App 才能把「自己的无障碍服务」写回系统设置并拉起。只保活 SkipAd 自己——无法替其他 App 保活，那些应用的后台存活得靠它们自己的前台服务与厂商白名单机制。</string>
+    <string name="ka_mode_explain">静默复活需要电脑 adb 授权一次 WRITE_SECURE_SETTINGS（signature 级权限，正常安装拿不到），授权后本 App 才能把「自己的无障碍服务」写回系统设置并拉起。只保活大小姐自己——无法替其他 App 保活，那些应用的后台存活得靠它们自己的前台服务与厂商白名单机制。</string>
     <string name="keepalive_adb_hint">电脑连手机执行下面这条命令，升级为静默复活：</string>
     <string name="keepalive_cmd">adb shell pm grant com.noteatoranges.skipad android.permission.WRITE_SECURE_SETTINGS</string>
     <string name="action_copy_cmd">复制授权命令</string>
@@ -103,7 +103,7 @@
     <string name="battery_status_on">电池优化：已忽略 ✓（后台不易被杀）</string>
     <string name="battery_status_off">电池优化：未忽略——建议申请，可显著降低服务被系统回收的概率</string>
     <string name="action_battery">去申请忽略电池优化</string>
-    <string name="autostart_hint">自启动：点下面的按钮进本机的自启动 / 后台管理页，找到 SkipAd 允许「自启动 / 关联启动 / 后台活动」。各家系统的入口名不同（小米叫自启动，OPPO 叫自动启动，vivo 叫后台启动），找不到就先打开一次 SkipAd 再看。</string>
+    <string name="autostart_hint">自启动：点下面的按钮进本机的自启动 / 后台管理页，找到大小姐允许「自启动 / 关联启动 / 后台活动」。各家系统的入口名不同（小米叫自启动，OPPO 叫自动启动，vivo 叫后台启动），找不到就先打开一次大小姐再看。</string>
     <string name="action_autostart">去自启动管理</string>
     <string name="action_app_info">打开应用信息</string>
     <string name="notif_status_on">通知权限：已授权（掉线提醒可送达）</string>
@@ -116,7 +116,7 @@
     <string name="ka_scope_note">边界说明：无障碍服务被「一键强停」后 App 进入 stopped 状态，任何保活都失效（系统红线），打开一次本 App 即恢复；用户主动关闭在静默模式下也会被自动拉起，介意请保持提醒模式。</string>
 
     <string name="ka_channel_name">服务掉线提醒</string>
-    <string name="ka_notify_title">SkipAd 无障碍服务已掉线</string>
+    <string name="ka_notify_title">大小姐 无障碍服务已掉线</string>
     <string name="ka_notify_text">点按前往无障碍设置重新开启</string>
     <string name="ka_log_connected">保活：无障碍服务已连接</string>
     <string name="ka_log_revived">保活：检测到服务掉线，已静默重新开启</string>
@@ -127,9 +127,9 @@
     <string name="ka_result_notified">服务已掉线 → 未授权静默复活，已发通知提醒</string>
     <string name="ka_result_not_bound">系统设置里显示已开启，但服务实例没绑上——把无障碍开关关开一次，或稍等几秒再自检</string>
 
-    <string name="accessibility_service_label">SkipAd 开屏跳过</string>
+    <string name="accessibility_service_label">大小姐 开屏跳过</string>
     <string name="accessibility_service_summary">按自建规则与内置跳过词点击开屏按钮</string>
-    <string name="accessibility_service_description">SkipAd 只在应用冷启动的头几秒内动作，尝试点掉开屏广告的跳过按钮。识别包括你自建的规则、内置的跳过词与广告控件命名，必要时按右上角位置猜一次；内置部分可在规则页关闭。不申请网络与存储权限，不上传任何数据，所有判断均在本地完成。</string>
+    <string name="accessibility_service_description">大小姐 只在应用冷启动的头几秒内动作，尝试点掉开屏广告的跳过按钮。识别包括你自建的规则、内置的跳过词与广告控件命名，必要时按右上角位置猜一次；内置部分可在规则页关闭。不申请网络与存储权限，不上传任何数据，所有判断均在本地完成。</string>
 
     <string name="footer_note">内置默认词负责没建过规则的 App，自建规则优先。\n下一步：广告在屏上时点悬浮钮抓快照 → 点选按钮 → 生成规则</string>
 </resources>

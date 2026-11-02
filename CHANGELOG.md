@@ -2,6 +2,38 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.50 - 2026-11-02 · 应用显示名改为「大小姐」
+
+**只改显示名，`applicationId` 保持 `com.noteatoranges.skipad` 不动。**
+理由：改包名等于换一个应用——已装的旧版不会被覆盖、两个图标并排、
+无障碍要重新授权、规则统计快照全部留在旧应用里。而这个项目没有服务器、
+没有推送、没有第三方 SDK，包名换了不带任何实际收益，代价却全由用户承担。
+
+### 改了什么
+
+- `app_name`：SkipAd → 大小姐（桌面图标、最近任务、应用信息页）
+- `accessibility_service_label`：SkipAd 开屏跳过 → 大小姐 开屏跳过（系统设置里的无障碍列表）
+- `accessibility_service_description` 开头自称、`snap_notif_title`、`ka_notify_title`、
+  `ka_mode_explain`、`autostart_hint` 里所有提到 SkipAd 的地方
+- 引擎诊断导出文件名 `SkipAd-engine-*.log` → `大小姐-engine-*.log`，剪贴板标签同步
+- 备份 zip 文件名 `SkipAd-backup-*.zip` → `大小姐-backup-*.zip`
+
+### 特意没改的
+
+- **`Backup.APP_NAME` 仍是 `"SkipAd"`**。它是 manifest.json 里的格式标识，不是显示名。
+  改了就读不出老备份——用户改名前导出的包会全部作废。已在代码里加注释说明，
+  避免以后有人「顺手统一一下」。
+- **`applicationId`**：见上。
+- **logcat TAG（`SkipAdEngine` / `SkipAdIo`）**：内部排查用的过滤标签，改了要同步所有
+  文档里的 `logcat -s` 命令，收益为零。
+- `keepalive_cmd` 里那条 `adb shell pm grant com.noteatoranges.skipad ...`：包名没变，命令不变。
+- `Theme.SkipAd` 样式名：内部资源标识，用户看不到。
+
+### 顺带
+
+`status_on` 原来写「已开启，只按你从快照里建的规则动手」，又是那句与实现相反的话
+（0.17.47 修同类文案时漏了这条），改成「自建规则与内置跳过词都在工作」。
+
 ## 0.17.49 - 2026-11-02 · 修 0.17.48 的记账：容器跳掉了却被判成「点进广告」
 
 0.17.48 实测里，广告确实点掉了、前台 0.4 秒就回到主界面，但核验那条链路判成了

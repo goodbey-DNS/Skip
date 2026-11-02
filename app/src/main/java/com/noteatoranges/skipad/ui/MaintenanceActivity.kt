@@ -109,7 +109,7 @@ class MaintenanceActivity : AppCompatActivity() {
         Io.run("engine-export") {
             val dir = File(applicationContext.filesDir, "engine-export").apply { mkdirs() }
             val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.CHINA).format(Date())
-            val f = File(dir, "SkipAd-engine-$ts.log")
+            val f = File(dir, "大小姐-engine-$ts.log")
             val ok = runCatching { f.writeText(text); true }.getOrDefault(false)
             runOnUiThread {
                 if (!ok) {
@@ -125,7 +125,7 @@ class MaintenanceActivity : AppCompatActivity() {
     private fun copyToClipboard(text: String) {
         try {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("SkipAd 引擎诊断", text))
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("大小姐 引擎诊断", text))
             Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, "复制失败：${e.message}", Toast.LENGTH_LONG).show()

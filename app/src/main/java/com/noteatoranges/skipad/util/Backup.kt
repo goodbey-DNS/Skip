@@ -22,7 +22,12 @@ import java.util.zip.ZipOutputStream
  */
 object Backup {
 
-    /** 备份包标识：manifest.json 里的 app 字段必须等于它，否则不认 */
+    /**
+     * 备份包标识：manifest.json 里的 app 字段必须等于它，否则不认。
+     *
+     * 注意：这是**文件格式标识**，不是应用显示名。0.17.50 把显示名改成「大小姐」时
+     * 特意没动它——改了就读不出老备份，用户换名字之前导出的包会全部作废。
+     */
     private const val APP_NAME = "SkipAd"
 
     /** 导出的 zip 落在外部私有目录 backup/ 下，返回 null 表示失败 */
@@ -30,7 +35,7 @@ object Backup {
         val root = context.getExternalFilesDir(null) ?: context.filesDir
         val dir = File(root, "backup").apply { mkdirs() }
         val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.CHINA).format(Date())
-        val out = File(dir, "SkipAd-backup-$ts.zip")
+        val out = File(dir, "大小姐-backup-$ts.zip")
         var count = 0
 
         ZipOutputStream(BufferedOutputStream(FileOutputStream(out))).use { zos ->
