@@ -1144,6 +1144,24 @@ class SkipAccessibilityService : AccessibilityService() {
 
     private fun verifySkipOnce() {
         val p = pending ?: return
+
+        // 同包落地页（0.17.40）：点「跳过」之后页面换了、包名没变，但新页面上是
+        // 「立即下载」这类下载/安装 CTA —— 那不是跳过了广告，是被带进了广告。
+        // 以前这种情形两条判据（目标消失 / 包名未变）都满足，会被记成一次成功跳过：
+        // 统计虚高，落地页也不会被拉黑，下一轮还可能接着在上面点。
+        val nowCheck = SystemClock.elapsedRealtime()
+        if (landedOnAdPage(p, nowCheck)) {
+            val act = lastActivityClass[p.pkg].orEmpty()
+            traceD("landing ${p.pkg} → $act 疑似点进广告，不记账")
+            markBadPage(p.pkg, nowCheck)
+            Io.run("stats-insert") {
+                StatsStore.logEvent(applicationContext, "疑似点进广告：${p.pkg}（同包落地页）")
+            }
+            splashClosedAt[p.pkg] = nowCheck
+            pending = null
+            return
+        }
+
         val found = when {
             p.path != null -> findByPathAnyWindow(p.pkg, p.path, 0)?.let { Triple(it, p.pkg, "path") }
             // 右上角启发式的节点不在任何扫描器的规则集里（CORNER_RULE 是虚拟规则），
@@ -1397,6 +1415,38 @@ class SkipAccessibilityService : AccessibilityService() {
             return Triple(hit.first, pkg, "builtin")
         }
         return null
+    }
+
+    /**
+     * 点完之后是不是被带进了同包的广告落地页。
+     *
+     * 判据三件事同时成立：
+     * 1. 页面变了（当前 Activity 与点击时不同）——没换页说明原地没动，那是 giveup 的事；
+     * 2. 还在同一个包里——跨包由 `off-app` 那条判据负责，这里只管它管不到的情形；
+     * 3. 点击后 3 秒内，且新页面上出现下载/安装类 CTA。
+     *
+     * 只认「立即下载」这类广告落地页专属说法，不收「打开」「查看」「购买」——
+     * 那些在正常首页上到处都是，收进来会让真跳过也不记账。
+     */
+    private fun landedOnAdPage(p: PendingSkip, now: Long): Boolean {
+        val cur = lastActivityClass[p.pkg].orEmpty()
+        if (p.act.isEmpty() || cur.isEmpty() || cur == p.act) return false
+        val since = if (lastSkipAt > 0) now - lastSkipAt else Long.MAX_VALUE
+        if (since > LANDING_CHECK_MS) return false
+        val root = currentRootOf(p.pkg) ?: return false
+        return containsAdCta(root, 0)
+    }
+
+    private fun containsAdCta(node: AccessibilityNodeInfo, depth: Int): Boolean {
+        if (depth > 30) return false
+        val t = runCatching { node.text?.toString() }.getOrNull()
+        if (!t.isNullOrEmpty() && AD_LANDING_CTA.any { t.contains(it) }) return true
+        val n = runCatching { node.childCount }.getOrDefault(0)
+        for (i in 0 until n) {
+            val c = runCatching { node.getChild(i) }.getOrNull() ?: continue
+            if (containsAdCta(c, depth + 1)) return true
+        }
+        return false
     }
 
     /**
@@ -1999,6 +2049,23 @@ class SkipAccessibilityService : AccessibilityService() {
         const val UNBIND_RECOVER_DELAY_MS = 1500L
         const val VERIFY_DELAY_MS = 800L
         const val MAX_RETRY = 2
+
+        /**
+         * 落地页判定的时间窗：只在点击后 3 秒内看新页面像不像广告落地页。
+         *
+         * 再往后用户可能自己点了别的地方，那时页面上的东西不该算在这次点击头上。
+         */
+        const val LANDING_CHECK_MS = 3000L
+
+        /**
+         * 广告落地页的 CTA 说法。
+         *
+         * 只收「落地页专属」的表达。故意不含「打开」「查看」「购买」「领取」——
+         * 这几个在正常首页、商品页、消息页上遍地都是，收进来会让真跳过也不记账。
+         */
+        val AD_LANDING_CTA = listOf(
+            "立即下载", "马上下载", "一键安装", "立即安装", "下载安装", "安装应用", "免费下载",
+        )
 
         /** 记账落盘延迟：一次跳转的多个事件合并成一次写盘 */
         const val HIT_FLUSH_DELAY_MS = 5000L
