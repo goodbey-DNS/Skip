@@ -74,12 +74,25 @@ jobs:
           cache-cleanup: 'on-success'
 
       # 单测放在出包之前：纯逻辑（viewId 判定、文本长度闸）跑不过就没必要出包。
-      # 本机 JDK 装在含中文的目录下，Gradle 起测试 worker 时 classpath 会因编码断裂，
-      # 所以本地只做编译自检，测试统一在 CI 跑
+      # 任务名是 testDebugUnitTest——本项目只配置了 debug 单测变体，
+      # testReleaseUnitTest 不存在，写错会直接报任务找不到（0.17.35 首轮就是这么挂的）。
+      # 本机 JDK 在含中文的目录下，Gradle 起测试 worker 会 classpath 断裂，
+      # 所以本地只做编译自检，测试统一交给 CI
       - name: Unit tests
         run: |
           chmod +x gradlew
-          ./gradlew testReleaseUnitTest --no-daemon --stacktrace
+          set +e
+          ./gradlew testDebugUnitTest --no-daemon > test.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            {
+              echo '### 单元测试失败'
+              echo '```'
+              tail -n 80 test.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $code
 
       - name: Build release APK
         env:

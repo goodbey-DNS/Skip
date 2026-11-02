@@ -36,7 +36,7 @@
 - `csj_ad_logo` 不再被当成关闭钮；
 - 文本长度闸：两字词只放宽 8 字、长短语不超过绝对上限、非文本命中走绝对上限。
 
-只测不依赖 Android 运行时的纯逻辑。测试跑在 CI（`testReleaseUnitTest`），
+只测不依赖 Android 运行时的纯逻辑。测试跑在 CI（`testDebugUnitTest`），
 出包前先跑——跑不过就不发 Release。
 
 **踩坑**
@@ -49,7 +49,7 @@ GradleWorkerMain`。复制一份到 `G:\jdk21` 能跑通，但这不该是常态
 **验证**
 
 - 本地 `compileReleaseKotlin` 通过。
-- CI 跑 `testReleaseUnitTest` + `assembleRelease`。
+- CI 跑 `testDebugUnitTest` + `assembleRelease`。
 
 ## 0.17.34 - 2026-11-02 · 真机复现出最后一个洞：预热只挡了热窗口，没挡开屏窗口
 
