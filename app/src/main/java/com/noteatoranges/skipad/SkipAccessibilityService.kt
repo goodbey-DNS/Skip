@@ -1145,23 +1145,6 @@ class SkipAccessibilityService : AccessibilityService() {
     private fun verifySkipOnce() {
         val p = pending ?: return
 
-        // 同包落地页（0.17.40）：点「跳过」之后页面换了、包名没变，但新页面上是
-        // 「立即下载」这类下载/安装 CTA —— 那不是跳过了广告，是被带进了广告。
-        // 以前这种情形两条判据（目标消失 / 包名未变）都满足，会被记成一次成功跳过：
-        // 统计虚高，落地页也不会被拉黑，下一轮还可能接着在上面点。
-        val nowCheck = SystemClock.elapsedRealtime()
-        if (landedOnAdPage(p, nowCheck)) {
-            val act = lastActivityClass[p.pkg].orEmpty()
-            traceD("landing ${p.pkg} → $act 疑似点进广告，不记账")
-            markBadPage(p.pkg, nowCheck)
-            Io.run("stats-insert") {
-                StatsStore.logEvent(applicationContext, "疑似点进广告：${p.pkg}（同包落地页）")
-            }
-            splashClosedAt[p.pkg] = nowCheck
-            pending = null
-            return
-        }
-
         val found = when {
             p.path != null -> findByPathAnyWindow(p.pkg, p.path, 0)?.let { Triple(it, p.pkg, "path") }
             // 右上角启发式的节点不在任何扫描器的规则集里（CORNER_RULE 是虚拟规则），
@@ -1197,6 +1180,17 @@ class SkipAccessibilityService : AccessibilityService() {
                 markBadPage(p.pkg, now)
                 Io.run("stats-insert") {
                     StatsStore.logEvent(appCtx, "疑似点进广告：${p.pkg} → $fg")
+                }
+            } else if (landedOnAdPage(p, now)) {
+                // 同包落地页（0.17.40）：目标没了、包名也没变，但新页面上是「立即下载」
+                // 这类 CTA —— 那不是跳过了广告，是被带进了广告。以前这里会直接记账，
+                // 统计虚高、落地页也不进黑名单。
+                // 不能靠 Activity 名判断换页：实测部分 App 的 WSC 事件不带类名，
+                // `lastActivityClass` 一直是空的（受控 App 的日志就是 `act=` 空）。
+                traceD("landing ${p.pkg} 新页面出现下载类 CTA，疑似点进广告，不记账")
+                markBadPage(p.pkg, now)
+                Io.run("stats-insert") {
+                    StatsStore.logEvent(appCtx, "疑似点进广告：${p.pkg}（同包落地页）")
                 }
             } else {
                 Io.run("stats-insert") { StatsDb.get(appCtx).insert(p.pkg, p.detail) }
@@ -1421,18 +1415,23 @@ class SkipAccessibilityService : AccessibilityService() {
      * 点完之后是不是被带进了同包的广告落地页。
      *
      * 判据三件事同时成立：
-     * 1. 页面变了（当前 Activity 与点击时不同）——没换页说明原地没动，那是 giveup 的事；
-     * 2. 还在同一个包里——跨包由 `off-app` 那条判据负责，这里只管它管不到的情形；
-     * 3. 点击后 3 秒内，且新页面上出现下载/安装类 CTA。
+     * 1. 目标已经消失（调用方已在 `found == null` 分支里，这里不再重复判）；
+     * 2. 前台仍是同一个包——跨包由 `off-app` 那条判据负责，这里只管它管不到的情形；
+     * 3. 点击后 3 秒内，且页面上出现下载/安装类 CTA。
+     *
+     * 为什么不用 Activity 名判「换页」：实测部分 App 的 WSC 事件不带类名，
+     * `lastActivityClass` 一直是空的（受控 App 的 `hot-open` 日志里 `act=` 就是空），
+     * 靠它判断换页等于这条判据永不生效。
      *
      * 只认「立即下载」这类广告落地页专属说法，不收「打开」「查看」「购买」——
      * 那些在正常首页上到处都是，收进来会让真跳过也不记账。
      */
     private fun landedOnAdPage(p: PendingSkip, now: Long): Boolean {
-        val cur = lastActivityClass[p.pkg].orEmpty()
-        if (p.act.isEmpty() || cur.isEmpty() || cur == p.act) return false
+        // 只在点击后 3 秒内看：再往后用户可能自己点了别的地方，
+        // 那时页面上的东西不该算在这次点击头上
         val since = if (lastSkipAt > 0) now - lastSkipAt else Long.MAX_VALUE
         if (since > LANDING_CHECK_MS) return false
+        if (foregroundPackage() != p.pkg) return false
         val root = currentRootOf(p.pkg) ?: return false
         return containsAdCta(root, 0)
     }
