@@ -128,8 +128,8 @@
     <string name="ka_result_not_bound">系统设置里显示已开启，但服务实例没绑上——把无障碍开关关开一次，或稍等几秒再自检</string>
 
     <string name="accessibility_service_label">SkipAd 开屏跳过</string>
-    <string name="accessibility_service_summary">按你自建的规则点击要跳过的按钮</string>
-    <string name="accessibility_service_description">SkipAd 只在你从快照里点选生成的规则命中的控件上动手，不套用通用词表、不猜位置。规则按应用隔离，在微信、聊天、输入法等没有规则的地方一律不做动作。本应用不申请网络与存储权限，不读取、不上传任何数据，所有判断均在本地完成。</string>
+    <string name="accessibility_service_summary">按自建规则与内置跳过词点击开屏按钮</string>
+    <string name="accessibility_service_description">SkipAd 只在应用冷启动的头几秒内动作，尝试点掉开屏广告的跳过按钮。识别包括你自建的规则、内置的跳过词与广告控件命名，必要时按右上角位置猜一次；内置部分可在规则页关闭。不申请网络与存储权限，不上传任何数据，所有判断均在本地完成。</string>
 
-    <string name="footer_note">只执行你从快照里点选生成的规则；规则按应用隔离，没有规则的应用一律不动手。\n下一步：广告在屏上时点悬浮钮抓快照 → 点选按钮 → 生成规则</string>
+    <string name="footer_note">内置默认词负责没建过规则的 App，自建规则优先。\n下一步：广告在屏上时点悬浮钮抓快照 → 点选按钮 → 生成规则</string>
 </resources>

@@ -192,7 +192,7 @@
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="跳过 / Skip / 倒计时 / skip 控件 ID；关掉只认你自己填的词"
+                            android:text="跳过 / Skip / 倒计时，以及常见广告平台的跳过按钮；关掉只认你自己填的词"
                             android:textColor="@color/text_secondary"
                             android:textSize="12sp" />
                     </LinearLayout>
