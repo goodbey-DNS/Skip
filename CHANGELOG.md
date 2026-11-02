@@ -48,8 +48,14 @@ GradleWorkerMain`。复制一份到 `G:\jdk21` 能跑通，但这不该是常态
 
 **验证**
 
-- 本地 `compileReleaseKotlin` 通过。
-- CI 跑 `testDebugUnitTest` + `assembleRelease`。
+- 本地 `compileReleaseKotlin` 通过；CI 跑 `testDebugUnitTest` + `assembleRelease`。
+- 真机（Redmi 22081212C，0.17.35 / 107）：
+  - 冷启动微博命中「跳过」并核验通过（17:02:23 match → 17:02:24 verified）；
+  - 微博停在「我的」页后关开无障碍两次，日志只有 `service-unbind` / `service-connected`
+    与窗口到期，**没有任何 match**——0.17.34 的预热修复在 0.17.35 上仍然成立；
+  - 未验证：`off-app` 分支需要一次真实的「点进广告」才能触发，本机没能构造出来。
+- 测试方法上的一个坑：先用 `monkey` 冷启动微博再测「我的」页，那次冷启动本身会
+  正常跳过并 +1，看起来像「重连又误点」。判断误点要看日志里有没有 match，不能只看计数。
 
 ## 0.17.34 - 2026-11-02 · 真机复现出最后一个洞：预热只挡了热窗口，没挡开屏窗口
 
