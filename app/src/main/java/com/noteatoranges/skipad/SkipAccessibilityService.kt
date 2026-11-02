@@ -1246,22 +1246,40 @@ class SkipAccessibilityService : AccessibilityService() {
         return lastFgPkg?.takeIf { it != SYSTEM_UI_PKG }
     }
 
-    /** 当前页面是否处在「刚疑似点错、暂时别动」的静默期 */
+    /**
+     * 误点页静默的 key。
+     *
+     * 首选 `包名/Activity`——同一个 App 里别的页面不该被连坐。但部分 App 的窗口事件
+     * 不带类名（`lastActivityClass` 为空，受控 App 里 `hot-open ... act=` 后面就是空），
+     * 以前这种情形直接 return，等于「静默 10 分钟」对这些 App 从来没生效过。
+     * 拿不到页面名时退到包名级 key：代价是十分钟内整个 App 不再自动跳，
+     * 换来的是「点错一次之后不会接着在该页面上点」。
+     */
+    private fun badPageKey(pkg: String): String {
+        val act = lastActivityClass[pkg].orEmpty()
+        return if (act.isEmpty()) "$pkg/*" else "$pkg/$act"
+    }
+
+    /**
+     * 当前页面（或这个 App）是否处在「刚疑似点错、暂时别动」的静默期。
+     *
+     * 两个 key 都查：包名级覆盖「读不到 Activity」时打下的标记，页面级覆盖正常标记。
+     * 只查其一的话，标记时与查询时的 key 可能对不上，静默就漏了。
+     */
     private fun isBadPage(pkg: String, now: Long): Boolean {
-        val act = lastActivityClass[pkg] ?: return false
-        val key = "$pkg/$act"
-        val until = badPageUntil[key] ?: return false
-        if (until <= now) {
-            badPageUntil.remove(key)
-            return false
+        var hit = false
+        val act = lastActivityClass[pkg].orEmpty()
+        val keys = if (act.isEmpty()) listOf("$pkg/*") else listOf("$pkg/*", "$pkg/$act")
+        for (k in keys) {
+            val until = badPageUntil[k] ?: continue
+            if (until <= now) badPageUntil.remove(k) else hit = true
         }
-        return true
+        return hit
     }
 
     private fun markBadPage(pkg: String, now: Long) {
-        val act = lastActivityClass[pkg] ?: return
         if (badPageUntil.size > 100) badPageUntil.clear()
-        badPageUntil["$pkg/$act"] = now + BAD_PAGE_MS
+        badPageUntil[badPageKey(pkg)] = now + BAD_PAGE_MS
     }
 
     /** 某个包名的可用窗口根：活动窗口优先，取不到再走窗口列表兜底 */
