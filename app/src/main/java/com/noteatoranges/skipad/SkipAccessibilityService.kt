@@ -1181,7 +1181,12 @@ class SkipAccessibilityService : AccessibilityService() {
                 Io.run("stats-insert") {
                     StatsStore.logEvent(appCtx, "疑似点进广告：${p.pkg} → $fg")
                 }
-            } else if (landedOnAdPage(p, now)) {
+                // 早退：下面那行 verified 是给「真的跳过了」准备的，这里不能也打一遍
+                splashClosedAt[p.pkg] = now
+                pending = null
+                return
+            }
+            if (landedOnAdPage(p, now)) {
                 // 同包落地页（0.17.40）：目标没了、包名也没变，但新页面上是「立即下载」
                 // 这类 CTA —— 那不是跳过了广告，是被带进了广告。以前这里会直接记账，
                 // 统计虚高、落地页也不进黑名单。
@@ -1192,9 +1197,11 @@ class SkipAccessibilityService : AccessibilityService() {
                 Io.run("stats-insert") {
                     StatsStore.logEvent(appCtx, "疑似点进广告：${p.pkg}（同包落地页）")
                 }
-            } else {
-                Io.run("stats-insert") { StatsDb.get(appCtx).insert(p.pkg, p.detail) }
+                splashClosedAt[p.pkg] = now
+                pending = null
+                return
             }
+            Io.run("stats-insert") { StatsDb.get(appCtx).insert(p.pkg, p.detail) }
             // 点掉了就立即关窗：开屏都是立刻出现，多等一秒就是在主界面上多扫一秒
             splashClosedAt[p.pkg] = now
             traceD("verified ${p.pkg} 「${p.detail}」 (attempts=${p.attempts})")
