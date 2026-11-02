@@ -825,7 +825,15 @@ class SkipAccessibilityService : AccessibilityService() {
         // rootInActiveWindow 在部分 ROM 上会是 null（窗口列表却可读），抓快照走的就是
         // windows 那条路。这里补一个同源的兜底，否则整条规则链路会静默不工作
         val rootRaw = rootInActiveWindow
-        val root = rootRaw ?: activeWindowRoot(event.packageName?.toString()) ?: return
+        val root = rootRaw ?: activeWindowRoot(event.packageName?.toString())
+        if (root == null) {
+            // 0.17.50：这条原本是 `?: return`，一声不响地走掉。排查「某个 App 完全不跳」
+            // 时它是第一个嫌疑人，但日志里一个字都没有——只能靠手动 uiautomator dump 反推。
+            // 只在热窗口期内记，正常页面拿不到 root 是常态，不该刷屏
+            val ep = event.packageName?.toString()
+            if (ep != null && isHot(now)) traceMiss(ep, "reject=no-root")
+            return
+        }
         val pkg = root.packageName?.toString() ?: event.packageName?.toString() ?: return
         if (pkg in blacklist || pkg == packageName) return
 
@@ -895,7 +903,14 @@ class SkipAccessibilityService : AccessibilityService() {
         val userSc = userScanner?.takeIf { userScannerPkg == pkg }
         val kwSc = if (splash) keywordScannerFor(pkg) else null
         // 开屏窗口内即使两个扫描器都为空也要往下走：还有右上角启发式这一条
-        if (userSc == null && kwSc == null && !splash) return false
+        if (userSc == null && kwSc == null && !splash) {
+            // 0.17.50：热窗口开着、却因为「这个包没有规则、也不在开屏窗口」而放过时留一行。
+            // 0.17.48 之前的系统广告容器漏跳就是这个形态：hot-open 打的是宿主，
+            // 真正承载广告的却是另一个包名，它没规则也不在开屏窗口 → 静默放过，
+            // 日志只剩 `scans=0`。记下包名，一眼就能看出「热窗口里混进了谁」。
+            if (isHot(now)) traceMiss(pkg, "reject=no-rule-in-hot")
+            return false
+        }
 
         // 屏宽高必须用整屏尺寸（含状态栏/导航栏），不能用 displayMetrics：
         // 节点 rect 是屏幕坐标，而 displayMetrics 给的是应用可用区（少一条导航栏，
