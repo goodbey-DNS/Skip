@@ -2,6 +2,39 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.49 - 2026-11-02 · 修 0.17.48 的记账：容器跳掉了却被判成「点进广告」
+
+0.17.48 实测里，广告确实点掉了、前台 0.4 秒就回到主界面，但核验那条链路判成了
+
+```
+retry#1 com.miui.systemAdSolution gesture ok=true
+off-app com.miui.systemAdSolution → com.cleanmaster.mguard_cn，不计入跳过
+```
+
+**后果不只是统计少一次**：`off-app` 分支会调 `markBadPage`，把容器页拉黑 10 分钟。
+也就是说连跳两次之后，第三、四次开屏会直接不动作——用户看到的是「时灵时不灵」。
+
+### 根因
+
+`off-app` 判据（0.17.42 加的）是「点完之后前台换成了别的包」，用来识别
+「点进广告落地页/应用商店」。对普通 App 成立，对系统广告容器正好反过来：
+容器的包名和宿主本来就是两个，点掉之后从容器回到宿主，**跨包恰恰是成功的样子**。
+
+### 改动
+
+`p.pkg in SYSTEM_AD_GATEWAYS && fg != null && fg != p.pkg` 时不算 off-app，
+走正常记账分支；记账的包名用宿主（`fg`）而不是容器，否则统计里会出现
+`com.miui.systemAdSolution` 这个用户完全看不懂的名字。
+
+拉黑与 `landedOnAdPage` 的判据都没动——容器命中后窗口已经消失，
+同包落地页那条本来就不会成立。
+
+### 待验证
+
+清理大师的广告位在连着两次冷启动后不再填充，0.17.49 的记账修正
+**只有代码与 0.17.48 的日志作依据，没有实机跑到 `verified` 那一刻**。
+下次广告填充时确认统计能 +1、且 `off-app` 不再出现。
+
 ## 0.17.48 - 2026-11-02 · 认出系统级开屏广告容器（小米）
 
 **这是本轮真实广告回归挖出来的，也是第一次命中真广告。**
@@ -37,8 +70,24 @@
 
 ### 验证
 
-改完装 0.17.48 真机冷启动清理大师，预期从 `scans=0` 变成扫满，并命中「跳过」。
-这是本轮第一次有可能真正跳掉一个真实开屏广告——之前微博、京东的十几轮都只有 no-match。
+**真机跳掉了。** 装 0.17.48 后冷启动猎豹清理大师，日志从原来的 `scans=0` 变成：
+
+```
+wcc-switch com.miui.systemAdSolution prev=com.cleanmaster.mguard_cn
+hot-open com.miui.systemAdSolution act=
+splash-window com.miui.systemAdSolution open
+scan com.miui.systemAdSolution 11ms: no-match nodes=1
+match com.miui.systemAdSolution 198ms: HIT 规则=ad-skip-viewid(viewId)
+hot-hit com.miui.systemAdSolution 86ms 规则=ad-skip-viewid
+```
+
+广告倒计时本来是「跳过 | 3」，点击后 **0.4 秒**就切到 `com.keniu.security.main.MainActivity`。
+不是广告自己播完（那要 3 秒），是点掉的。这是本项目第一次在真机上跳过**系统容器类**开屏广告。
+
+第一次扫描 `nodes=1` 说明容器窗口刚起来时树还是空的，第二次 198ms 才建好——
+时序上和 0.17.44 的 WebView 结论一致，不用额外处理。
+
+**但记账判错了**，见 0.17.49。
 
 ### 顺带记一个排查陷阱
 

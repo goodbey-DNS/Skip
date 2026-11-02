@@ -1218,7 +1218,11 @@ class SkipAccessibilityService : AccessibilityService() {
             // 后者以前同样记成「已跳过」，统计因此虚高——0.17.33 那次「我的」页误点就是
             // 这样进的榜单。判据只看包名：跳到商店/浏览器时前台已经换成别人的包。
             val fg = foregroundPackage()
-            if (fg != null && fg != p.pkg) {
+            // 系统广告容器（0.17.48）：开屏渲染在容器自己的包名里，点掉之后前台回到宿主 App。
+            // 这里的「跨包」正是成功的样子，不是点进广告——真按 off-app 处理的话，
+            // 统计会记成「疑似点进广告」，容器页还会被拉黑 10 分钟，下一次开屏直接不动作。
+            val gatewaySucceeded = p.pkg in SYSTEM_AD_GATEWAYS && fg != null && fg != p.pkg
+            if (fg != null && fg != p.pkg && !gatewaySucceeded) {
                 traceD("off-app ${p.pkg} → $fg，不计入跳过")
                 markBadPage(p.pkg, now)
                 Io.run("stats-insert") {
@@ -1244,7 +1248,10 @@ class SkipAccessibilityService : AccessibilityService() {
                 pending = null
                 return
             }
-            Io.run("stats-insert") { StatsDb.get(appCtx).insert(p.pkg, p.detail) }
+            // 容器命中时记到宿主名下：否则统计里会出现 com.miui.systemAdSolution
+            // 这个用户完全看不懂的名字，而真正被跳过的是宿主 App 的开屏
+            val statsPkg = if (gatewaySucceeded) (fg ?: p.pkg) else p.pkg
+            Io.run("stats-insert") { StatsDb.get(appCtx).insert(statsPkg, p.detail) }
             // 点掉了就立即关窗：开屏都是立刻出现，多等一秒就是在主界面上多扫一秒
             splashClosedAt[p.pkg] = now
             traceD("verified ${p.pkg} 「${p.detail}」 (attempts=${p.attempts})")
