@@ -172,6 +172,14 @@ class SkipAccessibilityService : AccessibilityService() {
          * 记下页面，换页即视为点掉了。
          */
         val act: String = "",
+        /**
+         * 点击时那个控件的矩形桶键（见 [rectKeyOf]）。
+         *
+         * 复核内置规则时要求「同一个位置」还在，而不是「页面上还有这个词」。
+         * 微博这类单 Activity 应用开屏页和主界面同名，只看 Activity 判不出换页：
+         * 主界面上恰好有个「跳过」的话，会被当成按钮没点掉然后补刀——那是往正文里点。
+         */
+        val rectKey: String = "",
     )
 
     /** 每个 App 最近一次"新窗口出现"的时间与前台 Activity 类名 */
@@ -968,7 +976,8 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         // 这个位置本轮已经点过了：直接放过。放在 dumpTree 之前——否则每个后续事件
         // 都会重写一份诊断树，并且走到 action-fail 把自己的日志污染成「点击失败」
-        if (rectKeyOf(hit.first) in clickedRects) {
+        val hitRectKey = rectKeyOf(hit.first)
+        if (hitRectKey in clickedRects) {
             traceV("match-dup $pkg 规则=${rule.id}")
             return false
         }
@@ -1000,7 +1009,7 @@ class SkipAccessibilityService : AccessibilityService() {
         // 第一下没点掉时，「还在」既可能是广告没响应，也可能是页面已换、右上角另有
         // 别的小按钮——这时再补一次裸坐标点击，风险大于收益。所以 corner 一律不补刀。
         val retry = if (rule.id == CORNER_RULE.id) 0 else MAX_RETRY
-        pending = PendingSkip(winKey, pkg, detail, 0, retry, ruleId = rule.id, act = act)
+        pending = PendingSkip(winKey, pkg, detail, 0, retry, ruleId = rule.id, act = act, rectKey = hitRectKey)
         val token = pending
         mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
         return true
@@ -1154,7 +1163,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 // 拿它去补刀就是往正文里点一下
                 val cur = lastActivityClass[p.pkg].orEmpty()
                 if (p.act.isNotEmpty() && cur.isNotEmpty() && cur != p.act) null
-                else findBuiltinTarget(p.pkg, p.ruleId)
+                else findBuiltinTarget(p.pkg, p.ruleId, p.rectKey)
             }
             else -> findUserTargetInAnyWindow(p.pkg, p.ruleId)
         }
@@ -1359,7 +1368,11 @@ class SkipAccessibilityService : AccessibilityService() {
      * 注意这里必须按 [ruleId] 过滤：点完页面可能已经换掉，扫描器会按新页面重建规则，
      * 拿新规则的结果去判「还在」会命中一个不相干的新目标，然后补刀——跨页误点。
      */
-    private fun findBuiltinTarget(pkg: String, ruleId: String): Triple<AccessibilityNodeInfo, String, String>? {
+    private fun findBuiltinTarget(
+        pkg: String,
+        ruleId: String,
+        rectKey: String,
+    ): Triple<AccessibilityNodeInfo, String, String>? {
         // 内置词表被用户关掉时无从复核，退回旧行为（按已跳过处理）
         if (!EnginePrefs.builtinWordsEnabled(this)) return null
         val scanner = keywordScannerFor(pkg) ?: return null
@@ -1376,6 +1389,11 @@ class SkipAccessibilityService : AccessibilityService() {
         for (r in roots) {
             val hit = runCatching { scanner.findSkipTarget(r, w, h) }.getOrNull() ?: continue
             if (hit.second.id != ruleId) continue
+            // 同一条规则命中了另一个位置：那不是「按钮没点掉」，是页面上别处出现了同样的字
+            if (rectKey.isNotEmpty() && rectKeyOf(hit.first) != rectKey) {
+                traceV("verify-other $pkg 规则=$ruleId 位置不同")
+                continue
+            }
             return Triple(hit.first, pkg, "builtin")
         }
         return null
