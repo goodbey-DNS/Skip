@@ -213,9 +213,29 @@ class SkipAccessibilityService : AccessibilityService() {
         runCatching { packageManager.getLaunchIntentForPackage(pkg) != null }.getOrDefault(false)
     }
 
+    /**
+     * 系统级开屏广告容器：没有启动图标、不属于桌面，但确实承载真实开屏广告。
+     *
+     * 0.17.48 实测：猎豹清理大师冷启动后，前台根节点的包名不是它自己，而是
+     * `com.miui.systemAdSolution`——小米 HyperOS 把开屏交给了系统广告方案渲染。
+     * dump 出来的树里是快手极速版的推广位，带 `view_skip_button`（文本「跳过 | 3」）
+     * 和 `view_skip_button_nearby_top_right`，都是可点击的。
+     *
+     * 这个包名两条原有判据都不满足（没有 LAUNCHER，也不在 homePkgs），于是 WSC 分支
+     * 整段被跳过：`lastStateChangeAt` 从不写入 → `isSplashNow` 恒为 false →
+     * `scanAndAct` 在「两个扫描器都空且不在开屏窗口」处静默 return。
+     * 表现为 `hot-close ... scans=0`：不是跳错，是根本没看见。
+     *
+     * 只收有实机节点的包名，不按厂商猜。加了之后仍然走同一套判据——热窗口只有 4 秒、
+     * 要求真的从别的包切过来、命中后照样核验，不会因为这个豁免放宽任何一道闸。
+     */
+    private val SYSTEM_AD_GATEWAYS = setOf(
+        "com.miui.systemAdSolution",
+    )
+
     /** 这个包名能不能代表「用户此刻在前台一个真正的应用里」 */
     private fun countsAsForeground(pkg: String): Boolean =
-        pkg in homePkgs || isRealApp(pkg)
+        pkg in homePkgs || pkg in SYSTEM_AD_GATEWAYS || isRealApp(pkg)
 
     /**
      * 本轮开屏已经点掉的时间点。

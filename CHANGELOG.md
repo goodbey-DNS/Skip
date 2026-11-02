@@ -2,6 +2,52 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.48 - 2026-11-02 · 认出系统级开屏广告容器（小米）
+
+**这是本轮真实广告回归挖出来的，也是第一次命中真广告。**
+
+### 现象
+
+冷启动猎豹清理大师，引擎只有一行 `hot-close com.cleanmaster.mguard_cn scans=0`——
+一次扫描都没发生，而且不是「无广告填充」：`uiautomator dump` 拿到的是完整开屏广告，
+快手极速版的推广位，带 `view_skip_button`（文本「跳过 | 3」）和
+`view_skip_button_nearby_top_right`，两个都可点击。
+
+### 根因
+
+前台根节点的包名不是清理大师，是 **`com.miui.systemAdSolution`**——小米 HyperOS
+把开屏交给系统广告方案渲染，日志里那句 `splash-window com.miui.systemAdSolution closed`
+就是它。
+
+`countsAsForeground(pkg)` 原来只认两种包：有启动图标的（`getLaunchIntentForPackage`），
+或属于桌面（`homePkgs`）。系统广告容器两样都不是 → WSC 分支整段被跳过 →
+`lastStateChangeAt` 从不写入 → `isSplashNow` 恒为 false → `scanAndAct` 在
+「两个扫描器都空且不在开屏窗口」处静默 return。
+
+所以这类广告引擎**不是跳错，是根本没看见**。小米上所有被系统广告方案接管的 App
+都是这个样子，而且日志里只有 `scans=0`，从现象完全看不出来。
+
+### 改动
+
+新增 `SYSTEM_AD_GATEWAYS`（当前只有 `com.miui.systemAdSolution`），
+`countsAsForeground` 把它也算作「用户此刻在前台」。只收有实机节点证据的包名，不按厂商猜。
+
+豁免不放宽任何一道闸：热窗口仍是 4 秒、仍要求真的从别的包切过来、命中后照样核验、
+桌面与系统界面照样在黑名单里。区别只是引擎终于能看见这个窗口。
+
+### 验证
+
+改完装 0.17.48 真机冷启动清理大师，预期从 `scans=0` 变成扫满，并命中「跳过」。
+这是本轮第一次有可能真正跳掉一个真实开屏广告——之前微博、京东的十几轮都只有 no-match。
+
+### 顺带记一个排查陷阱
+
+前面测京东时连续三次「引擎零日志」，一度怀疑是 Android 11 包可见性让
+`getLaunchIntentForPackage` 返回 null。**实际是 logcat 环形缓冲区被京东冷启动的
+36 万字符日志冲掉了**，SkipAd 的 VERBOSE 日志全被挤出缓冲区。
+`adb shell logcat -G 16M` 加大后，同样的操作立刻正常。
+以后排查「某 App 完全不跳」第一步先看缓冲区，不要先怀疑代码。
+
 ## 0.17.47 - 2026-11-02 · 修三处与实现相反的文案
 
 补 README 时顺带发现：界面和系统设置里有几处说明还停在 0.17.28 之前的状态，内容与实现相反。
