@@ -184,11 +184,16 @@ object BuiltinRules {
  * 抽成扩展函数是因为扫描（决定要不要点）和核验（决定要不要补刀）必须用同一套判定，
  * 两边各写一遍迟早会分叉——分叉的后果是一边认为已经跳过、另一边认为还在，然后补刀点错。
  *
- * @param vidLower 已经转小写的 viewIdResourceName
+ * 大小写在这里统一处理，不依赖调用方：原来约定「传进来的必须是小写」，结果调用方漏了
+ * 一次就变成 `GDT_BTN_CLOSE` 匹配不上，而测试里正好用大写把它照出来了。资源名本身
+ * 就带大小写，这层转换不该由每个调用点各自记得。
+ *
+ * @param vid viewIdResourceName，大小写不限
  */
-internal fun SkipRule.viewIdHit(vidLower: String): Boolean {
-    if (viewIds.isEmpty()) return false
-    if (viewIds.none { vidLower.contains(it) }) return false
+internal fun SkipRule.viewIdHit(vid: String): Boolean {
+    if (viewIds.isEmpty() || vid.isEmpty()) return false
+    val v = vid.lowercase(java.util.Locale.ROOT)
+    if (viewIds.none { v.contains(it.lowercase(java.util.Locale.ROOT)) }) return false
     if (viewIdNeeds.isEmpty()) return true
-    return viewIdNeeds.any { vidLower.contains(it.lowercase(java.util.Locale.ROOT)) }
+    return viewIdNeeds.any { v.contains(it.lowercase(java.util.Locale.ROOT)) }
 }
