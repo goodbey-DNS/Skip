@@ -21,6 +21,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.noteatoranges.skipad.core.BuiltinRules
 import com.noteatoranges.skipad.core.ClickPerformer
+import com.noteatoranges.skipad.core.CornerSkipFinder
 import com.noteatoranges.skipad.core.EngineTrace
 import com.noteatoranges.skipad.core.NodeFactsCache
 import com.noteatoranges.skipad.core.NodeScanner
@@ -106,6 +107,26 @@ class SkipAccessibilityService : AccessibilityService() {
 
     /** 内容变化事件的独立节流时间戳 */
     private var lastContentAt = 0L
+
+    /**
+     * 开屏热窗口：App 刚切到前台的头 [SPLASH_WINDOW_MS]。
+     *
+     * 这段时间里做两件平时不做的事：
+     * - 把系统的 notificationTimeout 临时压到 50ms（平时 300ms 省电），让跳过按钮一出现
+     *   就被投递过来，而不是等系统把事件合并完；
+     * - 起一个主动扫描定时器，不等事件自己来。广告 SDK 的按钮出现时不一定发内容变化事件，
+     *   纯事件驱动会整段漏掉——这是"按钮明明在却没有跳过"的主要来源。
+     *
+     * 窗口一结束就全部还原，常驻开销不变。
+     */
+    private var hotPkg: String? = null
+    private var hotUntil = 0L
+    private var hotOpenedAt = 0L
+    private var hotScanCount = 0
+    private var hotScanTask: Runnable? = null
+
+    /** 系统默认的事件合并窗口（xml 里的 300），热窗口结束后恢复成它 */
+    private var baseNotifTimeout = 300
 
     private data class PendingSkip(
         val windowKey: String,
@@ -207,6 +228,10 @@ class SkipAccessibilityService : AccessibilityService() {
         val ver = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()
         traceI("service-connected $ver")
         clicker = ClickPerformer(this)
+        // 记住 xml 里的合并窗口，热窗口结束后按这个值还原。读不到就按 300 算
+        runCatching { serviceInfo?.notificationTimeout }.getOrNull()
+            ?.takeIf { it > 0 }
+            ?.let { baseNotifTimeout = it }
         homePkgs = findHomePackages()
         blacklist = PACKAGE_BLACKLIST + homePkgs
         KeepAlive.scheduleJob(this)
@@ -262,6 +287,8 @@ class SkipAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // 热窗口没走完就被销毁（换包、手动关开关）：把合并窗口还原，别把 50ms 留给下一次
+        runCatching { exitHotWindow(SystemClock.elapsedRealtime()) }
         // 记账攒在内存里，服务被杀就丢了：退出前补一次落盘
         runCatching { RuleStore.flushHits(this) }
         com.noteatoranges.skipad.util.CaptureBubble.hide(this)
@@ -633,6 +660,8 @@ class SkipAccessibilityService : AccessibilityService() {
                     // 还是同一个 Activity，onPageChanged 会提前返回，记录一直留着，
                     // 那个跳过按钮会被当成重复点击直接放过——服务不重启就永远点不动
                     onAppSwitched(ep)
+                    // 热窗口：抢时间的那一套（事件窗口压到 50ms + 主动扫描）只在这里开
+                    enterHotWindow(ep)
                 }
                 // className 不一定就是 Activity：弹浮层 / 列表刷新时 WSC 事件报的是
                 // android.widget.PopupWindow、androidx...RecyclerView 这类系统控件类名。
@@ -674,6 +703,7 @@ class SkipAccessibilityService : AccessibilityService() {
                         traceV("wcc-switch $ep prev=$lastShownPkg")
                         lastShownPkg = ep
                         lastStateChangeAt[ep] = now
+                        enterHotWindow(ep)
                         // 坐标规则也要排一次：不走窗口切换事件的应用（计算器这类）
                         // 只靠 WSC 分支排的话，它们的坐标规则一次都不会执行
                         RuleStore.pointRules(this, ep, lastActivityClass[ep].orEmpty())
@@ -684,13 +714,15 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         val now = SystemClock.elapsedRealtime()
-        if (now - lastHandleAt < THROTTLE_MS) return
+        // 热窗口内把节流压到 80/120ms：开屏只有 4 秒，300ms 的合并窗口等于白等三次
+        val hot = isHot(now)
+        if (now - lastHandleAt < (if (hot) HOT_THROTTLE_MS else THROTTLE_MS)) return
         lastHandleAt = now
 
         // 内容变化事件在信息流里一秒能来几十个，每次都要全树走一遍无障碍节点，
         // 是耗电主因。命中只取决于控件是否还在，下一次切页/内容变化都会补上
         if (type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
-            if (now - lastContentAt < CONTENT_THROTTLE_MS) return
+            if (now - lastContentAt < (if (hot) HOT_CONTENT_THROTTLE_MS else CONTENT_THROTTLE_MS)) return
             lastContentAt = now
         }
 
@@ -703,10 +735,7 @@ class SkipAccessibilityService : AccessibilityService() {
 
         // 开屏窗口：只从「真的切到这个 App 的那一刻」起算 SPLASH_WINDOW_MS；
         // 本轮已经点掉过一次就立即收手（splashClosedAt），不等满窗口
-        val sinceSwitch = lastStateChangeAt[pkg]
-        val splash = sinceSwitch != null &&
-            now - sinceSwitch <= SPLASH_WINDOW_MS &&
-            sinceSwitch > (splashClosedAt[pkg] ?: 0L)
+        val splash = isSplashNow(pkg, now)
         // 开屏窗口的开合各记一次（只在翻转时打）：排查「为什么没触发」时，
         // 第一件事就是看这一刻窗口到底是开的还是关的
         if (splashState[pkg] != splash) {
@@ -715,6 +744,36 @@ class SkipAccessibilityService : AccessibilityService() {
             traceV("splash-window $pkg ${if (splash) "open" else "closed"}")
         }
 
+        scanAndAct(pkg, root, now, splash, windowKeyFor(pkg, event, root))
+    }
+
+    /** 此刻是否处在「刚切到这个 App」的开屏窗口里 */
+    private fun isSplashNow(pkg: String, now: Long): Boolean {
+        val sinceSwitch = lastStateChangeAt[pkg] ?: return false
+        return now - sinceSwitch <= SPLASH_WINDOW_MS && sinceSwitch > (splashClosedAt[pkg] ?: 0L)
+    }
+
+    /**
+     * 扫描并动作：事件路径与主动扫描路径共用这一段。
+     *
+     * 抽出来是为了让「主动扫描」不必伪造 AccessibilityEvent —— 开屏按钮出现时
+     * 常常一个内容变化事件都没有，纯事件驱动的链路整段是瞎的。
+     *
+     * @return 是否真的点出去了
+     */
+    private fun scanAndAct(
+        pkg: String,
+        root: AccessibilityNodeInfo,
+        now: Long,
+        splash: Boolean,
+        winKey: String,
+    ): Boolean {
+        // 扫描总预算：事件路径与主动路径共用同一个计数。开屏 4 秒里两条路径叠起来
+        // 最多扫 40 次全树（每次 15~25ms），再多就是拿主线程换那点运气
+        if (splash && isHot(now)) {
+            if (hotScanCount >= HOT_MAX_SCANS) return false
+            hotScanCount++
+        }
         // 刷新用户规则扫描器（规则版本 / 包名 / 页面任一变化就重建）
         val ver = RuleStore.version(this)
         val act = lastActivityClass[pkg].orEmpty()
@@ -730,22 +789,21 @@ class SkipAccessibilityService : AccessibilityService() {
 
         // 结构路径规则最精确（用户从快照里点选的那个控件本身），先试一次；
         // 命中就不必再全树扫描。页面/冷却/次数闸在 tryPathRule 内部按规则判断
-        if (tryPathRule(root, pkg, act, now)) return
+        if (tryPathRule(root, pkg, act, now)) return true
 
         // 开屏窗口内：用户规则优先，没命中再走词表（内置默认词 + 手输命中/排除词）；
         // 窗口外：只认用户规则，两样都没有就一条都不扫
         val userSc = userScanner?.takeIf { userScannerPkg == pkg }
         val kwSc = if (splash) keywordScannerFor(pkg) else null
-        if (userSc == null && kwSc == null) return
+        // 开屏窗口内即使两个扫描器都为空也要往下走：还有右上角启发式这一条
+        if (userSc == null && kwSc == null && !splash) return false
 
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
 
         // 同窗口冷却：刚点过的窗口在冷却期内不再重复匹配
-        if (lastSkipWindow != null && now - lastSkipAt < COOLDOWN_MS &&
-            lastSkipWindow == windowKeyFor(pkg, event, root)
-        ) {
-            return
+        if (lastSkipWindow != null && now - lastSkipAt < COOLDOWN_MS && lastSkipWindow == winKey) {
+            return false
         }
 
         val t0 = SystemClock.elapsedRealtime()
@@ -755,13 +813,23 @@ class SkipAccessibilityService : AccessibilityService() {
             hit = kwSc.findSkipTarget(root, w, h)
             dbg = kwSc.lastDebug
         }
+        // 前两条都没命中，且处在开屏窗口：试一次右上角启发式。
+        // 这是「广告有跳过按钮但既没文字也没 skip 类 id」的唯一出路——
+        // 判据收得很紧（见 CornerSkipFinder），只在开屏页右上角那一个小方块上生效
+        if (hit == null && splash) {
+            val corner = runCatching { CornerSkipFinder.find(root, w, h, factsCache) }.getOrNull()
+            if (corner != null) {
+                hit = corner to CORNER_RULE
+                dbg = "corner-hit「${(corner.text ?: corner.contentDescription ?: corner.className)?.toString()?.take(12)}」"
+            }
+        }
         // 扫描耗时：决定要不要给「每 App 事件次数」加预算时必须看这个数，
         // 不能凭感觉（上限是 TRAVERSE_TIMEOUT_MS=400ms）
         val cost = SystemClock.elapsedRealtime() - t0
         if (hit == null) {
             traceV("scan $pkg ${cost}ms: $dbg")
             traceMiss(pkg, dbg)
-            return
+            return false
         }
         val detail = hit.first.text?.toString()
             ?: hit.first.contentDescription?.toString()
@@ -771,16 +839,16 @@ class SkipAccessibilityService : AccessibilityService() {
 
         val rule = hit.second
         // 冷却 / 次数上限：拦在这里，误点的代价远大于漏跳
-        if (!gate("$pkg|${rule.id}", rule.cooldownMs, rule.maxCount, now)) return
+        if (!gate("$pkg|${rule.id}", rule.cooldownMs, rule.maxCount, now)) return false
         if (rule.action == SkipRule.ACTION_NONE) {
             traceD("match-only $pkg 「$detail」 规则=${rule.id}")
-            return
+            return false
         }
         // 这个位置本轮已经点过了：直接放过。放在 dumpTree 之前——否则每个后续事件
         // 都会重写一份诊断树，并且走到 action-fail 把自己的日志污染成「点击失败」
         if (rectKeyOf(hit.first) in clickedRects) {
             traceV("match-dup $pkg 规则=${rule.id}")
-            return
+            return false
         }
         dumpTree(root, pkg, "match")
         val fired = when (rule.action) {
@@ -789,14 +857,112 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         if (!fired) {
             traceD("action-fail $pkg ${rule.action} 规则=${rule.id}")
-            return
+            return false
         }
-        lastSkipWindow = windowKeyFor(pkg, event, root)
+        // 点了就收工：热窗口的主动扫描立刻停，不再往主界面上扫
+        val elapsed = if (hotOpenedAt > 0) now - hotOpenedAt else -1
+        if (elapsed >= 0) traceD("hot-hit $pkg ${elapsed}ms 规则=${rule.id}")
+        if (hotPkg == pkg) exitHotWindow(now)
+        lastSkipWindow = winKey
         lastSkipAt = now
         recordRuleHit(rule, hit.first)
-        pending = PendingSkip(lastSkipWindow ?: "", pkg, detail, 0, ruleId = rule.id)
+        pending = PendingSkip(winKey, pkg, detail, 0, ruleId = rule.id)
         val token = pending
         mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
+        return true
+    }
+
+    // —— 热窗口 ——
+
+    /** 现在是否在热窗口内 */
+    private fun isHot(now: Long): Boolean = hotPkg != null && now <= hotUntil
+
+    /**
+     * 进入热窗口：把系统事件合并窗口压到 50ms，并起主动扫描。
+     *
+     * 只在「真的切到某个 App」时调用。重复切同一个 App 会重开窗口，
+     * 但主动扫描任务每次都先停旧的，不会叠出两条链。
+     */
+    private fun enterHotWindow(pkg: String) {
+        val now = SystemClock.elapsedRealtime()
+        // 先停旧链：重复切 App 时若不停，旧任务还会在下一拍醒来，和新链叠成两条
+        hotScanTask?.let { mainHandler.removeCallbacks(it) }
+        hotScanTask = null
+        hotPkg = pkg
+        hotUntil = now + SPLASH_WINDOW_MS
+        hotOpenedAt = now
+        hotScanCount = 0
+        setNotifTimeout(HOT_NOTIF_TIMEOUT)
+        scheduleActiveScan()
+        traceV("hot-open $pkg")
+    }
+
+    /** 退出热窗口：还原事件合并窗口，停掉主动扫描 */
+    private fun exitHotWindow(now: Long) {
+        if (hotPkg == null) return
+        val pkg = hotPkg
+        hotPkg = null
+        hotUntil = 0L
+        hotOpenedAt = 0L
+        hotScanTask?.let { mainHandler.removeCallbacks(it) }
+        hotScanTask = null
+        setNotifTimeout(baseNotifTimeout)
+        traceV("hot-close $pkg scans=$hotScanCount")
+    }
+
+    /** 改系统事件合并窗口；服务未连接或系统拒绝时静默跳过 */
+    private fun setNotifTimeout(ms: Int) {
+        try {
+            val info = serviceInfo ?: return
+            if (info.notificationTimeout == ms) return
+            info.notificationTimeout = ms
+            setServiceInfo(info)
+        } catch (t: Throwable) {
+            traceW("notif-timeout-fail $ms", t)
+        }
+    }
+
+    /** 排下一次主动扫描；窗口过期、次数用完、或已经切走就停 */
+    private fun scheduleActiveScan() {
+        if (hotPkg == null) return
+        val task = Runnable {
+            hotScanTask = null
+            val now = SystemClock.elapsedRealtime()
+            val pkg = hotPkg ?: return@Runnable
+            if (now > hotUntil) {
+                exitHotWindow(now)
+                return@Runnable
+            }
+            if (hotScanCount >= HOT_MAX_SCANS) {
+                traceV("hot-budget $pkg ${hotScanCount}")
+                exitHotWindow(now)
+                return@Runnable
+            }
+            // 计数统一在 scanAndAct 里做：事件路径也在消耗同一份预算
+            try {
+                activeScan(pkg, now)
+            } catch (t: Throwable) {
+                traceW("hot-scan-fail", t)
+            }
+            scheduleActiveScan()
+        }
+        hotScanTask = task
+        mainHandler.postDelayed(task, HOT_SCAN_INTERVAL_MS)
+    }
+
+    /**
+     * 主动扫描一次：不等事件，自己取当前窗口的 root。
+     *
+     * 只有三条前置条件同时成立才扫：还在热窗口、前台仍是这个包、窗口 root 读得到。
+     * 任何一条不成立就安静返回——这里每秒跑八次，不能有副作用。
+     */
+    private fun activeScan(pkg: String, now: Long) {
+        if (!isHot(now)) return
+        if (lastFgPkg != null && lastFgPkg != pkg) return
+        if (!isSplashNow(pkg, now)) return
+        val root = currentRootOf(pkg) ?: return
+        if (root.packageName?.toString() != pkg) return
+        scanAndAct(pkg, root, now, true, "$pkg/${root.className ?: ""}")
     }
 
     private fun windowKeyFor(pkg: String, event: AccessibilityEvent, root: AccessibilityNodeInfo): String =
@@ -821,10 +987,17 @@ class SkipAccessibilityService : AccessibilityService() {
 
     private fun verifySkipOnce() {
         val p = pending ?: return
-        val found = if (p.path != null) {
-            findByPathAnyWindow(p.pkg, p.path, 0)?.let { Triple(it, p.pkg, "path") }
-        } else {
-            findUserTargetInAnyWindow(p.pkg, p.ruleId)
+        val found = when {
+            p.path != null -> findByPathAnyWindow(p.pkg, p.path, 0)?.let { Triple(it, p.pkg, "path") }
+            // 右上角启发式的节点不在任何扫描器的规则集里（CORNER_RULE 是虚拟规则），
+            // 走 findUserTargetInAnyWindow 永远返回 null，等于「点完就记账」——
+            // 点错了也照记成功。这里用同一个启发式复核：还在就补刀
+            p.ruleId == CORNER_RULE.id -> currentRootOf(p.pkg)?.let { r ->
+                val cw = resources.displayMetrics.widthPixels
+                val ch = resources.displayMetrics.heightPixels
+                CornerSkipFinder.find(r, cw, ch, factsCache)?.let { Triple(it, p.pkg, "corner") }
+            }
+            else -> findUserTargetInAnyWindow(p.pkg, p.ruleId)
         }
         if (found == null) {
             val appCtx = applicationContext
@@ -1555,9 +1728,31 @@ class SkipAccessibilityService : AccessibilityService() {
          * 再长就会覆盖到开屏页跳过去之后的主界面，那正是误点开始的地方。
          */
         const val SPLASH_WINDOW_MS = 4000L
-        const val SNAP_CHANNEL = "snapshot_v2"
-        const val SNAP_NOTIF_ID = 2001
-        const val ACTION_TAKE_SNAPSHOT = "com.noteatoranges.skipad.TAKE_SNAPSHOT"
+
+        // —— 开屏热窗口（与 SPLASH_WINDOW_MS 完全对齐，不引入新的时间边界）——
+        // 系统事件合并窗口：平时 300ms 省电，热窗口内压到 50ms 抢时间。
+        // 50 不是 0：0 会让信息流类应用把每个内容变化都立刻投递，热窗口内只有几秒，
+        // 但仍有应用会在开屏页里刷进度条，留 50ms 已经足够快又不至于打满主线程
+        const val HOT_NOTIF_TIMEOUT = 50
+
+        /** 热窗口内的事件节流：平时 300ms，这里 80ms */
+        const val HOT_THROTTLE_MS = 80L
+
+        /** 热窗口内的内容变化节流：平时 600ms，这里 120ms */
+        const val HOT_CONTENT_THROTTLE_MS = 120L
+
+        /** 主动扫描节拍：不依赖事件，每 120ms 自己取一次 root 扫 */
+        const val HOT_SCAN_INTERVAL_MS = 120L
+
+        /**
+         * 热窗口内的主动扫描次数上限。
+         *
+         * 4 秒 / 120ms ≈ 33 次，留点余量取 40。有上限是因为极少数 App 在开屏页
+         * 狂发事件，事件路径 + 主动路径叠起来会把主线程占满——而漏几个广告
+         * 远好过让用户觉得手机卡了。
+         */
+        const val HOT_MAX_SCANS = 40
+
 
         /** 系统界面窗口：抓快照时要跳过 */
         const val SYSTEM_UI_PKG = "com.android.systemui"
@@ -1588,6 +1783,15 @@ class SkipAccessibilityService : AccessibilityService() {
 
         /** 节点矩形去重的分桶宽度（px）：相邻两帧的 bounds 会抖 1~2px，精确相等去不掉重复 */
         const val RECT_BUCKET_PX = 8
+
+        /**
+         * 右上角启发式命中的"虚拟规则"。
+         *
+         * 它不是一条用户规则，只用来借 [gate] 的冷却与次数上限：每个 App 每次切前台
+         * 最多点一次右上角小控件。maxCount=1 配合 [onAppSwitched] 的清零，
+         * 保证同一次开屏里不会连点两下。
+         */
+        val CORNER_RULE = SkipRule(id = "corner-skip", cooldownMs = 3000L, maxCount = 1)
 
         /** 系统包与噪声大户：直接跳过节点遍历（李跳跳同款"先粗筛再遍历"思路） */
         val PACKAGE_BLACKLIST = setOf(
