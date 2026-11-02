@@ -873,12 +873,58 @@ class SkipAccessibilityService : AccessibilityService() {
             hit = kwSc.findSkipTarget(root, w, h)
             dbg = kwSc.lastDebug
         }
+
+        // 同包的其它窗口（0.17.37）：广告 SDK 把关闭钮放进独立窗口 / Dialog / 悬浮窗时，
+        // 主窗口那棵树里根本没有这个控件，扫多少次都是 no-match。核验阶段早就遍历 windows
+        // 了（findUserTargetInAnyWindow），扫描阶段此前没有——这是明确的漏跳路径。
+        //
+        // 三条限制，都为了「宁可少跳不可乱点」：
+        // 1. 只在开屏窗口内做。窗口外只认用户规则，扩大扫描面等于扩大误点面；
+        // 2. 只认同一个包名的窗口。跨包扫描就是 0.17.30 那次跨应用误点的来源；
+        // 3. 次数计入热窗口总预算（HOT_MAX_SCANS），且额外窗口最多 2 个。
+        // 右上角启发式不在这里跑：它是几何猜测，浮层窗口的尺寸不代表开屏页的布局。
+        if (hit == null && splash) {
+            var extra = 0
+            val wins = runCatching { windows?.toList() ?: emptyList() }.getOrDefault(emptyList())
+            for (w0 in wins) {
+                if (extra >= MAX_EXTRA_WINDOWS) break
+                val r0 = runCatching { w0.root }.getOrNull() ?: continue
+                if (sameRoot(r0, root)) continue
+                if (runCatching { r0.packageName?.toString() }.getOrNull() != pkg) continue
+                if (isHot(now)) {
+                    if (hotScanCount >= HOT_MAX_SCANS) {
+                        traceV("hot-budget $pkg 额外窗口未扫")
+                        break
+                    }
+                    hotScanCount++
+                }
+                extra++
+                traceV("win-scan $pkg #${w0.id}")
+                val h1 = userSc?.findSkipTarget(r0, w, h)
+                if (h1 != null) {
+                    hit = h1
+                    dbg = userSc?.lastDebug
+                } else {
+                    val h2 = kwSc?.findSkipTarget(r0, w, h)
+                    if (h2 != null) {
+                        hit = h2
+                        dbg = kwSc?.lastDebug
+                    }
+                }
+                if (hit != null) {
+                    traceD("win-hit $pkg #${w0.id}")
+                    break
+                }
+            }
+        }
+
         // 前两条都没命中，且处在开屏窗口：试一次右上角启发式。
         // 这是「广告有跳过按钮但既没文字也没 skip 类 id」的唯一出路——
         // 判据收得很紧（见 CornerSkipFinder），只在开屏页右上角那一个小方块上生效。
         // 再叠一道时间闸：只在切前台后 2.5 秒内启用。广告的跳过按钮这时早该出现了，
         // 而主界面（右上角常有发布/保存/分享这类真按钮）通常在广告倒计时结束后才出现——
-        // 窗口开太长，从通知或 deep link 直接落到功能页时就会点错东西
+        // 窗口开太长，从通知或 deep link 直接落到功能页时就会点错东西。
+        // 0.17.37 起它排在多窗口之后：真实命中优先于几何猜测
         if (hit == null && splash && inCornerWindow(now) && EnginePrefs.builtinWordsEnabled(this)) {
             val corner = runCatching { CornerSkipFinder.find(root, w, h, factsCache) }.getOrNull()
             if (corner != null) {
@@ -1166,6 +1212,23 @@ class SkipAccessibilityService : AccessibilityService() {
         val r = runCatching { rootInActiveWindow }.getOrNull()
         if (r != null && r.packageName?.toString() == pkg) return r
         return activeWindowRoot(pkg)
+    }
+
+    /**
+     * 判断两次取到的是不是同一个窗口的根。
+     *
+     * 为什么不用 [AccessibilityNodeInfo.equals]：跨版本语义不完全一致（有的比
+     * connectionId + windowId，有的还要比 sourceNodeId），拿不准就不依赖。
+     * 几何 + 类名 + 子节点数三者相同，在实践中已经足够——误判成同一个只是少扫一次，
+     * 误判成不同也只是多扫一次树，两种代价都可接受，不像重复点击那样不可逆。
+     */
+    private fun sameRoot(a: AccessibilityNodeInfo, b: AccessibilityNodeInfo): Boolean {
+        if (a === b) return true
+        val ra = Rect()
+        val rb = Rect()
+        runCatching { a.getBoundsInScreen(ra) }
+        runCatching { b.getBoundsInScreen(rb) }
+        return ra == rb && a.className == b.className && a.childCount == b.childCount
     }
 
     /**
@@ -1889,6 +1952,15 @@ class SkipAccessibilityService : AccessibilityService() {
          * 远好过让用户觉得手机卡了。
          */
         const val HOT_MAX_SCANS = 40
+
+        /**
+         * 主窗口没命中时，最多再看几个同包的其它窗口（0.17.37）。
+         *
+         * 取 2 是因为真实开屏最多「主窗口 + 一个关闭钮浮层」两层；再多说明这不是开屏页，
+         * 继续扫只会拿主线程换运气。每个窗口都是一次全树遍历（15~400ms），
+         * 且和主扫描共用 [HOT_MAX_SCANS] 预算。
+         */
+        const val MAX_EXTRA_WINDOWS = 2
 
         /**
          * 右上角启发式的时间闸：只在切前台后 2.5 秒内启用。
