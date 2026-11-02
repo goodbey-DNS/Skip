@@ -128,6 +128,15 @@ class SkipAccessibilityService : AccessibilityService() {
     /** 系统默认的事件合并窗口（xml 里的 300），热窗口结束后恢复成它 */
     private var baseNotifTimeout = 300L
 
+    /**
+     * 服务连接的时刻。
+     *
+     * 刚连上的头 [SERVICE_WARMUP_MS] 里不开热窗口：此时还不知道屏幕上停的是哪一页，
+     * 把它当成"刚切进来的开屏"就是纯赌博——实测服务重启后 5 秒，微博「我的」页
+     * 被当成开屏页，右上角的编辑按钮被点了。
+     */
+    private var connectedAt = 0L
+
     private data class PendingSkip(
         val windowKey: String,
         val pkg: String,
@@ -228,6 +237,7 @@ class SkipAccessibilityService : AccessibilityService() {
         val ver = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()
         traceI("service-connected $ver")
         clicker = ClickPerformer(this)
+        connectedAt = SystemClock.elapsedRealtime()
         // 记住 xml 里的合并窗口，热窗口结束后按这个值还原。读不到就按 300 算
         runCatching { serviceInfo?.notificationTimeout }.getOrNull()
             ?.takeIf { it > 0 }
@@ -693,7 +703,11 @@ class SkipAccessibilityService : AccessibilityService() {
             val ep = event.packageName?.toString()
             if (ep != null && ep != packageName && ep != SYSTEM_UI_PKG && countsAsForeground(ep)) {
                 lastFgPkg = ep
-                if (ep != lastShownPkg && ep !in blacklist) {
+                // prev 必须是已知的：服务刚连接时 lastShownPkg 还是 null，这时屏幕上
+                // 可能已经停在某个 App 的任意页面（实测是微博「我的」页）。若把这种情况
+                // 当成"刚切进来"，热窗口会在一张正常页面上打开，右上角启发式就点错了东西
+                val hadPrev = lastShownPkg != null
+                if (hadPrev && ep != lastShownPkg && ep !in blacklist) {
                     val now = SystemClock.elapsedRealtime()
                     // 同一 App 一分钟内只补一次：内容变化事件比窗口事件密集得多，
                     // 不卡额度就会把「App 内换页」当成「刚切进来」，开屏窗反复重开
@@ -823,7 +837,7 @@ class SkipAccessibilityService : AccessibilityService() {
         // 再叠一道时间闸：只在切前台后 2.5 秒内启用。广告的跳过按钮这时早该出现了，
         // 而主界面（右上角常有发布/保存/分享这类真按钮）通常在广告倒计时结束后才出现——
         // 窗口开太长，从通知或 deep link 直接落到功能页时就会点错东西
-        if (hit == null && splash && inCornerWindow(now)) {
+        if (hit == null && splash && inCornerWindow(now) && EnginePrefs.builtinWordsEnabled(this)) {
             val corner = runCatching { CornerSkipFinder.find(root, w, h, factsCache) }.getOrNull()
             if (corner != null) {
                 hit = corner to CORNER_RULE
@@ -896,6 +910,11 @@ class SkipAccessibilityService : AccessibilityService() {
      */
     private fun enterHotWindow(pkg: String) {
         val now = SystemClock.elapsedRealtime()
+        // 服务刚连上时屏幕上停的可能是一张正常页面，不是开屏页：这段预热期一律不开热窗口
+        if (now - connectedAt < SERVICE_WARMUP_MS) {
+            traceV("hot-skip $pkg warmup=${now - connectedAt}ms")
+            return
+        }
         // 先停旧链：重复切 App 时若不停，旧任务还会在下一拍醒来，和新链叠成两条
         hotScanTask?.let { mainHandler.removeCallbacks(it) }
         hotScanTask = null
@@ -1774,6 +1793,15 @@ class SkipAccessibilityService : AccessibilityService() {
          * 右上角的 SkipAd 图标被点中——桌面已经在黑名单外被挡，这道时间闸是第二层。
          */
         const val HOT_CORNER_WINDOW_MS = 2500L
+
+        /**
+         * 服务连接后的预热期：这段时间内不开热窗口。
+         *
+         * 服务重启（换包、手动关开、系统回收后复活）时，屏幕上停的往往是用户正在看的
+         * 某个页面，而不是开屏页。这段时间还不清楚"用户是从哪切过来的"，
+         * 一上来就按开屏处理等于纯赌博。
+         */
+        const val SERVICE_WARMUP_MS = 20_000L
 
         const val SNAP_CHANNEL = "snapshot_v2"
         const val SNAP_NOTIF_ID = 2001

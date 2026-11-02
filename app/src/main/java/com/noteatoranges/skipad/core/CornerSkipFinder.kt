@@ -54,6 +54,15 @@ object CornerSkipFinder {
             }
 
             val f = factsOf(node, cache)
+
+            // 页面里存在「真的能滚动的列表」就整体放弃：开屏广告页是一整块静态画面，
+            // 而 App 的正常页面（微博「我的」、商城首页这类）几乎都有列表。
+            // 实测反例：微博「我的」页被当成开屏页，右上角的编辑按钮被点了。
+            // 必须放在 EXCLUDED_CLASSES 之前：列表类本身就在排除表里，先 continue 就查不到
+            if (f.cls in LIST_CLASSES && runCatching { node.isScrollable }.getOrDefault(false)) {
+                return null
+            }
+
             if (f.cls in EXCLUDED_CLASSES) continue
             if (!f.visible) continue
 
@@ -134,6 +143,13 @@ object CornerSkipFinder {
         "android.widget.HorizontalScrollView",
         "androidx.viewpager.widget.ViewPager",
         "androidx.viewpager2.widget.ViewPager2",
+    )
+
+    /** 出现且可滚动，说明这是 App 的列表页面而不是开屏页 */
+    private val LIST_CLASSES = setOf(
+        "androidx.recyclerview.widget.RecyclerView",
+        "android.widget.ListView",
+        "android.widget.ScrollView",
     )
 
     /** 右上角经常出现的"非跳过"语义，命中即排除 */
