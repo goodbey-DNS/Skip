@@ -2,6 +2,92 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.33 - 2026-11-02 · 全链路复查：把闸门从「入口」挪到「点下去的那一下」
+
+0.17.32 之后通读复查了全部开屏链路（Service 约 1900 行 + 扫描器 + 规则表 + 三个 Store），
+发现的问题有同一个共性：**四道闸都加在「怎么进来」上，而真正点下去的那一下有两条路
+绕开了全部闸门**。这一版按「完善」处理，不是逐条打补丁。
+
+**一、viewId 通道把广告 CTA 也纳入了射程（最严重）**
+
+`ad-sdk-viewid` 原来直接列 `gdt_` / `topon_` / `hiad_` 这些 SDK **全前缀**，而 viewId
+命中在扫描器里免文本闸、免位置闸。优量汇/华为/TopOn 的「下载」「查看详情」按钮 id
+就是 `gdt_btn_download` / `topon_btn_cta` 这类，含前缀即命中，`maxCount=2` 还允许点两下
+——点下去就是唤起应用商店或触发下载。
+- `SkipRule` 新增 `viewIdNeeds`：「SDK 前缀」与「关闭语义」是与关系。前缀必须同时出现
+  close / dismiss / skip / cancel 才认它是退出按钮。
+- 删除 `csj_ad_logo`：穿山甲的广告角标，点击是打开落地页，不是关闭。
+- 判定抽成 `SkipRule.viewIdHit()`，扫描与核验共用一份，避免两边分叉。
+
+**二、核验补刀是裸坐标点击，没有任何闸**
+
+corner 命中后 800ms 复核，只要同包里右上角还有一个小方块就 `clickPoint` 补刀，最多两次，
+不看时间闸、不看页面形态。补刀时页面往往已经是主界面。
+- corner 的 `PendingSkip.maxRetry` 固定 0：只判一次，不补刀。漏一个广告远好过在主界面上点一口。
+
+**三、WSC 主路径没判 prevShown（0.17.32 只修了一半）**
+
+`wcc-switch` 加了 `hadPrev`，主路径 `freshSwitch = prevShown != ep` 没加。服务刚连上时
+`lastShownPkg` 是 null，系统补发的第一个 WSC 就被当成「刚切进来」。
+- `freshSwitch` 要求 `prevShown != null`。
+- `onServiceConnected` 里用 `rootInActiveWindow` 把 `lastShownPkg` 一起补上（原来只补
+  `lastFgPkg`），这样下一个 WSC 能正确判成「同一个 App」。
+
+**四、点完不立即收手**
+
+点击成功后要等 800ms 核验通过才写 `splashClosedAt`，这 800ms 里开屏窗口还开着，跳到的
+新页面会被词表继续扫；同窗口冷却又因为 `windowKeyFor` 用了 `event.className`（内容变化
+事件报的是具体控件类），跳转后键一变就失效。
+- 点击成功即写 `splashClosedAt`，不等核验。
+- 冷却从「窗口键」改成「包名」：刚点掉一个广告，4 秒内不在同一个 App 里再动手。
+
+**五、启发式只拦三种列表**
+
+`LIST_CLASSES` 只有 RecyclerView / ListView / ScrollView。GridView（九宫格）、
+NestedScrollView（详情页）、ViewPager2（新手引导页）都不拦，而引导页右上角的「跳过」
+恰恰是纯图标按钮——文字排除表碰不到，点掉就是用户跳过新手引导。
+- 任意节点 `isScrollable` 即整页放弃。
+- 负向词（教程/引导/新手/tutorial/guide/intro/onboard）扩展到 viewId，`skip_intro` /
+  `skip_guide` 这类 id 一并挡掉。
+
+**六、遍历没有防护**
+
+`NodeScanner` 与 `CornerSkipFinder` 里 `childCount` / `getChild` / `parent` 直接调，节点
+失效时系统内部 `LongArray.get` 抛 `ArrayIndexOutOfBoundsException`——0.17.12 在淘宝页
+崩掉整个服务就是这个。外层 catch 只救得回进程，救不回这次扫描。
+- 全部包 `runCatching`，单节点失败跳过，其余继续。
+
+**七、热窗口里的高频读盘**
+
+`KeywordStore.version()` 与 `EnginePrefs.builtinWordsEnabled()` 每次读 SharedPreferences，
+而 `keywordScannerFor` 在热窗口里每 80ms 问一次版本、一次开关。
+- 两个都改成 `@Volatile` 内存缓存（用 `null` 表示未读，因为 0 是合法版本号），写入时同步。
+
+**八、屏宽高基准不一致**
+
+节点 `rect` 是整屏坐标（1220×2712），扫描却用 `displayMetrics`（1220×2453，少导航栏）。
+中央区下边界被抬高 10%，右上角 22% 同步缩紧，而用户规则的 zone 是按整屏比例存的。
+- `scanAndAct` / 核验 / 多窗口查找统一走 `realScreenPx()`。
+
+**九、倒计时正则绕过首尾约束**
+
+`(?i)skip[\s\d]*(s|sec|秒)?` 后半段全可空，等于「含 skip 就命中」，而正则不走 `strictText`，
+把 0.17.28 的修复绕过去了。「Skip 5s」由 `splash-common-text` 以 skip 开头的首尾判定
+覆盖，这条只留必须以「跳过」收尾的句式。
+
+**踩坑**
+
+- `matched.node` 是 `Compiled` 不是 `SkipRule`，`viewIdHit` 要写 `matched.node.rule.viewIdHit()`。
+- 负向闸改成同时看文本和 viewId 之后，命中可能是 `text == null` 的纯 viewId 路径，
+  日志里 `text.take(12)` 会编译不过，改成 `(text ?: vid)`。
+- 批量替换屏宽高时同一段代码在多处出现，第一次只改到其中两处，`scanAndAct` 里那处
+  是第二轮才发现漏的——改完必须 grep 全文件确认。
+
+**验证**
+
+- 本地 `compileReleaseKotlin` 通过。
+- 无设备，真机行为待验。
+
 ## 0.17.32 - 2026-11-02 · 再堵三个「非开屏页被当成开屏」的口子
 
 0.17.31 装机后复测，又抓到一次误点，比第一版更值得记：服务重启 5 秒后，微博「我的」页

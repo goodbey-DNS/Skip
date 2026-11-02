@@ -19,6 +19,18 @@ data class SkipRule(
     val regex: Boolean = false,
     /** viewId 资源名包含匹配（忽略大小写，如 "skip" 命中 tt_splash_skip_btn）；命中免文本与位置闸 */
     val viewIds: List<String> = emptyList(),
+    /**
+     * viewId 命中的附加条件：资源名还必须包含其中一个词（忽略大小写）。
+     *
+     * 只用 SDK 前缀（gdt_ / topon_ / hiad_ …）匹配是 0.17.29 留下的坑：这些前缀覆盖的
+     * 是**整个 SDK 的全部控件**，而 viewId 命中在扫描器里免文本闸、免位置闸，于是开屏
+     * 广告主体的「下载」「查看详情」（gdt_btn_download 这类 id）也进了射程——点一下就是
+     * 唤起商店或触发下载。
+     *
+     * 配合 [viewIds] 使用时是「与」关系：前缀命中之后，还必须在同一个资源名里看到关闭
+     * 语义才认它是退出按钮。空列表 = 不做这项校验（跳过的 id 本身就是按钮本体）。
+     */
+    val viewIdNeeds: List<String> = emptyList(),
     val maxTextLength: Int = 24,
     val maxAreaRatio: Float = 0.12f,
     /**
@@ -97,19 +109,23 @@ object BuiltinRules {
             cooldownMs = BUILTIN_COOLDOWN_MS,
             maxCount = BUILTIN_MAX_COUNT,
         ),
-        // 主流广告 SDK 的关闭钮命名集合。这些都是各家 SDK 的固定前缀，
-        // 跨版本改名概率远低于业务代码；命中走 viewId 通道，免文本与位置闸
+        // 主流广告 SDK 的关闭钮。0.17.33 收窄成「前缀 + 关闭语义」双条件：
+        // 原来直接列 gdt_ / topon_ / hiad_ 这些全前缀，而 viewId 命中免文本与位置闸，
+        // 等于把开屏广告上所有可点的 SDK 控件都纳入射程——「下载」「查看详情」正是
+        // gdt_btn_download / topon_btn_cta 这类 id，点下去就是唤起商店或触发下载。
+        // csj_ad_logo 同时删掉：它是穿山甲的广告角标，点击是打开落地页，不是关闭。
         SkipRule(
             id = "ad-sdk-viewid",
             viewIds = listOf(
-                "tt_splash_skip",   // 穿山甲开屏
-                "csj_btn_close",    // 穿山甲通用关闭
-                "csj_ad_logo",      // 穿山甲广告角标（可点，点了也算关）
-                "topon_",           // TopOn 聚合
-                "ksad_skip",        // 快手联盟
-                "gdt_",             // 优量汇
-                "hiad_",            // 华为广告
+                "gdt_",     // 优量汇
+                "topon_",   // TopOn 聚合
+                "hiad_",    // 华为广告
+                "ksad_",    // 快手联盟
+                "csj_",     // 穿山甲
+                "tt_",      // 穿山甲旧命名（tt_splash_skip_btn）
             ),
+            // 资源名里必须同时出现关闭语义，才认它是退出按钮而不是广告 CTA
+            viewIdNeeds = listOf("close", "dismiss", "skip", "cancel", "关闭", "跳过"),
             cooldownMs = BUILTIN_COOLDOWN_MS,
             maxCount = BUILTIN_MAX_COUNT,
         ),
@@ -125,12 +141,16 @@ object BuiltinRules {
             cooldownMs = BUILTIN_COOLDOWN_MS,
             maxCount = BUILTIN_MAX_COUNT,
         ),
+        // 0.17.33 收紧：原来还带一条 `(?i)skip[\s\d]*(s|sec|秒)?`，后半段全可空，
+        // 实际等于「文本含 skip 就命中」——正文里一句「怎么 skip 这个广告」也会被点；
+        // 而且正则命中不走 strictText 的首尾约束，等于把 0.17.28 的修复绕过去了。
+        // 「Skip 5s」这类写法由 splash-common-text 以 skip 开头的首尾判定覆盖，
+        // 这条只留必须带「跳过」收尾的倒计时句式。
         SkipRule(
             id = "splash-countdown-regex",
             regex = true,
             patterns = listOf(
-                "(?i)skip[\\s\\d]*(s|sec|秒)?",
-                "\\d+\\s*(s|S|秒)\\s*(之|后|後)?\\s*跳过",
+                "\\d+\\s*(s|S|秒)\\s*(之|后|後)?\\s*跳过\\s*$",
             ),
             cooldownMs = BUILTIN_COOLDOWN_MS,
             maxCount = BUILTIN_MAX_COUNT,
@@ -154,6 +174,21 @@ object BuiltinRules {
     /** 内置词两次动作的最小间隔：同一窗口内不再连点 */
     private const val BUILTIN_COOLDOWN_MS = 1200L
 
-    /** 内置词单页面动作次数上限：一个开屏窗冪最多点两下，多出来的定位不准 */
+    /** 内置词单页面动作次数上限：一个开屏窗口最多点两下，多出来的定位不准 */
     private const val BUILTIN_MAX_COUNT = 2
+}
+
+/**
+ * viewId 是否命中：前缀（[SkipRule.viewIds]）与关闭语义（[SkipRule.viewIdNeeds]）都满足才算。
+ *
+ * 抽成扩展函数是因为扫描（决定要不要点）和核验（决定要不要补刀）必须用同一套判定，
+ * 两边各写一遍迟早会分叉——分叉的后果是一边认为已经跳过、另一边认为还在，然后补刀点错。
+ *
+ * @param vidLower 已经转小写的 viewIdResourceName
+ */
+internal fun SkipRule.viewIdHit(vidLower: String): Boolean {
+    if (viewIds.isEmpty()) return false
+    if (viewIds.none { vidLower.contains(it) }) return false
+    if (viewIdNeeds.isEmpty()) return true
+    return viewIdNeeds.any { vidLower.contains(it.lowercase(java.util.Locale.ROOT)) }
 }

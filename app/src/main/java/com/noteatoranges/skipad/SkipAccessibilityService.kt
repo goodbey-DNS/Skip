@@ -89,8 +89,9 @@ class SkipAccessibilityService : AccessibilityService() {
     /** 快照广播只注册一次：onServiceConnected 可能被系统重复回调，重复注册会导致一次点击抓多张 */
     private var snapshotRegistered = false
 
-    /** 上次执行动作的窗口键与时间：同窗口冷却期内不重复匹配 */
+    /** 上次执行动作的窗口键（日志用）与包名（冷却判据）：同一 App 冷却期内不重复匹配 */
     private var lastSkipWindow: String? = null
+    private var lastSkipPkg: String? = null
     private var lastSkipAt = 0L
     private var lastFgPkg: String? = null
 
@@ -250,11 +251,17 @@ class SkipAccessibilityService : AccessibilityService() {
         postWorkNotification()
         inst = this
         // 服务重启后（换包、重新绑定）先补一次前台包名，不然要等到下一次切页事件才有值。
-        // 目标 App 禁了无障碍读不到窗口时，降级抓取就靠这个值认 App
+        // 目标 App 禁了无障碍读不到窗口时，降级抓取就靠这个值认 App。
+        // lastShownPkg 也必须一起补：它决定下一个 WSC 算不算「刚切进来」。留 null 的话，
+        // 系统补发的第一个窗口状态事件就会被当成本轮切 App，开屏窗口在用户正在看的那一页
+        // 上打开——这正是 0.17.32 微博误点的同一类成因，只是换了个入口。
         runCatching { rootInActiveWindow?.packageName?.toString() }
             .getOrNull()
             ?.takeIf { it != packageName && it != SYSTEM_UI_PKG }
-            ?.let { lastFgPkg = it }
+            ?.let {
+                lastFgPkg = it
+                if (lastShownPkg == null) lastShownPkg = it
+            }
         if (com.noteatoranges.skipad.util.CaptureBubble.isEnabled(this)) {
             com.noteatoranges.skipad.util.CaptureBubble.apply(this)
             com.noteatoranges.skipad.util.CaptureBubble.onClick = { bubbleClicked() }
@@ -657,8 +664,12 @@ class SkipAccessibilityService : AccessibilityService() {
             if (ep != null && ep != packageName && countsAsForeground(ep)) {
                 if (lastStateChangeAt.size > 50) lastStateChangeAt.clear()
                 val prevShown = lastShownPkg
-                // 「切到这个 App」：前一个出现在屏幕上的是别的包（含桌面）就算
-                val freshSwitch = prevShown != ep
+                // 「切到这个 App」：前一个出现在屏幕上的是**已知的**别的包（含桌面）才算。
+                // 0.17.32 只给 wcc-switch 补了 hadPrev，主路径漏了：服务刚连上时
+                // lastShownPkg 还是 null，系统补发的第一个 WSC 会被当成「刚切进来」，
+                // 开屏窗口就在用户正在看的正常页面上打开。微博那次误点走的是兜底路径，
+                // 但主路径拿着同一个 null 同样会踩——两处必须同一个判据。
+                val freshSwitch = prevShown != null && prevShown != ep
                 lastShownPkg = ep
                 traceV("wsc $ep prev=$prevShown fresh=$freshSwitch cls=${event.className}")
                 // 开屏窗口只从「真的切到这个 App 的那一刻」起算：开屏页跳主界面会再来一个
@@ -816,11 +827,18 @@ class SkipAccessibilityService : AccessibilityService() {
         // 开屏窗口内即使两个扫描器都为空也要往下走：还有右上角启发式这一条
         if (userSc == null && kwSc == null && !splash) return false
 
-        val w = resources.displayMetrics.widthPixels
-        val h = resources.displayMetrics.heightPixels
+        // 屏宽高必须用整屏尺寸（含状态栏/导航栏），不能用 displayMetrics：
+        // 节点 rect 是屏幕坐标，而 displayMetrics 给的是应用可用区（少一条导航栏，
+        // 1220×2453 vs 整屏 1220×2712）。基准混着用会把「中央区」的下边界抬高 10%，
+        // 右上角判定的 22% 也同步缩紧；用户规则的 zone 又是按整屏比例存的（见 zoneOf）。
+        val (w, h) = realScreenPx()
 
-        // 同窗口冷却：刚点过的窗口在冷却期内不再重复匹配
-        if (lastSkipWindow != null && now - lastSkipAt < COOLDOWN_MS && lastSkipWindow == winKey) {
+        // 同 App 冷却：刚点过的包在冷却期内不再重复匹配。
+        // 原来比的是 winKey（含 event.className），而内容变化事件的 className 常是
+        // 具体控件类，跳到新页面后键必然变化，冷却等于没设。改成按包名记——
+        // 「刚点掉一个广告，4 秒内不在同一个 App 里再动手」才是这条闸的本意。
+        if (lastSkipPkg == pkg && now - lastSkipAt < COOLDOWN_MS) {
+            traceV("cooldown $pkg ${now - lastSkipAt}ms")
             return false
         }
 
@@ -841,7 +859,9 @@ class SkipAccessibilityService : AccessibilityService() {
             val corner = runCatching { CornerSkipFinder.find(root, w, h, factsCache) }.getOrNull()
             if (corner != null) {
                 hit = corner to CORNER_RULE
-                dbg = "corner-hit「${(corner.text ?: corner.contentDescription ?: corner.className)?.toString()?.take(12)}」"
+                dbg = "corner-hit「${runCatching {
+                    (corner.text ?: corner.contentDescription ?: corner.className)?.toString()
+                }.getOrNull()?.take(12)}」"
             }
         }
         // 扫描耗时：决定要不要给「每 App 事件次数」加预算时必须看这个数，
@@ -852,10 +872,13 @@ class SkipAccessibilityService : AccessibilityService() {
             traceMiss(pkg, dbg)
             return false
         }
-        val detail = hit.first.text?.toString()
-            ?: hit.first.contentDescription?.toString()
-            ?: hit.first.viewIdResourceName
-            ?: hit.second.id
+        // 命中节点的文本可能在定位之后、动作之前失效（页面正在跳）。读失败退回规则 id，
+        // 不因为一行记账把整次动作丢掉
+        val detail = runCatching {
+            hit.first.text?.toString()
+                ?: hit.first.contentDescription?.toString()
+                ?: hit.first.viewIdResourceName
+        }.getOrNull() ?: hit.second.id
         traceD("match $pkg ${cost}ms: $dbg")
 
         val rule = hit.second
@@ -880,14 +903,26 @@ class SkipAccessibilityService : AccessibilityService() {
             traceD("action-fail $pkg ${rule.action} 规则=${rule.id}")
             return false
         }
-        // 点了就收工：热窗口的主动扫描立刻停，不再往主界面上扫
-        val elapsed: Long = if (hotOpenedAt > 0) now - hotOpenedAt else -1L
-        if (elapsed >= 0) traceD("hot-hit $pkg ${elapsed}ms 规则=${rule.id}")
-        if (hotPkg == pkg) exitHotWindow(now)
+        // 点了就收手：开屏窗口立刻关，不等 800ms 核验回来。
+        // 广告点掉后通常 300~600ms 就露出主界面，这期间若还开着窗，主界面的内容变化
+        // 事件会继续走词表扫描。关窗是唯一不依赖任何推断的收手方式；
+        // 核验（verifySkip）不看这个时间戳，补刀照常进行。
+        splashClosedAt[pkg] = now
+        // 热窗口的主动扫描也立刻停，不再往主界面上扫
+        if (hotPkg == pkg) {
+            val elapsed: Long = if (hotOpenedAt > 0) now - hotOpenedAt else -1L
+            if (elapsed >= 0) traceD("hot-hit $pkg ${elapsed}ms 规则=${rule.id}")
+            exitHotWindow(now)
+        }
         lastSkipWindow = winKey
+        lastSkipPkg = pkg
         lastSkipAt = now
         recordRuleHit(rule, hit.first)
-        pending = PendingSkip(winKey, pkg, detail, 0, ruleId = rule.id)
+        // 右上角启发式是几何猜的：没文本、没 id，核验时能复用的只有同一套几何判据。
+        // 第一下没点掉时，「还在」既可能是广告没响应，也可能是页面已换、右上角另有
+        // 别的小按钮——这时再补一次裸坐标点击，风险大于收益。所以 corner 一律不补刀。
+        val retry = if (rule.id == CORNER_RULE.id) 0 else MAX_RETRY
+        pending = PendingSkip(winKey, pkg, detail, 0, retry, ruleId = rule.id)
         val token = pending
         mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
         return true
@@ -1025,8 +1060,7 @@ class SkipAccessibilityService : AccessibilityService() {
             // 走 findUserTargetInAnyWindow 永远返回 null，等于「点完就记账」——
             // 点错了也照记成功。这里用同一个启发式复核：还在就补刀
             p.ruleId == CORNER_RULE.id -> currentRootOf(p.pkg)?.let { r ->
-                val cw = resources.displayMetrics.widthPixels
-                val ch = resources.displayMetrics.heightPixels
+                val (cw, ch) = realScreenPx()
                 CornerSkipFinder.find(r, cw, ch, factsCache)?.let { Triple(it, p.pkg, "corner") }
             }
             else -> findUserTargetInAnyWindow(p.pkg, p.ruleId)
@@ -1131,8 +1165,7 @@ class SkipAccessibilityService : AccessibilityService() {
      */
     private fun findUserTargetInAnyWindow(pkg: String, ruleId: String? = null): Triple<AccessibilityNodeInfo, String, String>? {
         val scanner = userScanner?.takeIf { userScannerPkg == pkg } ?: return null
-        val w = resources.displayMetrics.widthPixels
-        val h = resources.displayMetrics.heightPixels
+        val (w, h) = realScreenPx()
         // getWindows() 是平台类型，服务刚起来时可能为 null
         val wins = runCatching { windows?.toList() ?: emptyList() }.getOrDefault(emptyList())
         for (window in wins) {
@@ -1683,6 +1716,7 @@ class SkipAccessibilityService : AccessibilityService() {
             if (!fired) continue
             val key = "$pkg#path/${r.nodePath}"
             lastSkipWindow = key
+            lastSkipPkg = pkg
             lastSkipAt = now
             pending = PendingSkip(
                 key, pkg, "路径·${r.nodePath}", 0, 1,

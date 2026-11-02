@@ -103,14 +103,14 @@ class NodeScanner(
             val node = queue.removeFirst()
             val f = factsOf(node)
 
-            val text = f.label
+            val text = runCatching { f.label }.getOrNull()
             if (text != null && samples.size < 20) samples.add(text.take(16))
-            val vid = f.vid?.lowercase(Locale.ROOT)
+            val vid = runCatching { f.vid }.getOrNull()?.lowercase(Locale.ROOT)
             if (vid != null && samples.size < 20) samples.add("vid=$vid")
 
             val matched = firstMatch(node, text, vid)
             if (matched != null) {
-                val byViewId = vid != null && matched.node.viewIds.any { vid.contains(it) }
+                val byViewId = vid != null && matched.node.rule.viewIdHit(vid)
                 val limit = allowedLen(matched)
                 val tooLong = text != null && text.length > limit
                 // 排除词命中 = 整屏放弃。界面上写的就是「排除词命中就整屏放弃」，
@@ -120,9 +120,15 @@ class NodeScanner(
                     lastDebug = "EXCLUDE「${text.take(12)}」整屏放弃"
                     return null
                 }
-                // 负向闸：教程 / 引导 / 新手 这类"跳过"不是广告按钮（"跳过教程""Skip tutorial"）
-                if (text != null && NEGATIVE_HINTS.any { text.contains(it, ignoreCase = true) }) {
-                    reject = "「${text.take(12)}」疑似教程/引导"
+                // 负向闸：教程 / 引导 / 新手 这类「跳过」不是广告按钮。
+                // 0.17.33 起同时查 viewId：新手引导页的按钮文本常写「跳过」，而资源名是
+                // skip_intro / skip_guide 这类——只查文本等于只挡了一半，而引导页被点掉
+                // 用户看到的是功能全丢，比漏跳一个广告严重得多。
+                val negative = listOfNotNull(text, vid).any { src ->
+                    NEGATIVE_HINTS.any { src.contains(it, ignoreCase = true) }
+                }
+                if (negative) {
+                    reject = "「${(text ?: vid)?.take(12)}」疑似教程/引导"
                 } else if (tooLong && text != null) {
                     // 文本长度闸对 viewId 命中同样生效：长文本控件（正文里提到关键字）
                     // 不该被点。无文本的 viewId 命中仍放行，那是按钮本体只有 id 的形态
@@ -133,12 +139,19 @@ class NodeScanner(
                     // 找不到可点击祖先时退回节点本身：ClickPerformer 会先试 performAction，
                     // 失败再按节点中心坐标点。有些跳过按钮是纯 TextView（clickable=false、
                     // 祖先也不可点），只有这条路能点掉
-                    val cand = clickableAncestor(node) ?: node
-                    val candFacts = factsOf(cand)
-                    if (!candFacts.visible) {
+                    val cand = runCatching { clickableAncestor(node) }.getOrNull() ?: node
+                    // 节点可能在遍历中途失效（页面已跳走），属性读取会抛。这里一律当「本节点
+                    // 不可用」处理而不是让整次扫描崩掉——0.17.12 在淘宝页就是这个形态
+                    val candFacts = runCatching { factsOf(cand) }.getOrNull()
+                    val visible = candFacts != null && runCatching { candFacts.visible }.getOrDefault(false)
+                    if (candFacts == null || !visible) {
                         reject = "「${(text ?: vid)?.take(12)}」不可见"
                     } else {
-                        val rect = candFacts.rect
+                        val rect = runCatching { candFacts.rect }.getOrNull()
+                        if (rect == null || rect.width() <= 0 || rect.height() <= 0) {
+                            reject = "「${(text ?: vid)?.take(12)}」矩形无效"
+                            continue
+                        }
                         val area = rect.width().toFloat() * rect.height()
                         val pct = (area / screenArea * 100).toInt()
                         // 位置闸：排除屏幕中央主体区，那里出现关键字基本是正文而不是按钮。
@@ -152,7 +165,12 @@ class NodeScanner(
                         // 比的是命中节点本身（带文字那个）的矩形，不是可点击祖先——
                         // 旧布局里跳过按钮常是一个全宽横栏里的两个字，用祖先矩形比就会被判在外面
                         val zone = matched.node.rule.zone
-                        val zoneOk = zone == null || zoneHit(zone, f.rect, screenW, screenH)
+                        val hitRect = runCatching { f.rect }.getOrNull()
+                        if (hitRect == null) {
+                            reject = "「${text?.take(12)}」命中节点已失效"
+                            continue
+                        }
+                        val zoneOk = zone == null || zoneHit(zone, hitRect, screenW, screenH)
                         if (!zoneOk) {
                             reject = "「${text?.take(12)}」不在记录的位置"
                         } else if (!neighborHasHint(node, matched.node.rule.neighborHints)) {
@@ -171,8 +189,11 @@ class NodeScanner(
                 }
             }
 
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let(queue::add)
+            // childCount / getChild 在节点失效时不一致会抛 ArrayIndexOutOfBoundsException，
+            // 系统内部 LongArray.get 越界直接抛，外层 catch 只能救进程、救不回这次扫描
+            val count = runCatching { node.childCount }.getOrDefault(0)
+            for (i in 0 until count) {
+                runCatching { node.getChild(i) }.getOrNull()?.let(queue::add)
             }
         }
         lastDebug = if (verbose) {
@@ -222,7 +243,7 @@ class NodeScanner(
                         ?.let { return Match(c, it.length, true) }
                 }
             }
-            if (vid != null && c.viewIds.any { vid.contains(it) }) return Match(c, 0, false)
+            if (vid != null && c.rule.viewIdHit(vid)) return Match(c, 0, false)
         }
         return null
     }
@@ -274,8 +295,8 @@ class NodeScanner(
         var cur: AccessibilityNodeInfo? = node
         var hops = 0
         while (cur != null && hops < ANCESTOR_HOPS) {
-            if (cur.isClickable) return cur
-            cur = cur.parent
+            if (runCatching { cur!!.isClickable }.getOrDefault(false)) return cur
+            cur = runCatching { cur!!.parent }.getOrNull()
             hops++
         }
         return null
@@ -299,12 +320,13 @@ class NodeScanner(
         var cur: AccessibilityNodeInfo = node
         var hops = 0
         while (hops < NEIGHBOR_HOPS) {
-            val parent: AccessibilityNodeInfo = cur.parent ?: return false
-            if (hit(factsOf(parent).label)) return true
-            for (i in 0 until parent.childCount) {
-                val sib = parent.getChild(i) ?: continue
+            val parent: AccessibilityNodeInfo = runCatching { cur.parent }.getOrNull() ?: return false
+            if (hit(runCatching { factsOf(parent).label }.getOrNull())) return true
+            val count = runCatching { parent.childCount }.getOrDefault(0)
+            for (i in 0 until count) {
+                val sib = runCatching { parent.getChild(i) }.getOrNull() ?: continue
                 if (sib == cur) continue
-                if (hit(factsOf(sib).label)) return true
+                if (hit(runCatching { factsOf(sib).label }.getOrNull())) return true
             }
             cur = parent
             hops++
@@ -351,7 +373,7 @@ class NodeScanner(
         /** 负向关键词：出现即判定不是要点的按钮（宁可少点，不能误点引导页） */
         val NEGATIVE_HINTS = listOf(
             "教程", "引导", "新手", "跳过此步", "跳过本",
-            "tutorial", "guide", "walkthrough",
+            "tutorial", "guide", "walkthrough", "intro", "onboard",
         )
     }
 }

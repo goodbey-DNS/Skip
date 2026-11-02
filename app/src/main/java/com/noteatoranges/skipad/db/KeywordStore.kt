@@ -130,8 +130,12 @@ object KeywordStore {
             f.delete()
             tmp.renameTo(f)
         }
-        val v = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("v", 0) + 1
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt("v", v).apply()
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val v = prefs.getInt("v", 0) + 1
+        prefs.edit().putInt("v", v).apply()
+        // 写的时候同步内存：服务在热窗口里每 80ms 问一次版本，不更新就会拿旧版本号，
+        // 用户刚改完词表却要等下一次冷启动才生效
+        cachedVer = v
     }
 
     fun all(context: Context): List<KeywordRule> = read(context).sortedByDescending { it.createdAt }
@@ -176,6 +180,20 @@ object KeywordStore {
         return hits.toList() to excludes.toList()
     }
 
-    fun version(context: Context): Int =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("v", 0)
+    /**
+     * 词表版本号。
+     *
+     * 同 RuleStore.version：内存里存一份，读过一次就不再碰 SharedPreferences。
+     * 开屏热窗口里这个函数每 80ms 被调一次，而它原来每次都过一次同步锁。
+     * null = 还没读过（用 null 而不是 0，因为 0 是合法的初始版本号）。
+     */
+    @Volatile
+    private var cachedVer: Int? = null
+
+    fun version(context: Context): Int {
+        cachedVer?.let { return it }
+        val v = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("v", 0)
+        cachedVer = v
+        return v
+    }
 }

@@ -48,56 +48,65 @@ object CornerSkipFinder {
         while (queue.isNotEmpty() && visited < MAX_NODES) {
             visited++
             val node = queue.removeFirst()
-            for (i in 0 until node.childCount) {
-                val child = runCatching { node.getChild(i) }.getOrNull() ?: continue
-                queue.add(child)
-            }
+            // 节点在遍历中途失效时，childCount / isScrollable / rect / text 任一读取都会抛。
+            // 单节点读失败不该让整页放弃：另起一个 try 把本节点跳过去，下一个节点照样能判。
+            // 外层（调用方）也包了一层，这里是为了不让一个坏节点吞掉整页的判定机会。
+            try {
+                val count = runCatching { node.childCount }.getOrDefault(0)
+                for (i in 0 until count) {
+                    runCatching { node.getChild(i) }.getOrNull()?.let(queue::add)
+                }
 
-            val f = factsOf(node, cache)
+                val f = factsOf(node, cache)
 
-            // 页面里存在「真的能滚动的列表」就整体放弃：开屏广告页是一整块静态画面，
-            // 而 App 的正常页面（微博「我的」、商城首页这类）几乎都有列表。
-            // 实测反例：微博「我的」页被当成开屏页，右上角的编辑按钮被点了。
-            // 必须放在 EXCLUDED_CLASSES 之前：列表类本身就在排除表里，先 continue 就查不到
-            if (f.cls in LIST_CLASSES && runCatching { node.isScrollable }.getOrDefault(false)) {
-                return null
-            }
+                // 页面里存在「真的能滚动的东西」就整页放弃。开屏广告页是一整块静态画面，
+                // 而 App 的正常页面（微博「我的」、商城首页、新手引导页）几乎都有可滚动容器。
+                // 实测反例：微博「我的」页被当成开屏页，右上角的编辑按钮被点了。
+                // 0.17.33 从「只认 RecyclerView/ListView/ScrollView」放宽到「任意 scrollable」：
+                // GridView（九宫格页）、NestedScrollView（详情页）、ViewPager2（新手引导页）
+                // 都是同一种形态，原来那三个类名一个都覆盖不到；而引导页右上角的「跳过」
+                // 恰恰是纯图标按钮，文字排除表碰不到它，被点掉就是用户跳过新手引导。
+                // 必须放在 EXCLUDED_CLASSES 之前：容器本身就在排除表里，先 continue 就查不到。
+                if (runCatching { node.isScrollable }.getOrDefault(false)) return null
 
-            if (f.cls in EXCLUDED_CLASSES) continue
-            if (!f.visible) continue
+                if (f.cls in EXCLUDED_CLASSES) continue
+                if (!f.visible) continue
 
-            val label = f.label?.trim().orEmpty()
-            if (label.length > MAX_TEXT_LEN) continue
-            val lower = label.lowercase(Locale.ROOT)
-            if (lower.isNotEmpty() && NEGATIVE.any { lower.contains(it) }) continue
+                val label = f.label?.trim().orEmpty()
+                if (label.length > MAX_TEXT_LEN) continue
+                val lower = label.lowercase(Locale.ROOT)
+                if (lower.isNotEmpty() && NEGATIVE.any { lower.contains(it) }) continue
 
-            val target = if (f.clickable) node else clickableAncestor(node, cache) ?: continue
-            val tf = if (target === node) f else factsOf(target, cache)
+                val target = if (f.clickable) node else clickableAncestor(node, cache) ?: continue
+                val tf = if (target === node) f else factsOf(target, cache)
 
-            val r = tf.rect
-            if (r.isEmpty || r.width() <= 0 || r.height() <= 0) continue
+                val r = tf.rect
+                if (r.isEmpty || r.width() <= 0 || r.height() <= 0) continue
 
-            val area = r.width().toFloat() * r.height()
-            if (area < minArea || area > maxArea) continue
+                val area = r.width().toFloat() * r.height()
+                if (area < minArea || area > maxArea) continue
 
-            val aspect = r.width().toFloat() / r.height()
-            if (aspect < MIN_ASPECT || aspect > MAX_ASPECT) continue
+                val aspect = r.width().toFloat() / r.height()
+                if (aspect < MIN_ASPECT || aspect > MAX_ASPECT) continue
 
-            val cx = r.exactCenterX()
-            val cy = r.exactCenterY()
-            if (cx < rightEdge || cy > bottomEdge) continue
-            if (r.top < minTop) continue
+                val cx = r.exactCenterX()
+                val cy = r.exactCenterY()
+                if (cx < rightEdge || cy > bottomEdge) continue
+                if (r.top < minTop) continue
 
-            val vid = tf.vid?.lowercase(Locale.ROOT).orEmpty()
-            var score = 0
-            if (vid.contains("skip")) score += 4
-            if (vid.contains("close")) score += 2
-            if (label.isNotEmpty()) score += 2
-            if (area < maxArea * 0.3f) score += 1
+                val vid = tf.vid?.lowercase(Locale.ROOT).orEmpty()
+                var score = 0
+                if (vid.contains("skip")) score += 4
+                if (vid.contains("close")) score += 2
+                if (label.isNotEmpty()) score += 2
+                if (area < maxArea * 0.3f) score += 1
 
-            if (score > bestScore) {
-                bestScore = score
-                best = target
+                if (score > bestScore) {
+                    bestScore = score
+                    best = target
+                }
+            } catch (t: Throwable) {
+                // 单个节点失效：跳过，下一个继续
             }
         }
         return best
@@ -146,11 +155,6 @@ object CornerSkipFinder {
     )
 
     /** 出现且可滚动，说明这是 App 的列表页面而不是开屏页 */
-    private val LIST_CLASSES = setOf(
-        "androidx.recyclerview.widget.RecyclerView",
-        "android.widget.ListView",
-        "android.widget.ScrollView",
-    )
 
     /** 右上角经常出现的"非跳过"语义，命中即排除 */
     private val NEGATIVE = listOf(
