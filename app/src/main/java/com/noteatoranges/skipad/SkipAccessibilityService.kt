@@ -147,6 +147,9 @@ class SkipAccessibilityService : AccessibilityService() {
      */
     private val badPageUntil = HashMap<String, Long>()
 
+    /** bad-page 日志的节流时间戳：静默期内事件密集，同一条日志一秒一次足够 */
+    private val lastBadPageTrace = HashMap<String, Long>()
+
     private data class PendingSkip(
         val windowKey: String,
         val pkg: String,
@@ -877,8 +880,14 @@ class SkipAccessibilityService : AccessibilityService() {
 
         // 这个页面刚被判过「疑似点进广告」：静默一段时间。
         // 比调参数可靠——它不是猜出来的风险，是上一次真点错了的结果。
+        // 静默期内每个事件都会走到这里，日志按包名一秒一次封顶：0.17.43 修好静默之后
+        // 实测 9 秒打了 31 行同样的记录，EngineTrace 每条都 flush，纯属写放大。
         if (isBadPage(pkg, now)) {
-            traceV("bad-page $pkg 静默中")
+            val lastTrace = lastBadPageTrace[pkg] ?: 0L
+            if (now - lastTrace > 1000) {
+                lastBadPageTrace[pkg] = now
+                traceV("bad-page $pkg 静默中")
+            }
             return false
         }
 
