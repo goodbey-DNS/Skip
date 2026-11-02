@@ -252,12 +252,13 @@ class SkipAccessibilityService : AccessibilityService() {
         inst = this
         // 服务重启后（换包、重新绑定）先补一次前台包名，不然要等到下一次切页事件才有值。
         // 目标 App 禁了无障碍读不到窗口时，降级抓取就靠这个值认 App。
-        // lastShownPkg 也必须一起补：它决定下一个 WSC 算不算「刚切进来」。留 null 的话，
-        // 系统补发的第一个窗口状态事件就会被当成本轮切 App，开屏窗口在用户正在看的那一页
-        // 上打开——这正是 0.17.32 微博误点的同一类成因，只是换了个入口。
+        // lastShownPkg 也必须一起补：它决定下一个 WSC 算不算「刚切进来」。
+        // 桌面不能拿来当"上一个 App"：服务重绑那一瞬 rootInActiveWindow 读到的常是
+        // 桌面窗口，补成桌面之后，微博的下一个 WSC 就成了"从桌面切过来"，
+        // 开屏窗口直接在用户正在看的「我的」页上打开（0.17.33 实测踩到，见 CHANGELOG）。
         runCatching { rootInActiveWindow?.packageName?.toString() }
             .getOrNull()
-            ?.takeIf { it != packageName && it != SYSTEM_UI_PKG }
+            ?.takeIf { it != packageName && it != SYSTEM_UI_PKG && it !in homePkgs }
             ?.let {
                 lastFgPkg = it
                 if (lastShownPkg == null) lastShownPkg = it
@@ -664,12 +665,16 @@ class SkipAccessibilityService : AccessibilityService() {
             if (ep != null && ep != packageName && countsAsForeground(ep)) {
                 if (lastStateChangeAt.size > 50) lastStateChangeAt.clear()
                 val prevShown = lastShownPkg
+                // 预热期内不认任何「切 App」。
+                //
+                // 只拦 enterHotWindow 是不够的：这条路径会先写 lastStateChangeAt，
+                // 而 isSplashNow 只看那个时间戳。热窗口被挡下了，开屏窗口（词表扫描）
+                // 照常开着 4 秒。0.17.33 实测：关开无障碍后停在微博「我的」页，
+                // 服务重连 3 秒后词表在这张正常页面上命中了一次「跳过」并点了下去。
+                // 预热期内只更新 lastShownPkg、不开任何窗口，20 秒后判据才可信。
+                val warmingUp = SystemClock.elapsedRealtime() - connectedAt < SERVICE_WARMUP_MS
                 // 「切到这个 App」：前一个出现在屏幕上的是**已知的**别的包（含桌面）才算。
-                // 0.17.32 只给 wcc-switch 补了 hadPrev，主路径漏了：服务刚连上时
-                // lastShownPkg 还是 null，系统补发的第一个 WSC 会被当成「刚切进来」，
-                // 开屏窗口就在用户正在看的正常页面上打开。微博那次误点走的是兜底路径，
-                // 但主路径拿着同一个 null 同样会踩——两处必须同一个判据。
-                val freshSwitch = prevShown != null && prevShown != ep
+                val freshSwitch = prevShown != null && prevShown != ep && !warmingUp
                 lastShownPkg = ep
                 traceV("wsc $ep prev=$prevShown fresh=$freshSwitch cls=${event.className}")
                 // 开屏窗口只从「真的切到这个 App 的那一刻」起算：开屏页跳主界面会再来一个
@@ -720,10 +725,13 @@ class SkipAccessibilityService : AccessibilityService() {
                 val hadPrev = lastShownPkg != null
                 if (hadPrev && ep != lastShownPkg && ep !in blacklist) {
                     val now = SystemClock.elapsedRealtime()
+                    // 预热期内同样不认。这条路径会把 lastStateChangeAt 写死，即使
+                    // enterHotWindow 因为预热返回了，开屏窗口（词表扫描）还是会开
+                    val warmingUp = now - connectedAt < SERVICE_WARMUP_MS
                     // 同一 App 一分钟内只补一次：内容变化事件比窗口事件密集得多，
                     // 不卡额度就会把「App 内换页」当成「刚切进来」，开屏窗反复重开
                     val last = splashFallbackAt[ep] ?: 0L
-                    if (now - last > SPLASH_FALLBACK_GAP_MS) {
+                    if (!warmingUp && now - last > SPLASH_FALLBACK_GAP_MS) {
                         if (splashFallbackAt.size > 50) splashFallbackAt.clear()
                         splashFallbackAt[ep] = now
                         traceV("wcc-switch $ep prev=$lastShownPkg")
