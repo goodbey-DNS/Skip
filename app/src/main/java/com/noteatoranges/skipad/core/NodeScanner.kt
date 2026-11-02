@@ -219,11 +219,8 @@ class NodeScanner(
      * 固定 24 字对「跳过」这种两个字的词等于没闸——正文里提到关键字的一整句都能过。
      * 改成「命中短语长度 + [TEXT_SLACK]」，同时不超过规则的绝对上限。
      */
-    private fun allowedLen(m: Match): Int {
-        val abs = m.node.rule.maxTextLength
-        if (!m.byText || m.hitLen <= 0) return abs
-        return minOf(abs, m.hitLen + TEXT_SLACK)
-    }
+    private fun allowedLen(m: Match): Int =
+        textLenLimit(m.node.rule.maxTextLength, m.byText, m.hitLen, TEXT_SLACK)
 
     private fun firstMatch(
         node: AccessibilityNodeInfo,
@@ -376,4 +373,21 @@ class NodeScanner(
             "tutorial", "guide", "walkthrough", "intro", "onboard",
         )
     }
+}
+
+/**
+ * 文本长度上限：命中短语 + 富余，且不超过规则的绝对上限。
+ *
+ * 抽成顶层函数只有一个目的——能脱离 Android 运行时做单测。这条闸决定「正文里提到
+ * 关键字」会不会被点，改错一次就是一片误点；而它原来的位置被包在扫描器的私有方法里，
+ * 只有一个 fake 不掉 AccessibilityNodeInfo 的测试框架能碰到。
+ *
+ * @param maxTextLength 规则的绝对上限（默认 24）
+ * @param byText 是否是文本命中（正则/viewId 命中没有确定短语）
+ * @param hitLen 命中短语长度，0 表示无短语
+ * @param slack 允许的额外字数
+ */
+internal fun textLenLimit(maxTextLength: Int, byText: Boolean, hitLen: Int, slack: Int): Int {
+    if (!byText || hitLen <= 0) return maxTextLength
+    return minOf(maxTextLength, hitLen + slack)
 }

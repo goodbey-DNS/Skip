@@ -138,6 +138,15 @@ class SkipAccessibilityService : AccessibilityService() {
      */
     private var connectedAt = 0L
 
+    /**
+     * 疑似误点过的页面（包名/Activity），在一段时间内不再自动动手。
+     *
+     * 判据见 [verifySkipOnce]：点击后目标消失了、但前台换了 App，说明点进的是广告
+     * 落地页或应用商店，不是「跳过」。这种页面再试一次大概率还是点错，所以直接静默
+     * 一段时间——比调参数可靠，因为它是用真实结果记账的，不是靠猜。
+     */
+    private val badPageUntil = HashMap<String, Long>()
+
     private data class PendingSkip(
         val windowKey: String,
         val pkg: String,
@@ -850,6 +859,13 @@ class SkipAccessibilityService : AccessibilityService() {
             return false
         }
 
+        // 这个页面刚被判过「疑似点进广告」：静默一段时间。
+        // 比调参数可靠——它不是猜出来的风险，是上一次真点错了的结果。
+        if (isBadPage(pkg, now)) {
+            traceV("bad-page $pkg 静默中")
+            return false
+        }
+
         val t0 = SystemClock.elapsedRealtime()
         var hit = userSc?.findSkipTarget(root, w, h)
         var dbg = userSc?.lastDebug
@@ -967,7 +983,10 @@ class SkipAccessibilityService : AccessibilityService() {
         hotScanCount = 0
         setNotifTimeout(HOT_NOTIF_TIMEOUT)
         scheduleActiveScan()
-        traceV("hot-open $pkg")
+        // 记下开窗时的 Activity：这是判断「开屏页 vs 主界面」最直接的信号，
+        // 但现在还不够证据做过硬闸（微博冷启动和主页同为 MainTabActivity，一刀切会误杀），
+        // 所以先只记录，等真机日志攒够再定阈值
+        traceV("hot-open $pkg act=${lastActivityClass[pkg].orEmpty().substringAfterLast('.')}")
     }
 
     /** 退出热窗口：还原事件合并窗口，停掉主动扫描 */
@@ -1075,9 +1094,22 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         if (found == null) {
             val appCtx = applicationContext
-            Io.run("stats-insert") { StatsDb.get(appCtx).insert(p.pkg, p.detail) }
+            val now = SystemClock.elapsedRealtime()
+            // 目标不在了，但「不在了」有两种：真的跳过成功，或者点进了广告落地页/应用商店。
+            // 后者以前同样记成「已跳过」，统计因此虚高——0.17.33 那次「我的」页误点就是
+            // 这样进的榜单。判据只看包名：跳到商店/浏览器时前台已经换成别人的包。
+            val fg = foregroundPackage()
+            if (fg != null && fg != p.pkg) {
+                traceD("off-app ${p.pkg} → $fg，不计入跳过")
+                markBadPage(p.pkg, now)
+                Io.run("stats-insert") {
+                    StatsStore.logEvent(appCtx, "疑似点进广告：${p.pkg} → $fg")
+                }
+            } else {
+                Io.run("stats-insert") { StatsDb.get(appCtx).insert(p.pkg, p.detail) }
+            }
             // 点掉了就立即关窗：开屏都是立刻出现，多等一秒就是在主界面上多扫一秒
-            splashClosedAt[p.pkg] = SystemClock.elapsedRealtime()
+            splashClosedAt[p.pkg] = now
             traceD("verified ${p.pkg} 「${p.detail}」 (attempts=${p.attempts})")
             pending = null
             return
@@ -1096,6 +1128,37 @@ class SkipAccessibilityService : AccessibilityService() {
             traceD("retry#${p.attempts} ${p.pkg} gesture ok=$ok win=${found.second}")
         }
         mainHandler.postDelayed({ if (pending === p) verifySkip() }, VERIFY_DELAY_MS)
+    }
+
+    /**
+     * 当前前台包名：活动窗口优先，读不到退回最近一次窗口事件记下的包。
+     *
+     * 核验时用它区分「真跳过」和「点进广告落地页」——跳到应用商店/浏览器时，
+     * 活动窗口已经换成了别人的包，而 lastFgPkg 在 WSC 里同步更新，两条路都能取到。
+     */
+    private fun foregroundPackage(): String? {
+        val r = runCatching { rootInActiveWindow }.getOrNull()
+        val p = r?.packageName?.toString()
+        if (p != null && p != SYSTEM_UI_PKG) return p
+        return lastFgPkg?.takeIf { it != SYSTEM_UI_PKG }
+    }
+
+    /** 当前页面是否处在「刚疑似点错、暂时别动」的静默期 */
+    private fun isBadPage(pkg: String, now: Long): Boolean {
+        val act = lastActivityClass[pkg] ?: return false
+        val key = "$pkg/$act"
+        val until = badPageUntil[key] ?: return false
+        if (until <= now) {
+            badPageUntil.remove(key)
+            return false
+        }
+        return true
+    }
+
+    private fun markBadPage(pkg: String, now: Long) {
+        val act = lastActivityClass[pkg] ?: return
+        if (badPageUntil.size > 100) badPageUntil.clear()
+        badPageUntil["$pkg/$act"] = now + BAD_PAGE_MS
     }
 
     /** 某个包名的可用窗口根：活动窗口优先，取不到再走窗口列表兜底 */
@@ -1844,6 +1907,15 @@ class SkipAccessibilityService : AccessibilityService() {
          * 一上来就按开屏处理等于纯赌博。
          */
         const val SERVICE_WARMUP_MS = 20_000L
+
+        /**
+         * 疑似误点后的页面静默期。
+         *
+         * 核验发现点击后前台换了 App（跳进商店/浏览器）就判为疑似误点，该页面
+         * 在这段时间内不再自动动手。十分钟是拍的值：够跨过一次冷启动，又不至于
+         * 因为一次偶发判定就把这个 App 永久禁掉。
+         */
+        const val BAD_PAGE_MS = 10 * 60_000L
 
         const val SNAP_CHANNEL = "snapshot_v2"
         const val SNAP_NOTIF_ID = 2001
