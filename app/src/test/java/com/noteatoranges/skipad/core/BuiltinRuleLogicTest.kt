@@ -55,6 +55,29 @@ class BuiltinRuleLogicTest {
     }
 
     @Test
+    fun `TopOn京东腾讯三家前缀命中真实关闭钮`() {
+        val r = rule("ad-sdk-viewid")
+        // 名字取自 0.17.36 的真机 APK 资源表，不是编的
+        assertTrue(r.viewIdHit("anythink_splash_tv_skip"))
+        assertTrue(r.viewIdHit("anythink_myoffer_splash_skip_area"))
+        assertTrue(r.viewIdHit("jad_splash_skip_btn"))
+        assertTrue(r.viewIdHit("noah_native_splash_skip"))
+        assertTrue(r.viewIdHit("noah_mm_splash_skip"))
+    }
+
+    @Test
+    fun `三家前缀不会把广告 CTA 放进射程`() {
+        val r = rule("ad-sdk-viewid")
+        // 含前缀但没有关闭语义：点了就是唤起商店或触发下载
+        assertFalse(r.viewIdHit("anythink_myoffer_splash_ad_install_btn"))
+        assertFalse(r.viewIdHit("jad_splash_click_area_container"))
+        assertFalse(r.viewIdHit("noah_splash_lp_top"))
+        // 倒计时数字单独存在时不算关闭钮，只能是按钮的一部分
+        assertFalse(r.viewIdHit("jad_tv_video_count"))
+        assertFalse(r.viewIdHit("noah_native_splash_countdown"))
+    }
+
+    @Test
     fun `viewId 判定忽略大小写`() {
         val r = rule("ad-sdk-viewid")
         assertTrue(r.viewIdHit("GDT_BTN_CLOSE"))

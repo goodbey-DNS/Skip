@@ -123,6 +123,15 @@ object BuiltinRules {
                 "ksad_",    // 快手联盟
                 "csj_",     // 穿山甲
                 "tt_",      // 穿山甲旧命名（tt_splash_skip_btn）
+                // 0.17.36 补的三家。来源不是猜的：48 个真实 APK（6.24 GB）逐个 dump 资源表，
+                // 再解析开屏布局 XML 核对控件类型与所在布局，取「至少 3 个 App 交叉一致」的：
+                // - anythink_ TopOn 新版命名（旧名 topon_ 已不再出现），4 个 App：墨迹、记账、两个天气
+                // - jad_      京东广告，3 个 App：迅雷、墨迹、记账
+                // - noah_     腾讯广告，3 个 App：UC、两个天气
+                // 三家都只加前缀，不放开关闭语义——广告 CTA 依旧进不来（见下方单测）
+                "anythink_",
+                "jad_",
+                "noah_",
             ),
             // 资源名里必须同时出现关闭语义，才认它是退出按钮而不是广告 CTA
             viewIdNeeds = listOf("close", "dismiss", "skip", "cancel", "关闭", "跳过"),
