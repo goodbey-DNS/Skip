@@ -660,8 +660,9 @@ class SkipAccessibilityService : AccessibilityService() {
                     // 还是同一个 Activity，onPageChanged 会提前返回，记录一直留着，
                     // 那个跳过按钮会被当成重复点击直接放过——服务不重启就永远点不动
                     onAppSwitched(ep)
-                    // 热窗口：抢时间的那一套（事件窗口压到 50ms + 主动扫描）只在这里开
-                    enterHotWindow(ep)
+                    // 桌面/系统界面不进热窗口：它们没有开屏广告，但右上角全是图标，
+                    // 进了热窗口就会被主动扫描当"跳过按钮"点掉——实测点中了桌面上的 SkipAd 图标
+                    if (ep !in blacklist) enterHotWindow(ep)
                 }
                 // className 不一定就是 Activity：弹浮层 / 列表刷新时 WSC 事件报的是
                 // android.widget.PopupWindow、androidx...RecyclerView 这类系统控件类名。
@@ -768,6 +769,9 @@ class SkipAccessibilityService : AccessibilityService() {
         splash: Boolean,
         winKey: String,
     ): Boolean {
+        // 双保险：事件路径在 handleEvent 里已挡过一次，主动扫描路径也必须挡。
+        // 桌面、系统界面、自己都不该被任何规则碰
+        if (pkg in blacklist || pkg == packageName) return false
         // 扫描总预算：事件路径与主动路径共用同一个计数。开屏 4 秒里两条路径叠起来
         // 最多扫 40 次全树（每次 15~25ms），再多就是拿主线程换那点运气
         if (splash && isHot(now)) {
@@ -815,8 +819,11 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         // 前两条都没命中，且处在开屏窗口：试一次右上角启发式。
         // 这是「广告有跳过按钮但既没文字也没 skip 类 id」的唯一出路——
-        // 判据收得很紧（见 CornerSkipFinder），只在开屏页右上角那一个小方块上生效
-        if (hit == null && splash) {
+        // 判据收得很紧（见 CornerSkipFinder），只在开屏页右上角那一个小方块上生效。
+        // 再叠一道时间闸：只在切前台后 2.5 秒内启用。广告的跳过按钮这时早该出现了，
+        // 而主界面（右上角常有发布/保存/分享这类真按钮）通常在广告倒计时结束后才出现——
+        // 窗口开太长，从通知或 deep link 直接落到功能页时就会点错东西
+        if (hit == null && splash && inCornerWindow(now)) {
             val corner = runCatching { CornerSkipFinder.find(root, w, h, factsCache) }.getOrNull()
             if (corner != null) {
                 hit = corner to CORNER_RULE
@@ -876,6 +883,10 @@ class SkipAccessibilityService : AccessibilityService() {
 
     /** 现在是否在热窗口内 */
     private fun isHot(now: Long): Boolean = hotPkg != null && now <= hotUntil
+
+    /** 是否还在「允许右上角启发式」的那 2.5 秒里（比整个热窗口更短、更保守） */
+    private fun inCornerWindow(now: Long): Boolean =
+        hotOpenedAt > 0 && now - hotOpenedAt <= HOT_CORNER_WINDOW_MS
 
     /**
      * 进入热窗口：把系统事件合并窗口压到 50ms，并起主动扫描。
@@ -957,6 +968,8 @@ class SkipAccessibilityService : AccessibilityService() {
      * 任何一条不成立就安静返回——这里每秒跑八次，不能有副作用。
      */
     private fun activeScan(pkg: String, now: Long) {
+        // 桌面/系统界面一律不扫：它们的窗口里全是图标，任何启发式都会误判
+        if (pkg in blacklist || pkg == packageName) return
         if (!isHot(now)) return
         if (lastFgPkg != null && lastFgPkg != pkg) return
         if (!isSplashNow(pkg, now)) return
@@ -1752,6 +1765,15 @@ class SkipAccessibilityService : AccessibilityService() {
          * 远好过让用户觉得手机卡了。
          */
         const val HOT_MAX_SCANS = 40
+
+        /**
+         * 右上角启发式的时间闸：只在切前台后 2.5 秒内启用。
+         *
+         * 广告的跳过按钮在这之前就该出现；而主界面的右上角按钮（发布、保存、分享）
+         * 通常在广告倒计时结束之后才出现。实测过一次反例：桌面被当成开屏页，
+         * 右上角的 SkipAd 图标被点中——桌面已经在黑名单外被挡，这道时间闸是第二层。
+         */
+        const val HOT_CORNER_WINDOW_MS = 2500L
 
         const val SNAP_CHANNEL = "snapshot_v2"
         const val SNAP_NOTIF_ID = 2001
