@@ -126,7 +126,7 @@ class SkipAccessibilityService : AccessibilityService() {
     private var hotScanTask: Runnable? = null
 
     /** 系统默认的事件合并窗口（xml 里的 300），热窗口结束后恢复成它 */
-    private var baseNotifTimeout = 300
+    private var baseNotifTimeout = 300L
 
     private data class PendingSkip(
         val windowKey: String,
@@ -911,7 +911,7 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     /** 改系统事件合并窗口；服务未连接或系统拒绝时静默跳过 */
-    private fun setNotifTimeout(ms: Int) {
+    private fun setNotifTimeout(ms: Long) {
         try {
             val info = serviceInfo ?: return
             if (info.notificationTimeout == ms) return
@@ -1733,7 +1733,7 @@ class SkipAccessibilityService : AccessibilityService() {
         // 系统事件合并窗口：平时 300ms 省电，热窗口内压到 50ms 抢时间。
         // 50 不是 0：0 会让信息流类应用把每个内容变化都立刻投递，热窗口内只有几秒，
         // 但仍有应用会在开屏页里刷进度条，留 50ms 已经足够快又不至于打满主线程
-        const val HOT_NOTIF_TIMEOUT = 50
+        const val HOT_NOTIF_TIMEOUT = 50L
 
         /** 热窗口内的事件节流：平时 300ms，这里 80ms */
         const val HOT_THROTTLE_MS = 80L
@@ -1753,6 +1753,9 @@ class SkipAccessibilityService : AccessibilityService() {
          */
         const val HOT_MAX_SCANS = 40
 
+        const val SNAP_CHANNEL = "snapshot_v2"
+        const val SNAP_NOTIF_ID = 2001
+        const val ACTION_TAKE_SNAPSHOT = "com.noteatoranges.skipad.TAKE_SNAPSHOT"
 
         /** 系统界面窗口：抓快照时要跳过 */
         const val SYSTEM_UI_PKG = "com.android.systemui"
