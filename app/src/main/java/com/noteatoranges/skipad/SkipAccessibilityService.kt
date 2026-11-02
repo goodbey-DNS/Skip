@@ -150,6 +150,9 @@ class SkipAccessibilityService : AccessibilityService() {
     /** bad-page 日志的节流时间戳：静默期内事件密集，同一条日志一秒一次足够 */
     private val lastBadPageTrace = HashMap<String, Long>()
 
+    /** 「事件没有包名」诊断日志的节流时间戳 */
+    private var lastNoPkgTrace = 0L
+
     private data class PendingSkip(
         val windowKey: String,
         val pkg: String,
@@ -675,6 +678,17 @@ class SkipAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
         try {
+            // 排障用：部分 ROM / 应用会发出 packageName 为空的无障碍事件。这类事件在
+            // handleEvent 里两个分支都进不去（都要求 ep != null），表现是「这个 App
+            // 完全不跳」，而且日志里一条都没有——分不清是事件没来，还是来了没包名。
+            // 只在 pkg 为空时记一行，一秒最多一次。
+            if (event.packageName == null) {
+                val nowNoPkg = SystemClock.elapsedRealtime()
+                if (nowNoPkg - lastNoPkgTrace > 1000) {
+                    lastNoPkgTrace = nowNoPkg
+                    traceV("ev-nopkg type=${event.eventType} cls=${event.className}")
+                }
+            }
             handleEvent(event)
         } catch (t: Throwable) {
             traceW("event-fail type=${event.eventType} pkg=${event.packageName}", t)
