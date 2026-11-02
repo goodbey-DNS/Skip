@@ -92,6 +92,22 @@ class BuiltinRuleLogicTest {
         assertFalse(r.viewIdHit("gdt_btn_download"))
     }
 
+    @Test
+    fun `内置规则 id 集合覆盖核验依赖的全部条目`() {
+        // 核验靠这个集合判断「这条命中该用内置扫描器复核」。规则改名而这里没跟上，
+        // 结果就是又退回「点完就记账」——统计重新开始说谎，且没有任何报错。
+        assertEquals(
+            setOf(
+                "ad-skip-viewid",
+                "ad-sdk-viewid",
+                "splash-common-text",
+                "splash-countdown-regex",
+                "splash-countdown-num",
+            ),
+            BuiltinRules.ids,
+        )
+    }
+
     // —— 文本长度闸 ——
 
     @Test

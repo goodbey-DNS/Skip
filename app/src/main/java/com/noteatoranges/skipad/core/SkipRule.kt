@@ -99,6 +99,14 @@ data class SkipRule(
  */
 object BuiltinRules {
 
+    /**
+     * 内置规则的 id 集合。
+     *
+     * 核验阶段要用它判断「这条命中该走哪个复核通道」：内置规则不在用户的
+     * nodeScanner 里，拿 findUserTargetInAnyWindow 去查永远查不到，等于点完就记账。
+     */
+    val ids: Set<String> by lazy { defaults().map { it.id }.toSet() }
+
     fun defaults(): List<SkipRule> = listOf(
         // viewId 带 skip 的基本就是广告 SDK 的跳过按钮本体（穿山甲 tt_splash_skip_btn 等）；
         // 冷却/次数上限：没有闸时一个窗口内会把页面上所有像跳过的控件都点一遍，

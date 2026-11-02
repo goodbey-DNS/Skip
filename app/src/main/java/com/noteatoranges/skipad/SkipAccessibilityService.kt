@@ -164,6 +164,14 @@ class SkipAccessibilityService : AccessibilityService() {
         val path: String? = null,
         /** 触发这次动作的规则 id：核验只看同一条规则，别把新页面上另一条规则当成「还在」 */
         val ruleId: String = "",
+        /**
+         * 点击发生时的页面（Activity 类名）。
+         *
+         * 内置规则的复核是「再扫一遍看同一个词还在不在」，而点完之后页面往往已经换掉，
+         * 新页面上出现同样的字（列表项、正文）就会被误判成「目标还在」并触发补刀。
+         * 记下页面，换页即视为点掉了。
+         */
+        val act: String = "",
     )
 
     /** 每个 App 最近一次"新窗口出现"的时间与前台 Activity 类名 */
@@ -992,7 +1000,7 @@ class SkipAccessibilityService : AccessibilityService() {
         // 第一下没点掉时，「还在」既可能是广告没响应，也可能是页面已换、右上角另有
         // 别的小按钮——这时再补一次裸坐标点击，风险大于收益。所以 corner 一律不补刀。
         val retry = if (rule.id == CORNER_RULE.id) 0 else MAX_RETRY
-        pending = PendingSkip(winKey, pkg, detail, 0, retry, ruleId = rule.id)
+        pending = PendingSkip(winKey, pkg, detail, 0, retry, ruleId = rule.id, act = act)
         val token = pending
         mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
         return true
@@ -1136,6 +1144,18 @@ class SkipAccessibilityService : AccessibilityService() {
                 val (cw, ch) = realScreenPx()
                 CornerSkipFinder.find(r, cw, ch, factsCache)?.let { Triple(it, p.pkg, "corner") }
             }
+            // 内置规则与手输关键字（下表外的两族）都不在 userScanner 里：拿
+            // findUserTargetInAnyWindow 去查必然返回 null，于是「点完就记账」——
+            // 点没点掉都算成功。0.17.37 之前统计里那条「设置 1 次」就是这么来的：
+            // 设置页里出现「跳过」被当成开屏按钮，点了一下页面没变，照样记了一次。
+            // 这里改用同一个内置扫描器复核，还在就不记账、走补刀。
+            isBuiltinRuleId(p.ruleId) -> {
+                // 页面已经换掉 = 点击生效了。新页面上同样的字不是「目标还在」，
+                // 拿它去补刀就是往正文里点一下
+                val cur = lastActivityClass[p.pkg].orEmpty()
+                if (p.act.isNotEmpty() && cur.isNotEmpty() && cur != p.act) null
+                else findBuiltinTarget(p.pkg, p.ruleId)
+            }
             else -> findUserTargetInAnyWindow(p.pkg, p.ruleId)
         }
         if (found == null) {
@@ -1161,7 +1181,16 @@ class SkipAccessibilityService : AccessibilityService() {
             return
         }
         if (p.attempts >= p.maxRetry) {
-            traceD("giveup ${p.pkg} 「${p.detail}」目标仍在(${found.second}), 已补刀${p.attempts}次不记账")
+            // 带上节点形态：下次再出现「点了不生效」，这几项决定该往哪儿查——
+            // clickable=false 说明只剩坐标点击可用，bounds 出屏说明中心点本来就没打中，
+            // cls 是自定义 View 说明点的是容器而不是按钮本体
+            val shape = runCatching {
+                val r = Rect()
+                found.first.getBoundsInScreen(r)
+                "cls=${found.first.className} clickable=${found.first.isClickable} " +
+                    "bounds=(${r.left},${r.top},${r.right},${r.bottom})"
+            }.getOrNull() ?: "cls=?"
+            traceD("giveup ${p.pkg} 「${p.detail}」目标仍在(${found.second}, $shape), 已补刀${p.attempts}次不记账")
             dumpTree(rootInActiveWindow, p.pkg, "giveup")
             pending = null
             return
@@ -1310,6 +1339,44 @@ class SkipAccessibilityService : AccessibilityService() {
             // 拿新规则去「核验」会命中一个新目标然后补刀——那是实打实的跨页误点
             if (ruleId != null && hit.second.id != ruleId) continue
             return Triple(hit.first, pkg, "win#${window.id}")
+        }
+        return null
+    }
+
+    /**
+     * 是不是内置词表 / 手输关键字这一类规则。
+     *
+     * 这两族都不在 [userScanner] 里（内置词表在 [kwScanner]，手输词也在同一个扫描器里，
+     * 规则 id 形如 `kw:<pkg>`），所以核验时不能用 findUserTargetInAnyWindow。
+     */
+    private fun isBuiltinRuleId(ruleId: String): Boolean =
+        ruleId.startsWith("kw:") || ruleId in BuiltinRules.ids
+
+    /**
+     * 核验内置规则 / 手输关键字命中：用同一个扫描器在同一批窗口里再找一遍。
+     *
+     * 返回非 null 表示「目标还在」，调用方会补刀或放弃；返回 null 才算真的跳掉了。
+     * 注意这里必须按 [ruleId] 过滤：点完页面可能已经换掉，扫描器会按新页面重建规则，
+     * 拿新规则的结果去判「还在」会命中一个不相干的新目标，然后补刀——跨页误点。
+     */
+    private fun findBuiltinTarget(pkg: String, ruleId: String): Triple<AccessibilityNodeInfo, String, String>? {
+        // 内置词表被用户关掉时无从复核，退回旧行为（按已跳过处理）
+        if (!EnginePrefs.builtinWordsEnabled(this)) return null
+        val scanner = keywordScannerFor(pkg) ?: return null
+        val (w, h) = realScreenPx()
+        val roots = ArrayList<AccessibilityNodeInfo>(3)
+        currentRootOf(pkg)?.let { roots.add(it) }
+        val wins = runCatching { windows?.toList() ?: emptyList() }.getOrDefault(emptyList())
+        for (window in wins) {
+            val r = runCatching { window.root }.getOrNull() ?: continue
+            if (runCatching { r.packageName?.toString() }.getOrNull() != pkg) continue
+            if (roots.any { sameRoot(it, r) }) continue
+            roots.add(r)
+        }
+        for (r in roots) {
+            val hit = runCatching { scanner.findSkipTarget(r, w, h) }.getOrNull() ?: continue
+            if (hit.second.id != ruleId) continue
+            return Triple(hit.first, pkg, "builtin")
         }
         return null
     }
@@ -2040,6 +2107,14 @@ class SkipAccessibilityService : AccessibilityService() {
             "com.huawei.android.launcher",
             "com.sec.android.app.launcher",
             "com.google.android.apps.nexuslauncher",
+            // 系统设置与权限安装器（0.17.38）：统计里出现过一条「设置 1 次」，说明
+            // com.android.settings 在开屏窗口内出现过「跳过」字样并被点了。系统页
+            // 没有广告，被当开销毁的是用户自己的设置项；权限弹窗更危险——那里点错
+            // 就是替用户点了「允许」。整族拉黑，宁可不认这些窗口。
+            "com.android.settings",
+            "com.android.packageinstaller",
+            "com.google.android.packageinstaller",
+            "com.lbe.security.miui",           // MIUI 权限弹窗宿主
         )
     }
 
