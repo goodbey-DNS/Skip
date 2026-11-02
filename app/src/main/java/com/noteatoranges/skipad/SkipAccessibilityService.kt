@@ -860,7 +860,7 @@ class SkipAccessibilityService : AccessibilityService() {
             return false
         }
         // 点了就收工：热窗口的主动扫描立刻停，不再往主界面上扫
-        val elapsed = if (hotOpenedAt > 0) now - hotOpenedAt else -1
+        val elapsed: Long = if (hotOpenedAt > 0) now - hotOpenedAt else -1L
         if (elapsed >= 0) traceD("hot-hit $pkg ${elapsed}ms 规则=${rule.id}")
         if (hotPkg == pkg) exitHotWindow(now)
         lastSkipWindow = winKey
