@@ -34,10 +34,47 @@ class BuiltinRuleLogicTest {
         assertFalse(r.viewIdHit("topon:layout/topon_btn_cta"))
         // 关闭钮：前缀 + close/skip，必须命中
         assertTrue(r.viewIdHit("com.qq.e:id/gdt_btn_close"))
-        assertTrue(r.viewIdHit("tt_splash_skip_btn"))
         assertTrue(r.viewIdHit("ksad_skip_view"))
         assertTrue(r.viewIdHit("hiad_splash_close"))
         assertTrue(r.viewIdHit("topon_splash_dismiss"))
+        // 0.17.46 起 tt_ 不再由这条规则负责；tt_splash_skip_btn 含 skip，
+        // 由 ad-skip-viewid 命中（见「skip 关键字规则只看有没有 skip」）
+        assertFalse(r.viewIdHit("tt_splash_skip_btn"))
+    }
+
+    @Test
+    fun `tt_ 前缀下的业务关闭钮不能进射程`() {
+        val r = rule("ad-sdk-viewid")
+        // 49 个真实 APK 的 ARSC 全表里，tt_ 覆盖 31 个包，其中 30 个包里
+        // 含 close 的 id 全是业务控件。移除 tt_ 就是为这组名字：它们点了没有一次
+        // 是「跳过广告」，淘宝 3D 试穿的关闭被点掉会直接打断用户正在做的事。
+        assertFalse(r.viewIdHit("tt_detail_3d_tryon_close"))
+        assertFalse(r.viewIdHit("tt_detail_3d_tryon_error_close"))
+        assertFalse(r.viewIdHit("tt_cj_pay_common_dialog_cancel_btn_view"))
+        assertFalse(r.viewIdHit("tt_time_list_close_btn"))
+        assertFalse(r.viewIdHit("tt_comment_close"))
+        assertFalse(r.viewIdHit("tt_titlebar_close"))
+    }
+
+    @Test
+    fun `bsyad 与 mimo 两家前缀命中真实关闭钮`() {
+        val r = rule("ad-sdk-viewid")
+        // 名字取自 ARSC 全表，两家的 id 在各自 2 个包里逐字相同
+        assertTrue(r.viewIdHit("bsyad_plg_iv_ad_close"))
+        assertTrue(r.viewIdHit("bsyad_plg_iv_patch_close"))
+        assertTrue(r.viewIdHit("bsyad_plg_reward_qget_close"))
+        assertTrue(r.viewIdHit("mimo_banner_view_close"))
+        assertTrue(r.viewIdHit("mimo_interstitial_close_img"))
+        assertTrue(r.viewIdHit("mimo_reward_close_img"))
+    }
+
+    @Test
+    fun `bsyad 与 mimo 两家的广告 CTA 仍在射程外`() {
+        val r = rule("ad-sdk-viewid")
+        assertFalse(r.viewIdHit("bsyad_plg_tv_cta_cli"))
+        assertFalse(r.viewIdHit("bsyad_plg_interaction_view"))
+        assertFalse(r.viewIdHit("mimo_splash_download_btn"))
+        assertFalse(r.viewIdHit("mimo_splash_media_view"))
     }
 
     @Test

@@ -122,15 +122,29 @@ object BuiltinRules {
         // 等于把开屏广告上所有可点的 SDK 控件都纳入射程——「下载」「查看详情」正是
         // gdt_btn_download / topon_btn_cta 这类 id，点下去就是唤起商店或触发下载。
         // csj_ad_logo 同时删掉：它是穿山甲的广告角标，点击是打开落地页，不是关闭。
+        //
+        // 0.17.46 的依据换成 49 个真实 APK 的 ARSC id 全表（487402 个 id），
+        // 不再依赖「布局名含 splash」的旧扫描——那个方式在微博上 6156 个布局只看了 1 个。
+        // 复核结论：
+        // - tt_ 移除。31 个包里只有多看阅读一个是真穿山甲，另外 30 个包的 tt_ 全是业务控件：
+        //   tt_detail_3d_tryon_close（淘宝 3D 试穿）、tt_cj_pay_common_dialog_cancel_btn_view
+        //   （支付弹窗取消，3 包）、tt_time_list_close_btn、tt_comment_close、tt_titlebar_close。
+        //   这些名字含 close，配上 tt_ 前缀就会被当成跳过按钮点掉。而真穿山甲的
+        //   tt_splash_skip_btn / tt_top_skip 都含 skip，由 ad-skip-viewid 负责，不损失覆盖。
+        // - bsyad_ 与 mimo_ 各跨 2 个包且 id 名逐字相同（迅雷 + 我的记账 / 迅雷 + 美图秀秀），
+        //   两者都有不含 skip 的关闭钮（bsyad_plg_iv_ad_close、mimo_banner_view_close），
+        //   是 ad-skip-viewid 覆盖不到的真实增量。
+        // - csj_ / topon_ / gdt_ 在 49 个样本里含关闭语义的 id 分别为 0 / 0 / 2（且那 2 个
+        //   都含 skip），增量为零；保留是因为老版本 SDK 仍可能出这些名字，删了只减不增。
+
         SkipRule(
             id = "ad-sdk-viewid",
             viewIds = listOf(
                 "gdt_",     // 优量汇
-                "topon_",   // TopOn 聚合
+                "topon_",   // TopOn 聚合（旧名，样本中已无关闭语义命中，保留待老版本）
                 "hiad_",    // 华为广告
                 "ksad_",    // 快手联盟
-                "csj_",     // 穿山甲
-                "tt_",      // 穿山甲旧命名（tt_splash_skip_btn）
+                "csj_",     // 穿山甲（样本中无关闭语义命中，保留待老版本）
                 // 0.17.36 补的三家。来源不是猜的：48 个真实 APK（6.24 GB）逐个 dump 资源表，
                 // 再解析开屏布局 XML 核对控件类型与所在布局，取「至少 3 个 App 交叉一致」的：
                 // - anythink_ TopOn 新版命名（旧名 topon_ 已不再出现），4 个 App：墨迹、记账、两个天气
@@ -140,6 +154,11 @@ object BuiltinRules {
                 "anythink_",
                 "jad_",
                 "noah_",
+                // 0.17.46 复核后补的两家，各跨 2 包且 id 名逐字相同：
+                // - bsyad_ 迅雷、我的记账（bsyad_plg_iv_ad_close / bsyad_plg_iv_close）
+                // - mimo_  迅雷、美图秀秀（mimo_banner_view_close / mimo_interstitial_close_img）
+                "bsyad_",
+                "mimo_",
             ),
             // 资源名里必须同时出现关闭语义，才认它是退出按钮而不是广告 CTA
             viewIdNeeds = listOf("close", "dismiss", "skip", "cancel", "关闭", "跳过"),

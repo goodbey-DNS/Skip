@@ -2,6 +2,54 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.46 - 2026-11-02 · 复核 49 个样本的 SDK 前缀，移除 tt_、补两家
+
+起因是「第二批候选前缀证据不足」这条待办。真去复核时先发现**上一轮的扫描方法本身有问题**。
+
+**旧方法的缺陷**：`scan_layouts.py` 先按「布局名含 `splash|skip`」筛布局，再只解析这些布局。
+微博 6156 个 layout 只看了 1 个，淘宝 1468 个看了 0 个。所以 `layout-scan.json` 里只有
+12 个包有记录，另外 37 个包「没有数据」不是没有广告 SDK，是压根没被扫到。
+
+**改用 ARSC id 全表**：`aapt2 dump resources` 直接取全部 id 名（不依赖布局，能覆盖代码里
+动态 `new` 出来、没有 XML 引用的控件）。49 个包共 487402 个 id。同时写了 AXML 直读解析器，
+与 `aapt2 dump xmltree` 随机抽 40 个布局比对，id 集合 **40/40 完全一致**，微博 6156 个布局
+全量解析 2.4 秒（旧方法逐个调 aapt2 要几十分钟）。
+
+**复核出来的三条结论**
+
+1. **`tt_` 必须移除。** 它覆盖 31 个包，但含 close 语义的 24 个 id 里，只有多看阅读的
+   4 个是真穿山甲（`tt_splash_card_close`、`tt_splash_eye_close_btn`、`tt_splash_icon_close`、
+   `tt_splash_skip_btn`）。另外 30 个包全是业务控件：`tt_detail_3d_tryon_close`（淘宝 3D 试穿）、
+   `tt_cj_pay_common_dialog_cancel_btn_view`（支付弹窗取消，3 个包）、`tt_time_list_close_btn`、
+   `tt_comment_close`、`tt_titlebar_close`、`tt_bu_close`。这些名字含 close，配上 `tt_` 前缀
+   就进了射程——点掉淘宝 3D 试穿的关闭会直接打断用户正在做的事。而真穿山甲的
+   `tt_splash_skip_btn` / `tt_top_skip` 都含 skip，由 `ad-skip-viewid` 负责，**移除不损失覆盖**。
+
+2. **`bsyad_` 与 `mimo_` 够格收录。** 各跨 2 个包，且 id 名在各自包里逐字相同：
+   `bsyad_plg_iv_ad_close` / `bsyad_plg_iv_patch_close`（迅雷、我的记账）、
+   `mimo_banner_view_close` / `mimo_interstitial_close_img`（迅雷、美图秀秀）。
+   两家都有**不含 skip** 的关闭钮，是 `ad-skip-viewid` 覆盖不到的真实增量。
+   （此前记的 `mimo_` 单包证据，实际是 2 包。）
+
+3. **`csj_` / `topon_` / `gdt_` 增量为零但不删。** 49 个样本里含关闭语义的 id 分别是
+   0 / 0 / 2，且 `gdt_` 那 2 个（`rl_gdt_skip`、`tv_gdt_skip`）都含 skip，已被
+   `ad-skip-viewid` 覆盖。保留是因为老版本 SDK 仍可能出这些名字，删了只减不增。
+
+**根因提醒**：`ad-skip-viewid` 的规则是 `viewIds = ["skip"]` 且不要求关闭语义，所以
+**所有名字含 skip 的 id 早已被它覆盖**。SDK 前缀的真实增量只剩「没有 skip、只有
+close/cancel」的按钮。判断任何前缀要不要加，先问它在 skip 规则之外还剩什么。
+
+**样本质量问题（影响结论可信度）**：49 个 APK 里 7 个资源严重残缺，占 14%。京东只有
+774 个 id（正常应上万）、快手极速版 763、WPS lite 823、小米录音机 612、护眼仪 0 个。
+所以「京东不含 jad_」这条旧结论**不可信**，它是被裁剪过的包。
+
+**单测**：新增 4 组用例（`tt_` 业务关闭钮必须拒绝、`bsyad_`/`mimo_` 关闭钮命中、
+两家 CTA 仍在射程外），原「`tt_splash_skip_btn` 命中 ad-sdk-viewid」改为 `assertFalse`。
+`tt_splash_skip_btn` 由 `ad-skip-viewid` 命中的断言保留在 skip 规则那组。
+
+**未做**：没上真机。这次改的是前缀集合，行为变化只在「原本会误点的业务关闭钮不再被点」，
+以及两个新增前缀带来的关闭钮。真实广告回归仍欠着（广告位被今天的冷启动消耗完）。
+
 ## 0.17.45 - 2026-11-02 · 加一条「事件没有包名」的诊断
 
 跑真实广告回归时发现微博**完全不产生任何引擎日志**：同一时刻京东正常（34 行），
