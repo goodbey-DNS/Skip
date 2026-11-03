@@ -681,12 +681,24 @@ class SkipAccessibilityService : AccessibilityService() {
      */
     private fun onAppSwitched(pkg: String) {
         clickedRects.clear()
-        // 新的一轮：续窗资格与凭据都作废
+        resetRetryState(pkg)
+        val prefix = "$pkg|"
+        ruleState.keys.filter { it.startsWith(prefix) }.forEach { ruleState[it]?.count = 0 }
+    }
+
+    /**
+     * 新的一轮开始：续窗凭据与「已续过」标记全部作废。
+     *
+     * **两个入口都要调**。0.17.53 只在 [onAppSwitched]（WSC 的 freshSwitch 分支）里清，
+     * 而 360 清理大师冷启动走的是 [handleEvent] 里的 `wcc-switch` 兜底路径，不经过那里。
+     * 实测后果：上一轮的 `retried=true` 残留到下一轮，日志里是
+     * `retry-check new=SplashActivity lastHit= age=-1 retried=true`，
+     * 这一轮即使出现第二段广告也永远不会续窗。
+     */
+    private fun resetRetryState(pkg: String) {
         retriedAfterHit.remove(pkg)
         lastHitAt.remove(pkg)
         lastHitAct.remove(pkg)
-        val prefix = "$pkg|"
-        ruleState.keys.filter { it.startsWith(prefix) }.forEach { ruleState[it]?.count = 0 }
     }
 
     /**
@@ -891,6 +903,9 @@ class SkipAccessibilityService : AccessibilityService() {
                         traceV("wcc-switch $ep prev=$lastShownPkg")
                         lastShownPkg = ep
                         lastStateChangeAt[ep] = now
+                        // 这条兜底路径同样代表「新的一轮」，续窗状态必须一起清。
+                        // 不清的话上一轮的 retried=true 会残留，这一轮永远不会续窗（0.17.58）。
+                        resetRetryState(ep)
                         enterHotWindow(ep)
                         // 坐标规则也要排一次：不走窗口切换事件的应用（计算器这类）
                         // 只靠 WSC 分支排的话，它们的坐标规则一次都不会执行
