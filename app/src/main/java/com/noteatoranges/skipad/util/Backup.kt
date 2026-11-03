@@ -25,10 +25,14 @@ object Backup {
     /**
      * 备份包标识：manifest.json 里的 app 字段必须等于它，否则不认。
      *
-     * 注意：这是**文件格式标识**，不是应用显示名。0.17.50 把显示名改成「大小姐」时
-     * 特意没动它——改了就读不出老备份，用户换名字之前导出的包会全部作废。
+     * 这是**文件格式标识**，不是应用显示名。0.17.59 随应用更名改为 `daxiaojie`，
+     * 同时用 [LEGACY_APP_NAMES] 兼容旧备份——改名之前导出的包仍然能恢复，
+     * 但新导出的包写新标识。
      */
-    private const val APP_NAME = "SkipAd"
+    private const val APP_NAME = "daxiaojie"
+
+    /** 改名前的备份标识。只用于读取，新备份一律写 [APP_NAME]。 */
+    private val LEGACY_APP_NAMES = setOf("SkipAd")
 
     /** 导出的 zip 落在外部私有目录 backup/ 下，返回 null 表示失败 */
     fun export(context: Context): File? = try {
@@ -155,11 +159,11 @@ object Backup {
         }
         // 不是我们的备份就拒绝，别把别的 zip 当数据写进去（表达式函数里不能 return，用抛错走 catch）
         if (!hasManifest && rules.isEmpty() && keywords.isEmpty() && snaps.isEmpty()) {
-            throw IllegalStateException("not a SkipAd backup")
+            throw IllegalStateException("not a daxiaojie backup")
         }
-        // manifest 写了 app 但不是 SkipAd：明确认错备份
-        if (manifestApp.isNotBlank() && manifestApp != APP_NAME) {
-            throw IllegalStateException("not a SkipAd backup")
+        // manifest 写了 app 但既不是新标识也不是旧标识：明确认错备份
+        if (manifestApp.isNotBlank() && manifestApp != APP_NAME && manifestApp !in LEGACY_APP_NAMES) {
+            throw IllegalStateException("not a daxiaojie backup")
         }
 
         // 三块各自独立兼容：某一块坏了不拖累另外两块（以前一处抛错整份恢复归零）

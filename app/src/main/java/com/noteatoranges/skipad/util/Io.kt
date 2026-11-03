@@ -25,5 +25,5 @@ object Io {
         }
     }
 
-    private const val TAG = "SkipAdIo"
+    private const val TAG = "DaxiaojieIo"
 }

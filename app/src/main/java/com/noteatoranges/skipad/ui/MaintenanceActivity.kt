@@ -207,7 +207,7 @@ class MaintenanceActivity : AppCompatActivity() {
     private fun afterImport(res: Backup.Restored?, safe: java.io.File?) {
         runOnUiThread {
             if (res == null) {
-                Toast.makeText(this, "恢复失败：不是可识别的 SkipAd 备份", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "恢复失败：不是可识别的「大小姐」备份", Toast.LENGTH_LONG).show()
                 return@runOnUiThread
             }
             val sb = StringBuilder()

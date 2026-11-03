@@ -48,7 +48,7 @@ import java.util.concurrent.Executor
  *   补刀（最多 2 次），目标消失才记一次跳过；
  * - 规则按 App 隔离：规则的 app 字段决定它只在哪一个应用里生效，跨应用一条都不用；
  * - 快照：悬浮钮 / 通知栏「抓取快照」按钮，截图+控件树落盘，点选生成规则；
- * - 诊断：TAG=SkipAdEngine；控件树落盘 filesDir/diag/。
+ * - 诊断：TAG=DaxiaojieEngine；控件树落盘 filesDir/diag/。
  */
 class SkipAccessibilityService : AccessibilityService() {
 
@@ -848,7 +848,7 @@ class SkipAccessibilityService : AccessibilityService() {
                     // 那个跳过按钮会被当成重复点击直接放过——服务不重启就永远点不动
                     onAppSwitched(ep)
                     // 桌面/系统界面不进热窗口：它们没有开屏广告，但右上角全是图标，
-                    // 进了热窗口就会被主动扫描当"跳过按钮"点掉——实测点中了桌面上的 SkipAd 图标
+                    // 进了热窗口就会被主动扫描当"跳过按钮"点掉——实测点中了桌面上的大小姐图标
                     if (ep !in blacklist) enterHotWindow(ep)
                 }
                 // className 不一定就是 Activity：弹浮层 / 列表刷新时 WSC 事件报的是
@@ -1940,7 +1940,7 @@ class SkipAccessibilityService : AccessibilityService() {
         }
         if (windowRoots.isEmpty()) {
             // 目标 App 的窗口一个都拿不到（它自己把无障碍遍历禁了）：只存截图，
-            // 不能拿自己的悬浮钮根充数——那会把 SkipAd 的界面当成目标 App 存进去
+            // 不能拿自己的悬浮钮根充数——那会把大小姐的界面当成目标 App 存进去
             captureScreenshotOnly(attempt, pkg)
             return
         }
@@ -2219,7 +2219,7 @@ class SkipAccessibilityService : AccessibilityService() {
     }
 
     companion object {
-        const val TAG = "SkipAdEngine"
+        const val TAG = "DaxiaojieEngine"
 
         /** 供悬浮窗开关等外部调用拿到运行中的服务实例（服务存活期非空） */
         val instance: SkipAccessibilityService?
@@ -2328,7 +2328,7 @@ class SkipAccessibilityService : AccessibilityService() {
          *
          * 广告的跳过按钮在这之前就该出现；而主界面的右上角按钮（发布、保存、分享）
          * 通常在广告倒计时结束之后才出现。实测过一次反例：桌面被当成开屏页，
-         * 右上角的 SkipAd 图标被点中——桌面已经在黑名单外被挡，这道时间闸是第二层。
+         * 右上角的大小姐图标被点中——桌面已经在黑名单外被挡，这道时间闸是第二层。
          */
         const val HOT_CORNER_WINDOW_MS = 2500L
 

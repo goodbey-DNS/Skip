@@ -2,6 +2,49 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.59 - 2026-11-03 · 名称全面统一为「大小姐 / daxiaojie」
+
+SkipAd 是几年前的项目，现在重新启用。0.17.50 只改了显示名，当时特意保留了一批
+「用户看不到的内部标识」。这次按「所有相关的一律改」重做一遍。
+
+### 改了什么
+
+| 位置 | 原来 | 现在 |
+|---|---|---|
+| `settings.gradle` | `rootProject.name = "SkipAd"` | `"daxiaojie"` |
+| `themes.xml` / `AndroidManifest.xml` | `Theme.SkipAd` | `Theme.Daxiaojie` |
+| 引擎日志 TAG | `SkipAdEngine` | `DaxiaojieEngine` |
+| IO 线程日志 TAG | `SkipAdIo` | `DaxiaojieIo` |
+| `Backup.APP_NAME` | `"SkipAd"` | `"daxiaojie"` |
+| 备份恢复失败提示 | 「不是可识别的 SkipAd 备份」 | 「不是可识别的「大小姐」备份」 |
+| 代码注释里的自指 | 「SkipAd 图标」「SkipAd 的界面」 | 「大小姐图标」「大小姐的界面」 |
+| 文档标题 | `# SkipAd 设计文档` | `# 大小姐 设计文档` |
+| APK 文件名 | `SkipAd-vX-N.apk` | `daxiaojie-vX-N.apk` |
+| Actions 产物名 | `SkipAd-apk-N` | `daxiaojie-apk-N` |
+| Release 标题 | `SkipAd vX` | `大小姐 vX` |
+
+### 老备份仍然能恢复
+
+`Backup.APP_NAME` 从 `"SkipAd"` 改成 `"daxiaojie"`，但读取时加了
+`LEGACY_APP_NAMES = setOf("SkipAd")`：manifest 里写旧标识的 zip 照样通过校验。
+**新导出写新标识，旧导出仍可读**——这是改这个字段唯一稳妥的做法，直接改会把
+改名之前导出的备份全部作废。
+
+### 特意没改的（这次是硬约束，不是偷懒）
+
+- **`applicationId` 仍是 `com.noteatoranges.skipad`**。改包名等于换一个应用：
+  已装版本无法覆盖升级、两个图标并排、无障碍要重新授权、规则/统计/快照全部留在旧应用里。
+  显示名改了不影响任何已有数据。
+- **类名与包路径**（`SkipAccessibilityService`、`com.noteatoranges.skipad.*`）：
+  改它们要同步 Manifest、几十处 import 和资源引用，收益为零、风险不小。
+- **`CHANGELOG.md` 里的历史记录**：那是当时的真实状态，改了会让历史失真。
+  本文件从这一版起，新条目一律用新名称。
+
+### 排查影响
+
+日志 TAG 变了，**所有 `adb logcat -s SkipAdEngine` 的用法都要改成 `-s DaxiaojieEngine`**，
+包括排查脚本与文档里写死的命令。本仓库内已同步；仓库外的临时脚本如果还有旧的，会抓不到日志。
+
 ## 0.17.58 - 2026-11-03 · 连跑 10 次 360：统计口径错了，但抓到一个真 bug
 
 ### 先说统计口径

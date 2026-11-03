@@ -1,6 +1,6 @@
 <resources>
     <!-- 沉浸式：系统栏透明（inset 由 Ui.edgeToEdge 落到垫片 View 上）；浅色背景配深色状态栏图标 -->
-    <style name="Theme.SkipAd" parent="Theme.AppCompat.DayNight.NoActionBar">
+    <style name="Theme.Daxiaojie" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="colorPrimary">@color/primary</item>
         <item name="colorPrimaryDark">@color/primary_dark</item>
         <item name="colorAccent">@color/primary</item>
