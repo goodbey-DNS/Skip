@@ -51,8 +51,28 @@ java.lang.SecurityException: cancelVibrate: ... has android.permission.VIBRATE
 把 `newAct` / `lastHit` / `age` / `retried` 四个值全打出来。
 只在该包确实点过时才打（`lastHitAt` 存在或已续过），不会刷屏。
 
-**这是纯诊断版本，不改任何行为。** 下次撞到有广告的 360 开屏，看
-`retry-check` 那一行就能确定是哪个条件挡的。
+**装上 0.17.57 后立刻验证通过，真实 360 两段开屏全部跳掉：**
+
+```
+44.877  HIT「跳过」120x120            ← 第 1 段（多窗口里找到的）
+44.927  hot-hit
+45.405  wsc ... SplashRecommendActivity
+45.406  retry-check new=SplashRecommendActivity lastHit=SplashActivity age=884 retried=null
+45.410  retry-window act=SplashRecommendActivity after=884ms
+45.536  HIT「跳过」180x84              ← 第 2 段，点掉
+45.564  hot-hit
+46.328  retry-check new=MainActivity lastHit=SplashRecommendActivity age=798 retried=true
+```
+
+主界面那次 `retried=true`，续窗没有再次发生——「只续一次」在真实环境也成立。
+360 进程存活、无 FATAL，自动点击没有触发那个百度 SDK 的 VIBRATE 崩溃。
+
+**这说明 0.17.56 的代码本来就是对的。** 09:55 那次没触发，三个条件看起来全部满足
+却什么都没发生；这次同样的条件、同样的包、同样的路径，一次就过。中间唯一的差别是
+装了一次新包（服务重启）。合理解释是那一刻服务内部某个状态没有初始化到位，
+但**没有证据、不复现，就不写结论**——`retry-check` 这行保留着，下次再出现能直接看是哪个值不对。
+
+`retry-check` 只在「这个包确实点过」时打印，每次开屏最多两行，保留成本可以接受。
 
 ### 顺带确认
 
