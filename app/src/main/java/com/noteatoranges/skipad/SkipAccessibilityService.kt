@@ -246,6 +246,20 @@ class SkipAccessibilityService : AccessibilityService() {
      */
     private val splashClosedAt = HashMap<String, Long>()
 
+    /**
+     * 上一次点击成功的时间与当时所在的 Activity，用于「同包续窗」。
+     *
+     * 0.17.53 实测：360 清理大师是两段开屏——`SplashActivity` 之后紧跟
+     * `SplashRecommendActivity`，同一个包里。第一段点掉后 `splashClosedAt` 立刻生效，
+     * 第二段出现时窗口已经关了，而 `freshSwitch` 要求「上一个包里不是自己」，
+     * 同包换页拿不到新窗口，于是整段不被处理。用户看到的就是「跳过之后马上又是广告」。
+     *
+     * 这两个值只用来回答一个问题：**这次换页是不是发生在刚点完 6 秒之内、且换了 Activity**。
+     * 是就续窗一次，然后立刻作废，不会变成连续点击。
+     */
+    private val lastHitAt = HashMap<String, Long>()
+    private val lastHitAct = HashMap<String, String>()
+
     /** 每个 App 上一次记录的开屏窗口状态：只在翻转时打日志，避免每个事件刷屏 */
     private val splashState = HashMap<String, Boolean>()
 
@@ -668,6 +682,38 @@ class SkipAccessibilityService : AccessibilityService() {
         ruleState.keys.filter { it.startsWith(prefix) }.forEach { ruleState[it]?.count = 0 }
     }
 
+    /**
+     * 点击成功后，若同一个包里换了 Activity 且发生在 [RETRY_AFTER_HIT_MS] 内，续开一次开屏窗口。
+     *
+     * 0.17.53 实测的形态：360 清理大师 `SplashActivity` 点掉之后紧跟
+     * `SplashRecommendActivity`，同一个包。第一段点击时 `splashClosedAt` 立刻生效，
+     * 第二段出现时窗口已关；而 `freshSwitch` 要求「上一屏不是自己」，同包换页拿不到新窗口，
+     * 于是第二段整个不在射程内——用户看到的正是「跳过之后马上又是广告」。
+     *
+     * 只续一次：续完立刻把凭据删掉。广告页之间来回跳不会变成连点。
+     * 续窗后照常走面积/位置/文本长度/核验全部闸门，主界面上没有「跳过」字样时
+     * 扫满四秒也只是 no-match。
+     */
+    private fun maybeReopenAfterHit(pkg: String, newAct: String) {
+        val hitAt = lastHitAt[pkg] ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (now - hitAt > RETRY_AFTER_HIT_MS) {
+            lastHitAt.remove(pkg)
+            lastHitAct.remove(pkg)
+            return
+        }
+        // 同一个 Activity 里刷新内容不算换页，交给正常的 onPageChanged 处理
+        if (newAct == lastHitAct[pkg].orEmpty()) return
+        lastHitAt.remove(pkg)
+        lastHitAct.remove(pkg)
+        if (pkg in blacklist) return
+        splashClosedAt.remove(pkg)
+        lastStateChangeAt[pkg] = now
+        splashState[pkg] = false          // 让下面的状态翻转日志能打出 open
+        enterHotWindow(pkg)
+        traceV("retry-window $pkg act=${newAct.substringAfterLast('.')} after=${now - hitAt}ms")
+    }
+
     /** 换 App / 换页面：清节点属性缓存与规则计数，并强制重建扫描器 */
     private fun onPageChanged(pkg: String, activity: String) {
         if (stateActivity[pkg] == activity) return
@@ -757,6 +803,9 @@ class SkipAccessibilityService : AccessibilityService() {
                 // 直接记下来会让「页面限定」的规则永远失配（activityMatches 按类名后缀比）
                 val cn = event.className?.toString()
                 val realCn = cn?.takeIf { it.isNotBlank() && !isSystemUiClass(it) }
+                // 0.17.53：刚点完又在本包内换了页 → 可能是第二段开屏。
+                // 只在 freshSwitch 之外补这一条：真切换过来的本来就开窗了，不用续
+                if (realCn != null && !freshSwitch) maybeReopenAfterHit(ep, realCn)
                 val act = realCn ?: lastActivityClass[ep].orEmpty()
                 realCn?.let { lastActivityClass[ep] = it }
                 // 换页：清属性缓存、清规则计数、下次事件重建扫描器
@@ -1053,6 +1102,10 @@ class SkipAccessibilityService : AccessibilityService() {
         // 事件会继续走词表扫描。关窗是唯一不依赖任何推断的收手方式；
         // 核验（verifySkip）不看这个时间戳，补刀照常进行。
         splashClosedAt[pkg] = now
+        // 0.17.53：记下「刚点过」的凭据，供 [maybeReopenAfterHit] 判断同包换页。
+        // 只有点击成功才写——没点出去就不该有续窗资格
+        lastHitAt[pkg] = now
+        lastHitAct[pkg] = lastActivityClass[pkg].orEmpty()
         // 热窗口的主动扫描也立刻停，不再往主界面上扫
         if (hotPkg == pkg) {
             val elapsed: Long = if (hotOpenedAt > 0) now - hotOpenedAt else -1L
@@ -2169,6 +2222,15 @@ class SkipAccessibilityService : AccessibilityService() {
          * 再长就会覆盖到开屏页跳过去之后的主界面，那正是误点开始的地方。
          */
         const val SPLASH_WINDOW_MS = 4000L
+
+        /**
+         * 同包续窗的有效期：点击成功后多久之内，还能因为「同包换页」再开一次窗。
+         *
+         * 360 清理大师实测 `SplashActivity` → `SplashRecommendActivity` 间隔约 490ms。
+         * 取 6 秒是给慢速冷启动留余量，不是窗口长度——续窗之后仍然只有
+         * [SPLASH_WINDOW_MS] 的扫描时间，而且整个过程只允许发生一次。
+         */
+        const val RETRY_AFTER_HIT_MS = 6000L
 
         // —— 开屏热窗口（与 SPLASH_WINDOW_MS 完全对齐，不引入新的时间边界）——
         // 系统事件合并窗口：平时 300ms 省电，热窗口内压到 50ms 抢时间。
