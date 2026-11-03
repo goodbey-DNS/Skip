@@ -2,6 +2,49 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.64 - 2026-11-03 · 抓取入口改为悬浮球
+
+### 改了什么
+
+- `CaptureBubble.isEnabled` 默认改为 `true`：通知栏不再提供「抓取快照」，不开悬浮球就没有入口。
+- `postWorkNotification` 去掉抓取 action 与广播 PendingIntent，整条通知只负责
+  「运行中」和点进来；文案改为「正在跳过开屏广告 · 点此查看设置」。
+- `Backup` 恢复时 `bubble` 缺字段按开处理（否则旧备份会把新默认值覆盖回关闭）。
+- `BUBBLE_HIDE_DELAY_MS` 350 → 800，悬浮球恢复时间 1500 → 3000ms。
+- `ScreenshotOverlayView.onTouchEvent`：竖向滑动超过 touchSlop 时把事件交还父 `ScrollView`。
+- `CaptureBubble.show/hide` 增加日志（`bubble-show enter exists=` / `bubble-hide ok`）。
+
+### 为什么要改
+
+0.17.63 的抓取入口在通知栏，下拉通知栏对 3–5 秒的开屏太慢。悬浮球点一下就能抓，
+且测试机实测抓取结果完整。
+
+### 验证（ac250e7d，0.17.64 本地包）
+
+- 悬浮球显示正常；点击坐标以 `dumpsys input` 的 `touchableRegion` 为准
+  （`[1040,1017][1220,1197]`，圆心约 `1112,1089`；`mAttrs` 里的 900 是布局坐标，
+  直接按它点会落空）。
+- 抓取：`capture nodes=3 windows=1`（受控页）、`nodes=49`（微博主页），
+  截图 `1220x2712` 全屏，与 uiautomator dump 的坐标系一致。
+- **截图里没有悬浮球**：`bubble-hide ok` 之后才抓帧。此前在详情页看到的绿色圆钮
+  是悬浮球浮在 App 界面上的叠加层，不是快照图片内容——关掉悬浮球再打开快照即可证实。
+- 端到端：抓取 → 详情页滚动到节点列表 → 点选「跳过」→ 生成规则（自检「这一帧命中 1」）
+  → 保存 → 规则列表出现「文字里包含「跳过」 / 动作：点一下」。
+
+### 修掉的真实 bug：详情页滚不动
+
+截图是整屏比例（1220×2712），`ScreenshotOverlayView` 高度约 2445px，
+节点列表和「生成跳过规则」按钮全在它下方。原来 `onTouchEvent` 无条件 `return true`，
+`ScrollView` 收不到任何滑动事件，用户永远滚不到列表——抓完快照却没法建规则。
+现在竖向滑动超过阈值就 `requestDisallowInterceptTouchEvent(false)` 交还父容器，
+点击仍然照旧选中节点。
+
+### 待查
+
+- 覆盖安装后无障碍服务被系统清空（`enabled_accessibility_services=null`），
+  即使已授予 `WRITE_SECURE_SETTINGS` 也没有自动恢复，需要手动写回。
+  `onUnbind` 里已有 `KeepAlive.checkAndRecover`，这次没生效，原因未确认。
+
 ## 验证 - 2026-11-03 · 遗留三件（无代码改动）
 
 ### 1. 受控工程编译问题解决，但回撤仍然覆盖不到

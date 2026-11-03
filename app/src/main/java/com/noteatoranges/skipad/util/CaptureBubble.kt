@@ -64,6 +64,7 @@ object CaptureBubble {
     }
 
     fun show(context: Context) {
+        android.util.Log.i("DaxiaojieEngine", "bubble-show enter exists=${view != null} canDraw=${Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)}")
         if (view != null) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) return
         val appContext = context.applicationContext
@@ -238,11 +239,16 @@ object CaptureBubble {
     }
 
     fun hide(context: Context) {
-        val v = view ?: return
+        val v = view ?: run {
+            android.util.Log.i("DaxiaojieEngine", "bubble-hide skipped view=null")
+            return
+        }
         try {
             (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
                 .removeViewImmediate(v)
+            android.util.Log.i("DaxiaojieEngine", "bubble-hide ok")
         } catch (e: Exception) {
+            android.util.Log.i("DaxiaojieEngine", "bubble-hide fail ${e.javaClass.simpleName}")
         }
         view = null
     }

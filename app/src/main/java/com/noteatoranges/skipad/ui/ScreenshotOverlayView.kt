@@ -155,7 +155,35 @@ class ScreenshotOverlayView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
-        if (e.action == android.view.MotionEvent.ACTION_DOWN) longFired = false
+        when (e.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                longFired = false
+                dragging = false
+                downX = e.x
+                downY = e.y
+                // 先按「点击」处理，把滚动留给下面判断
+                parent?.requestDisallowInterceptTouchEvent(true)
+            }
+            android.view.MotionEvent.ACTION_MOVE -> {
+                if (!dragging) {
+                    val dx = Math.abs(e.x - downX)
+                    val dy = Math.abs(e.y - downY)
+                    val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+                    // 竖向滑动超过阈值就交还父 ScrollView：
+                    // 截图是整屏比例，节点列表和「生成跳过规则」按钮一定在它下方，
+                    // 以前这里无条件消费所有事件，用户根本滚不到下面去
+                    if (dy > slop && dy > dx) {
+                        dragging = true
+                        parent?.requestDisallowInterceptTouchEvent(false)
+                        return false
+                    }
+                }
+            }
+            android.view.MotionEvent.ACTION_UP,
+            android.view.MotionEvent.ACTION_CANCEL -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
+            }
+        }
         gesture.onTouchEvent(e)
         val s = scaleToView()
         val bx = e.x / s
@@ -176,6 +204,10 @@ class ScreenshotOverlayView @JvmOverloads constructor(
         }
         return true
     }
+
+    private var downX = 0f
+    private var downY = 0f
+    private var dragging = false
 
     var onNodeTapped: ((SnapshotStore.Node?) -> Unit)? = null
 

@@ -39,7 +39,7 @@
 
     <string name="snap_channel">快照与规则</string>
     <string name="snap_notif_title">大小姐 运行中</string>
-    <string name="snap_notif_text">点一下抓取当前页面</string>
+    <string name="snap_notif_text">正在跳过开屏广告 · 点此查看设置</string>
     <string name="snapshot_selected">选中的元素</string>
     <string name="snapshot_pick_hint">点选截图上的元素（或下方列表），然后生成跳过规则</string>
     <string name="snapshot_target_app">目标应用：%1$s　（点这里改）</string>

@@ -456,7 +456,10 @@ class SkipAccessibilityService : AccessibilityService() {
             } catch (t: Throwable) {
                 traceW("bubble-restore-fail", t)
             }
-        }, 1500)
+            // 3000ms 而不是 1500ms：takeScreenshot 是异步的，系统真正抓帧的时刻
+            // 可能晚于调用几百毫秒。2026-11-03 实测，1500ms 恢复时截图还没抓完，
+            // 抓到的帧里带着刚弹回来的绿色圆钮，用户只能对着带球的原图点选
+        }, 3000)
     }
 
     /**
@@ -1894,9 +1897,12 @@ class SkipAccessibilityService : AccessibilityService() {
     // ———————— 快照 ————————
 
     private fun postWorkNotification() {
-        val pi = android.app.PendingIntent.getBroadcast(
+        // 通知只承担「服务在跑」和「点进来」两件事：抓取入口已经移到悬浮球，
+        // 通知里的「抓取快照」按钮会给人第二条路，反而让入口不唯一
+        val open = android.app.PendingIntent.getActivity(
             this, 0,
-            Intent(ACTION_TAKE_SNAPSHOT).setPackage(packageName),
+            Intent(this, com.noteatoranges.skipad.ui.MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
         )
         val n = NotificationCompat.Builder(this, SNAP_CHANNEL)
@@ -1905,9 +1911,7 @@ class SkipAccessibilityService : AccessibilityService() {
             .setContentText(getString(R.string.snap_notif_text))
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            // 整条通知都能点：以前只有右侧那个 action 能点，很多人压根看不到它
-            .setContentIntent(pi)
-            .addAction(R.drawable.ic_stat_keepalive, getString(R.string.snap_action), pi)
+            .setContentIntent(open)
             .build()
         try {
             val nm = androidx.core.app.NotificationManagerCompat.from(this)
@@ -2559,8 +2563,15 @@ class SkipAccessibilityService : AccessibilityService() {
         /** 抓取时认不出目标应用（应用屏蔽了无障碍）时占位，用户可在这之后手动指定 */
         const val UNKNOWN_PKG = "unknown"
 
-        /** 点悬浮钮后等多久再抓：圆钮移除后窗口在重排，马上抓会取到空树 */
-        const val BUBBLE_HIDE_DELAY_MS = 350L
+        /**
+         * 点悬浮钮后等多久再抓。
+         *
+         * 350ms 时圆钮已经 removeViewImmediate，但 2026-11-03 实测截出来的图里
+         * 仍然带着那颗绿色圆钮——截图走的是系统合成后的整屏帧，窗口移除到帧更新
+         * 之间还有延迟。800ms 是贴着「广告还在屏上」这条线的上限，宁可慢一点，
+         * 也不能让用户对着带圆钮的截图去点选。
+         */
+        const val BUBBLE_HIDE_DELAY_MS = 800L
 
         /** 抓不到窗口时的重试次数与间隔（总等待 ≈ 3×320ms，用户基本感觉不到） */
         const val CAPTURE_MAX_RETRY = 3

@@ -213,7 +213,8 @@ object Backup {
                     settings++
                 }
                 if (j.has("bubble")) {
-                    CaptureBubble.setEnabled(context, j.optBoolean("bubble", false))
+                    // 缺字段按默认开处理：抓取入口已移到悬浮球，恢复成关闭等于没有入口
+                    CaptureBubble.setEnabled(context, j.optBoolean("bubble", true))
                     settings++
                 }
             }
