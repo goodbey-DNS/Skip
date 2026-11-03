@@ -32,6 +32,14 @@
 - 合并后最多约 900 行，`explain` 里逐行查应用名，靠 `AppLabels` 的 30 条缓存兜住；
   不缓存列表的话这里会变成几百次 PackageManager 跨进程调用。
 
+### 测试环境（与本 App 无关，但会误导排查）
+
+- **`adb shell monkey` 会打开系统自动旋转**：方向锁定从开（0）变成关（1）。
+  实测 monkey 启动 skipad 或 skiptest 都会改；而 `adb install -r` 连续 3 次、
+  `uiautomator dump`、`am start` 均不改。以后启动 App 一律用
+  `adb shell am start -n com.noteatoranges.skipad/.ui.MainActivity`，不要用 monkey。
+  2026-11-04 这次「谁把方向锁定关了」查了一上午，元凶就是它。
+
 ## 0.17.75 - 2026-11-04 · 诊断可见化：把引擎痕迹翻成人话（已发布）
 
 ### 为什么
