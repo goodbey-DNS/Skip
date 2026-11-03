@@ -14,6 +14,9 @@ import com.noteatoranges.skipad.core.EngineTrace
 import com.noteatoranges.skipad.util.AppLabels
 import com.noteatoranges.skipad.util.Ui
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 诊断页：把引擎痕迹翻译成「刚才发生了什么」。
@@ -51,22 +54,41 @@ class DiagnosisActivity : AppCompatActivity() {
     private fun loadAsync() {
         val appContext = applicationContext
         Thread {
-            // 结论日志优先：它跨重启保留，且已经滤掉了扫描噪音。
-            // 内存记录里除结论外全是 scan 一类的过程行，翻译时也全被丢掉，读它没有额外收益
-            val decision = EngineTrace.decisionLines()
-            val mem = EngineTrace.lines()
-            val lines = when {
-                decision.isNotEmpty() -> decision
-                mem.isNotEmpty() -> mem
-                else -> lastDiskLines()
-            }
+            // 三处来源合并，而不是挑一处：
+            // 只读结论日志会漏 —— 它由服务进程写，UI 进程打开时可能还没读到最新几行，
+            // 实测出现过「日志里有 verified，页面却是空的」。合并后再去重，哪一处有都不丢。
+            val merged = collectLines()
             val labelOf = labeler(appContext)
-            val events = Diagnosis.explain(lines, labelOf)
+            val events = Diagnosis.explain(merged, labelOf)
             runOnUiThread {
-                fromDisk = decision.isNotEmpty() && mem.isEmpty()
+                fromDisk = EngineTrace.lines().isEmpty() && merged.isNotEmpty()
                 render(events)
             }
         }.start()
+    }
+
+    /**
+     * 合并结论日志、滚动日志、内存记录，统一成落盘时间戳格式后去重排序。
+     *
+     * 内存行只有 `HH:mm:ss.SSS`，没有日期，直接和时间戳完整的行放一起没法排序，
+     * 所以先补上当天的 `MM-dd`。同一事件在三个来源里各有一份，补完之后字符串一致，
+     * [distinct] 就能把它们收成一条。
+     */
+    private fun collectLines(): List<String> {
+        val today = SimpleDateFormat("MM-dd", Locale.ROOT).format(Date())
+        val out = ArrayList<String>(900)
+        out.addAll(lastDiskLines())
+        out.addAll(EngineTrace.decisionLines())
+        for (line in EngineTrace.lines()) {
+            val t = line.trim()
+            if (t.isEmpty()) continue
+            // 第 3 个字符是冒号 = 内存格式，缺日期
+            out.add(if (t.length > 3 && t[2] == ':') "$today $t" else t)
+        }
+        return out.map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .sorted()
     }
 
     /** 最近一份落盘日志的尾部；没有就返回空列表 */
