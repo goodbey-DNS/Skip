@@ -940,9 +940,14 @@ class SkipAccessibilityService : AccessibilityService() {
                         traceV("wcc-switch $ep prev=$lastShownPkg")
                         lastShownPkg = ep
                         lastStateChangeAt[ep] = now
-                        // 这条兜底路径同样代表「新的一轮」，续窗状态必须一起清。
-                        // 不清的话上一轮的 retried=true 会残留，这一轮永远不会续窗（0.17.58）。
-                        resetRetryState(ep)
+                        // 这条兜底路径同样代表「新的一轮」，必须和 WSC 的 freshSwitch
+                        // 分支清一样的东西。0.17.58 只补了续窗三个状态，漏了规则计数——
+                        // 后果是 0.17.60 跑批发现的：小米广告容器第一次成功点掉用掉
+                        // maxCount=2 之后，count 永远停在 2，此后每一次容器广告都在
+                        // gate-max 被挡在点击之前，日志里是「命中十几次、一次没点」。
+                        // 换成 onAppSwitched 而不是只加一行，是为了让两个入口永远同步：
+                        // 以后往「新一轮」里加状态，改这一处就够了
+                        onAppSwitched(ep)
                         enterHotWindow(ep)
                         // 坐标规则也要排一次：不走窗口切换事件的应用（计算器这类）
                         // 只靠 WSC 分支排的话，它们的坐标规则一次都不会执行
