@@ -2,6 +2,44 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 工程 - 2026-11-03 · 本地出包脚本 + CI 只在 tag 构建（不动版本号）
+
+这一条不含任何应用行为改动，0.17.60 仍然是当前发布版本。
+
+### 起因
+
+实测两个数字：本地改完代码增量构建 **15 秒**，CI 从 push 到 Release 上线端到端约 **4 分钟**。
+更要紧的是 `push branches: [main]` 和 `push tags: [v*]` 都会触发构建——每次发版跑两遍，
+main 那遍只上传 artifact、从来不下载，等于白等一倍时间。
+
+### 改了什么
+
+- `.github/workflows/build.yml`：去掉 `branches: [main]`，只在打 tag 时构建；
+  `workflow_dispatch` 保留，需要单独验证 CI 时手动触发。
+- 新增 `tools/build-local.ps1`：从 `H:\SkipAd-signing` 取 keystore 与密码，
+  构建 `assembleRelease`，产物按 `daxiaojie-v<版本>-local.apk` 落到 `.temp\local-build`。
+
+### 为什么本地包不能当发布包
+
+签名相同（同一 keystore，能互相覆盖安装），但本地绕过了 CI 的两道闸：
+`testDebugUnitTest` 和 apksigner/aapt2 校验（验签、查 debuggable）。
+本地 JDK 在含中文的路径下，Gradle 起测试 worker 会 classpath 断裂，单测只能在 CI 跑。
+所以分工是：本地负责快（改代码、装机看日志），CI 负责对（单测、验签、发布）。
+
+### 踩坑
+
+`gradlew.bat` 按**当前工作目录**找 `settings.gradle`。脚本第一次从 `G:\teleagent工作区`
+直接调用，报 `Directory 'G:\teleagent工作区' does not contain a Gradle build`。
+现在构建前 `Push-Location $repo`，无论从哪里调用脚本都能跑。
+
+keystore 临时复制到仓库根（`build.gradle` 固定读 `rootDir/ci-keystore.jks`），
+`finally` 里无论成败都删除；跑完实测 `ci-keystore.jks` 与其 `.bak` 都不存在。
+
+### 实测
+
+脚本一次跑通：14.6 秒出包，产物 2,835,874 字节——与 CI 发布包**字节数完全相同**，
+说明两边 build-tools 一致，本地验证结论可以直接迁移到发布包上。
+
 ## 0.17.60 - 2026-11-03 · 过渡页不计数 + 空窗页不再续窗
 
 两条都是 design.md「已知缺口」里的遗留项，共同点是**表面改法都会引入新问题**，

@@ -1,8 +1,11 @@
 name: Build APK
 
 on:
+  # 只在打 tag 时构建。原来 push main 也触发一次，等于每次发版跑两遍：
+  # main 那次只上传 artifact（没人下载），tag 那次才发 Release。
+  # 日常编译自检改到本地（scripts/build-local.ps1），几秒到一分钟出包，
+  # CI 只负责「跑单测 + 验签 + 发布」这三件本地做不了的事。
   push:
-    branches: [ main ]
     tags: [ 'v*' ]
   workflow_dispatch:
 
