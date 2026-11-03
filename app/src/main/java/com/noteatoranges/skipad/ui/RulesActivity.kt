@@ -104,7 +104,6 @@ class RulesActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         CaptureBubble.onClick = { bubbleClicked() }
-        CaptureBubble.onLongClick = { SkipAccessibilityService.instance?.bubbleLongClicked() }
         renderRules()
         renderKeywords()
         renderSnapshots()
@@ -118,7 +117,6 @@ class RulesActivity : AppCompatActivity() {
         // 又不会把还挂在屏幕上的悬浮钮弄成哑巴
         val svc = SkipAccessibilityService.instance
         CaptureBubble.onClick = if (svc != null) ({ svc.bubbleClicked() }) else null
-        CaptureBubble.onLongClick = if (svc != null) ({ svc.bubbleLongClicked() }) else null
     }
 
     // —————————— 关键字 ——————————
@@ -369,7 +367,8 @@ class RulesActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         info.addView(TextView(this).apply {
-            text = getString(if (r.kind == "node") R.string.rule_kind_node else R.string.rule_kind_point)
+            // 坐标规则已整体移除：老数据还留在库里，但不会再执行，标出来让用户删掉
+            text = if (r.kind == "node") getString(R.string.rule_kind_node) else "坐标规则（已停用）"
             textSize = 13f
             setTextColor(getColor(R.color.text_primary))
             paint.isFakeBoldText = true
@@ -382,17 +381,7 @@ class RulesActivity : AppCompatActivity() {
                     r.nodePath?.let { "按层级 $it" },
                     "动作：${r.actionLabel}",
                 ).joinToString(" / ")
-                else -> buildString {
-                    if (r.hasDpPoint) {
-                        append("从屏幕中心往右 ${r.dpX?.toInt()}、往下 ${r.dpY?.toInt()}")
-                    } else if (r.hasAnchor) {
-                        append("挨着「${r.anchorVid?.substringAfterLast('/') ?: r.anchorText}」点")
-                        append("，偏移 ${r.dxDp ?: 0}, ${r.dyDp ?: 0}")
-                    } else {
-                        append("屏幕的 ${(100 * (r.xRatio ?: 0f)).toInt()}%、${(100 * (r.yRatio ?: 0f)).toInt()}% 处")
-                    }
-                    append(" · 动作：${r.actionLabel}，等 ${r.delayMs}ms")
-                }
+                else -> "按屏幕坐标的规则已停用，建议删除"
             }
             textSize = 12f
             setTextColor(getColor(R.color.text_secondary))

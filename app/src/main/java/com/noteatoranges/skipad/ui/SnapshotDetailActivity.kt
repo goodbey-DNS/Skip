@@ -76,7 +76,6 @@ class SnapshotDetailActivity : AppCompatActivity() {
         // 位图按 inSampleSize=2 解码，只有一半大，拿它算会让控件框整体偏 2 倍
         overlay.setContent(bmp, nodes, meta.screenW, meta.screenH)
         overlay.onNodeTapped = { node -> selectNode(node) }
-        overlay.onLongTapped = { x, y -> askLongPressPoint(x, y) }
         genButton.setOnClickListener {
             selected?.let { showGenerateDialog(it) }
         }
@@ -166,8 +165,17 @@ class SnapshotDetailActivity : AppCompatActivity() {
             return
         }
         findViewById<TextView>(R.id.empty_text).visibility = View.GONE
+        // 排序：文案像「跳过/关闭」的排最前，其次可点击，最后按面积从小到大。
+        // 以前只按「可点击 + 面积」，整页容器和关闭钮会挤在一起，用户还得自己找
+        fun looksLikeSkip(n: SnapshotStore.Node): Boolean {
+            val t = (n.text + " " + n.desc).lowercase()
+            return listOf("跳过", "跳過", "skip", "关闭", "關閉", "close", "×", "✕")
+                .any { t.contains(it) }
+        }
         val sorted = nodes.sortedWith(
-            compareByDescending<SnapshotStore.Node> { it.clickable }.thenBy { it.w * it.h }
+            compareByDescending<SnapshotStore.Node> { looksLikeSkip(it) }
+                .thenByDescending { it.clickable }
+                .thenBy { it.w * it.h }
         )
         sorted.forEach { n ->
             val row = LinearLayout(this).apply {
@@ -211,132 +219,27 @@ class SnapshotDetailActivity : AppCompatActivity() {
     /**
      * 点完一个节点之后怎么记它。
      *
-     * 以前是把五种定位方式一次性摊给用户选（按文字/按编号/按层级/按位置/挨着某元素），
-     * 等于让人判断「这个按钮有没有 id、结构路径可不可用」——这些在界面上根本看不见，
-     * 用户只能猜。而引擎匹配是「文字 或 编号」任一命中即可，既然能同时存，就不用二选一。
-     *
-     * 现在的原则：看得见的证据优先，问得越少越好。
-     * - 有文字 → 问关键词（顺便把编号也存上，任一个命中都算）
-     * - 没文字有编号 → 直接存，不问
-     * - 纯图标 → 才问一次「旁边有没有字」
+     * 只保留「按文字」「按控件编号」「按结构路径」三种——都是看得见、可复核的特征。
+     * 按屏幕坐标的记法（自由取点、节点中心位置、锚点相对偏移）已经移除：
+     * 广告位置一变就点到别处，识别不到的时候用户自己点一下更快。
      */
     private fun showGenerateDialog(n: SnapshotStore.Node) {
         val hasText = n.text.isNotEmpty() || n.desc.isNotEmpty()
         when {
             hasText -> askText(n)
             n.vid.isNotEmpty() -> confirm("node", viewId = n.vid)
-            else -> askFallback(n)
-        }
-    }
-
-    /** 纯图标按钮：问一句「旁边有没有字」，比让人看懂五种定位方式容易得多 */
-    private fun askFallback(n: SnapshotStore.Node) {
-        val opts = ArrayList<String>()
-        opts.add("旁边有字——再点一下那个字")
-        opts.add("都没有——就按现在的位置记")
-        // 结构路径最容易在改版后失配，藏到最后一项，不进主流程
-        if (n.path.isNotEmpty()) opts.add("按结构位置记（进阶，改版就失效）")
-        AlertDialog.Builder(this)
-            .setTitle("这个按钮没有文字也没有编号")
-            .setMessage("它在屏幕上是个纯图标，只能靠位置认。选一种记法：")
-            .setItems(opts.toTypedArray()) { _, which ->
-                when (which) {
-                    0 -> askAnchor(n)
-                    1 -> {
-                        val (rw, rh) = realScreenPx()
-                        confirm("point", xRatio = (n.l + n.w / 2f) / rw, yRatio = (n.t + n.h / 2f) / rh)
-                    }
-                    else -> confirm(
-                        "node",
-                        nodePath = n.path,
-                        nodeWinId = n.winId,
-                        nodeCls = n.cls,
-                        nodeWDp = (n.w / resources.displayMetrics.density).toInt(),
-                        nodeHDp = (n.h / resources.displayMetrics.density).toInt(),
-                    )
-                }
-            }
-            .show()
-    }
-
-    /**
-     * 选一个「旁边有字」的元素当锚点，偏移自动算。
-     *
-     * 以前让用户手填「往右多少、往下多少」，单位是 dp —— 没人知道那是什么，
-     * 提示里写着 0, 0，于是大家都照着填 0, 0。现在从这一页的文字里挑一个，
-     * 两块矩形一减就是偏移，用户只需要认得「那个字」。
-     */
-    private fun askAnchor(target: SnapshotStore.Node) {
-        val candidates = nodes.filter { it.text.isNotEmpty() || it.desc.isNotEmpty() }
-            .sortedByDescending { it.text.isNotEmpty() }
-            .take(30)
-        if (candidates.isEmpty()) {
-            Toast.makeText(this, "这一页没有能当参照的文字", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val labels = candidates.map { c ->
-            val t = c.text.ifEmpty { c.desc }
-            "#${c.idx} 「${t.take(18)}」"
-        }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("点一下它旁边那个字")
-            .setItems(labels) { _, which -> useAnchor(target, candidates[which]) }
-            .setNegativeButton("取消", null)
-            .show()
-    }
-
-    private fun useAnchor(target: SnapshotStore.Node, anchor: SnapshotStore.Node) {
-        val density = resources.displayMetrics.density
-        if (density <= 0f) return
-        // 与 SkipAccessibilityService.resolvePoint 的落点算法对齐：
-        // 落点 = 锚点中心X + dx、锚点底边Y + dy
-        val dx = ((target.l + target.w / 2f) - (anchor.l + anchor.w / 2f)) / density
-        val dy = ((target.t + target.h / 2f) - (anchor.t + anchor.h)) / density
-        val hasVid = anchor.vid.isNotEmpty()
-        confirm(
-            "point",
-            anchorVid = if (hasVid) anchor.vid else null,
-            anchorText = if (hasVid) null else anchor.text.ifEmpty { anchor.desc }.takeIf { it.isNotEmpty() },
-            dxDp = dx.toInt(),
-            dyDp = dy.toInt(),
-        )
-    }
-
-    /**
-     * 长按截图取点：不依赖节点树（H5 / 自绘控件根本没节点），
-     * 存成「相对屏幕中心的 dp」，回放时按当前屏幕密度换算。
-     */
-    private fun askLongPressPoint(x: Int, y: Int) {
-        val dm = resources.displayMetrics
-        // 用截图自身的像素尺寸（overlay 已按 meta 与节点包围盒校准过），
-        // 不用 displayMetrics：后者是不含导航栏的「应用可用高度」，中心点会偏上
-        val srcW = overlay.contentW.takeIf { it > 0 } ?: dm.widthPixels
-        val srcH = overlay.contentH.takeIf { it > 0 } ?: dm.heightPixels
-        // 抓快照时的密度未必等于当前密度，按抓取尺寸比例换算成 dp 更稳
-        val srcDensity = dm.density * (srcW.toFloat() / dm.widthPixels)
-        val dpX = (x - srcW / 2f) / srcDensity
-        val dpY = (y - srcH / 2f) / srcDensity
-        val input = EditText(this).apply {
-            setText("%.0f, %.0f".format(dpX, dpY))
-            setSelection(text.length)
-            setPadding(dp(20), dp(8), dp(20), dp(8))
-        }
-        AlertDialog.Builder(this)
-            .setTitle("长按取点")
-            .setMessage(
-                "已取点：从屏幕中心往右 ${dpX.toInt()}、往下 ${dpY.toInt()}\n" +
-                    "单位约一根手指宽（dp），右下为正。数字可以直接改来微调；" +
-                    "存的是这个单位不是百分比，换分辨率也不会偏。"
+            n.path.isNotEmpty() -> confirm(
+                "node",
+                nodePath = n.path,
+                nodeWinId = n.winId,
+                nodeCls = n.cls,
+                nodeWDp = (n.w / resources.displayMetrics.density).toInt(),
+                nodeHDp = (n.h / resources.displayMetrics.density).toInt(),
             )
-            .setView(input)
-            .setPositiveButton("生成规则") { _, _ ->
-                val parts = input.text.toString().split(",", "，")
-                val dx = parts.getOrNull(0)?.trim()?.toFloatOrNull() ?: dpX
-                val dy = parts.getOrNull(1)?.trim()?.toFloatOrNull() ?: dpY
-                confirm("point", dpX = dx, dpY = dy)
-            }
-            .setNegativeButton("取消", null)
-            .show()
+            else -> Toast.makeText(
+                this, "这个元素既没有文字、没有编号，也没有结构路径，换个元素试试", Toast.LENGTH_LONG,
+            ).show()
+        }
     }
 
     /**

@@ -423,7 +423,9 @@ object RuleStore {
             }
             .map { r ->
                 SkipRule(
-                    id = "user:${r.id}",
+                    // 没绑定页面的规则单独打标：这类规则在全应用生效，主界面同位置也可能命中，
+                    // 执行前必须看到广告迹象才允许点（见 scanAndAct）
+                    id = if (r.activity.isNullOrBlank()) "userfree:${r.id}" else "user:${r.id}",
                     patterns = listOfNotNull(r.textContains),
                     viewIds = listOfNotNull(r.viewId?.lowercase(java.util.Locale.ROOT)),
                     maxAreaRatio = 0.3f,

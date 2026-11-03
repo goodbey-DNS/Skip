@@ -376,12 +376,13 @@ class SkipAccessibilityService : AccessibilityService() {
         if (com.noteatoranges.skipad.util.CaptureBubble.isEnabled(this)) {
             com.noteatoranges.skipad.util.CaptureBubble.apply(this)
             com.noteatoranges.skipad.util.CaptureBubble.onClick = { bubbleClicked() }
-            com.noteatoranges.skipad.util.CaptureBubble.onLongClick = { bubbleLongClicked() }
         }
         if (!snapshotRegistered) {
             registerReceiver(
                 snapshotReceiver, IntentFilter(ACTION_TAKE_SNAPSHOT),
-                ContextCompat.RECEIVER_NOT_EXPORTED,
+                // 必须 EXPORTED：通知里的按钮走 PendingIntent，由系统代发广播，
+                // 发送方不是本应用 uid，NOT_EXPORTED 会被直接丢弃（点了没反应）
+                ContextCompat.RECEIVER_EXPORTED,
             )
             snapshotRegistered = true
         }
@@ -451,7 +452,6 @@ class SkipAccessibilityService : AccessibilityService() {
                 if (com.noteatoranges.skipad.util.CaptureBubble.isEnabled(this)) {
                     com.noteatoranges.skipad.util.CaptureBubble.apply(this)
                     com.noteatoranges.skipad.util.CaptureBubble.onClick = { bubbleClicked() }
-                    com.noteatoranges.skipad.util.CaptureBubble.onLongClick = { bubbleLongClicked() }
                 }
             } catch (t: Throwable) {
                 traceW("bubble-restore-fail", t)
@@ -460,49 +460,6 @@ class SkipAccessibilityService : AccessibilityService() {
             // 可能晚于调用几百毫秒。2026-11-03 实测，1500ms 恢复时截图还没抓完，
             // 抓到的帧里带着刚弹回来的绿色圆钮，用户只能对着带球的原图点选
         }, 3000)
-    }
-
-    /**
-     * 长按悬浮钮：立刻按坐标规则点一次。
-     *
-     * 这是"自动识别不到的应用内广告"的人工兜底——用户看着广告长按一下就能点掉，
-     * 不依赖任何启发式判断，因此零误判。冷启动开屏仍由 [schedulePointTaps] 自动触发。
-     */
-    fun bubbleLongClicked() {
-        // 优先取「不是自己」的窗口：悬浮钮本身也是一个窗口，rootInActiveWindow 有可能
-        // 指向它自己的 overlay。顺便和主扫描链路共用 activeWindowRoot 的兜底，
-        // 部分 ROM 上 rootInActiveWindow 恒为 null，只用它等于长按完全没反应
-        val root = activeWindowRoot(lastFgPkg) ?: runCatching { rootInActiveWindow }.getOrNull()
-        val pkg = root?.packageName?.toString() ?: lastFgPkg
-        if (root == null || pkg == null) {
-            bubbleToast("读不到当前页面")
-            return
-        }
-        val act = lastActivityClass[pkg] ?: ""
-        val rules = RuleStore.pointRules(this, pkg, act)
-        if (rules.isEmpty()) {
-            val label = com.noteatoranges.skipad.util.AppLabels.get(this, pkg).label
-            bubbleToast("$label 没有坐标规则")
-            return
-        }
-        var ok = 0
-        rules.forEach { r ->
-            val point = resolvePoint(root, r) ?: run {
-                bubbleToast("规则 ${r.id.take(6)} 的锚点控件不在当前页面")
-                return@forEach
-            }
-            val fired = when (r.action) {
-                SkipRule.ACTION_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
-                SkipRule.ACTION_NONE -> true
-                else -> clicker?.clickPoint(point.first, point.second) == true
-            }
-            if (fired) ok++
-            traceD("manual-point ${r.id} ${r.actionLabel} $pkg" +
-                    " (${(point.first / resources.displayMetrics.widthPixels * 100).toInt()}%," +
-                    "${(point.second / resources.displayMetrics.heightPixels * 100).toInt()}%) ok=$fired",
-            )
-        }
-        bubbleToast("已执行 ${rules.size} 条坐标规则（成功 $ok）")
     }
 
     // ———————— 日志：logcat + 进程内痕迹 ————————
@@ -537,14 +494,14 @@ class SkipAccessibilityService : AccessibilityService() {
      * 只有看形状才分得出来。
      */
     private fun recordRuleHit(rule: SkipRule, node: AccessibilityNodeInfo) {
-        if (!rule.id.startsWith("user:")) return
+        if (!rule.id.startsWith("user")) return
         // 复用本轮的节点属性缓存：这里读 text/class/bounds 是一次跨进程往返，
         // 扫描时已经读过一遍，再读一遍纯属浪费
         val f = runCatching { factsCache.of(node) }.getOrNull() ?: return
         val label = f.label ?: ""
         val cls = f.cls.substringAfterLast('.')
         val evidence = "$cls ${f.rect.width()}x${f.rect.height()} 「${label.take(24)}」"
-        RuleStore.noteHit(rule.id.removePrefix("user:"), evidence)
+        RuleStore.noteHit(rule.id.substringAfter(':'), evidence)
         if (hitFlushScheduled) return
         hitFlushScheduled = true
         // 延迟合并：一次跳转会连来好几个事件，每条都写盘等于每次开屏都序列化一遍规则表
@@ -604,67 +561,6 @@ class SkipAccessibilityService : AccessibilityService() {
         }
     } catch (e: Exception) {
         resources.displayMetrics.widthPixels to resources.displayMetrics.heightPixels
-    }
-
-    /**
-     * 解析坐标规则的落点。
-     *
-     * 有锚点时按锚点控件的实际矩形算（锚点中心 + dx，锚点底边 + dy），这样换机型、
-     * 分屏、弹窗内容变高变矮都不影响——固定屏幕比例做不到这点；
-     * 锚点找不到（页面变了）才退回屏幕比例，两者都没有就放弃本次。
-     */
-    private fun resolvePoint(root: AccessibilityNodeInfo?, r: com.noteatoranges.skipad.db.SkipAppRule): Pair<Float, Float>? {
-        // 自由取点：存的是「相对屏幕中心的 dp」，换分辨率/密度都能换算回正确位置
-        if (r.hasDpPoint) {
-            val (sw, sh) = realScreenPx()
-            return (sw / 2f + dpF(r.dpX ?: 0f)) to (sh / 2f + dpF(r.dpY ?: 0f))
-        }
-        if (r.hasAnchor) {
-            val anchor = findAnchorRect(root, r)
-            if (anchor != null) {
-                return (anchor.exactCenterX() + dp(r.dxDp ?: 0)) to
-                    (anchor.bottom.toFloat() + dp(r.dyDp ?: 0))
-            }
-            traceD("anchor-miss ${r.id} vid=${r.anchorVid} text=${r.anchorText}")
-            if (r.xRatio == null || r.yRatio == null) return null
-        }
-        val xr = r.xRatio ?: return null
-        val yr = r.yRatio ?: return null
-        // 比例也是相对真实屏幕存的（生成时用的同一套尺寸），不能混用 displayMetrics
-        val (rw, rh) = realScreenPx()
-        return rw * xr to rh * yr
-    }
-
-    /** 在树里找锚点控件，多个命中时取面积最小的那个（最具体的那个才是按钮本体） */
-    private fun findAnchorRect(root: AccessibilityNodeInfo?, r: com.noteatoranges.skipad.db.SkipAppRule): Rect? {
-        root ?: return null
-        val vid = r.anchorVid?.takeIf { it.isNotBlank() }?.lowercase(java.util.Locale.ROOT)
-        val txt = r.anchorText?.takeIf { it.isNotBlank() }
-        if (vid == null && txt == null) return null
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        var best: Rect? = null
-        var bestArea = Int.MAX_VALUE
-        var n = 0
-        while (queue.isNotEmpty() && n < ANCHOR_SCAN_NODES) {
-            val node = queue.removeFirst()
-            n++
-            val f = factsCache.of(node)
-            val vidHit = vid != null && f.vid?.lowercase(java.util.Locale.ROOT)?.contains(vid) == true
-            val textHit = txt != null &&
-                (f.text?.contains(txt, ignoreCase = true) == true ||
-                    f.desc?.contains(txt, ignoreCase = true) == true)
-            if (vidHit || textHit) {
-                val rect = f.rect
-                val area = rect.width() * rect.height()
-                if (area in 1 until bestArea) {
-                    best = Rect(rect)
-                    bestArea = area
-                }
-            }
-            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::add)
-        }
-        return best
     }
 
     /**
@@ -919,10 +815,6 @@ class SkipAccessibilityService : AccessibilityService() {
                 realCn?.let { lastActivityClass[ep] = it }
                 // 换页：清属性缓存、清规则计数、下次事件重建扫描器
                 onPageChanged(ep, act)
-                if (freshSwitch && ep !in blacklist) {
-                    // 用户 point 规则优先
-                    RuleStore.pointRules(this, ep, act).forEach { r -> schedulePointTaps(ep, r) }
-                }
                 lastFgPkg = ep
             }
         }
@@ -966,10 +858,6 @@ class SkipAccessibilityService : AccessibilityService() {
                         // 以后往「新一轮」里加状态，改这一处就够了
                         onAppSwitched(ep)
                         enterHotWindow(ep)
-                        // 坐标规则也要排一次：不走窗口切换事件的应用（计算器这类）
-                        // 只靠 WSC 分支排的话，它们的坐标规则一次都不会执行
-                        RuleStore.pointRules(this, ep, lastActivityClass[ep].orEmpty())
-                            .forEach { r -> schedulePointTaps(ep, r) }
                     }
                 }
             }
@@ -1206,6 +1094,16 @@ class SkipAccessibilityService : AccessibilityService() {
         val rule = hit.second
         // 冷却 / 次数上限：拦在这里，误点的代价远大于漏跳
         if (!gate("$pkg|${rule.id}", rule.cooldownMs, rule.maxCount, now)) return false
+        // 广告证据必须在这一刻采：点完页面就换了
+        val adEv = hasAdEvidence(root, hit.first)
+        // 没绑定页面的用户规则（userfree:）在整个 App 生效，主界面同一位置也可能命中。
+        // 但只凭「没有广告字样」就把点击拦掉会误伤：大量真实开屏页只有「跳过」二字，
+        // 页面上根本没有「广告 / 推广」这类词。所以再要求「这一页明显不像开屏」——
+        // 用节点规模做代理：开屏页通常只有几十个节点，主界面动辄上百。
+        if (rule.id.startsWith("userfree:") && !adEv && nodeCountOf(root) > USERFREE_MAINSCREEN_NODES) {
+            traceV("userfree-skip $pkg 「$detail」 无广告迹象且页面像主界面，不点")
+            return false
+        }
         if (rule.action == SkipRule.ACTION_NONE) {
             traceD("match-only $pkg 「$detail」 规则=${rule.id}")
             return false
@@ -1255,9 +1153,6 @@ class SkipAccessibilityService : AccessibilityService() {
         // 第一下没点掉时，「还在」既可能是广告没响应，也可能是页面已换、右上角另有
         // 别的小按钮——这时再补一次裸坐标点击，风险大于收益。所以 corner 一律不补刀。
         val retry = if (rule.id == CORNER_RULE.id) 0 else MAX_RETRY
-        // 广告证据必须在点击这一刻采：点完页面就换了，事后再去新页面上找「广告」字样
-        // 只会找到主界面。命中本来就少，多一次整树遍历可以忽略
-        val adEv = hasAdEvidence(hitRoot, hit.first)
         if (adEv) traceV("ad-evidence $pkg 「$detail」 规则=${rule.id}")
         else traceV("no-ad-evidence $pkg 「$detail」 规则=${rule.id}")
         pending = PendingSkip(
@@ -1774,6 +1669,28 @@ class SkipAccessibilityService : AccessibilityService() {
      * 实测依据（0.17.52 那次清理大师）：点在启动页自带的「跳过」上，页面里既没有
      * SDK 资源名，也没有广告字样，几毫秒后真正的 `SplashAdActivity` 才出现。
      */
+    /**
+     * 粗略统计页面节点数，只用来区分「开屏页」和「主界面」。
+     *
+     * 数到上限就停，不追求精确值——开屏页一般几十个节点，主界面成百上千，
+     * 阈值取 [USERFREE_MAINSCREEN_NODES] 足够把两类分开。
+     */
+    private fun nodeCountOf(root: AccessibilityNodeInfo?): Int {
+        root ?: return 0
+        var n = 0
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        while (queue.isNotEmpty() && n <= USERFREE_MAINSCREEN_NODES) {
+            val cur = queue.removeFirst()
+            n++
+            val c = runCatching { cur.childCount }.getOrDefault(0)
+            for (i in 0 until minOf(c, 20)) {
+                runCatching { cur.getChild(i) }.getOrNull()?.let { queue.add(it) }
+            }
+        }
+        return n
+    }
+
     private fun hasAdEvidence(root: AccessibilityNodeInfo?, hit: AccessibilityNodeInfo): Boolean {
         var cur: AccessibilityNodeInfo? = hit
         var depth = 0
@@ -1805,8 +1722,7 @@ class SkipAccessibilityService : AccessibilityService() {
         return false
     }
 
-    private fun hasAdPrefix(vid: String): Boolean {
-        val v = vid.lowercase(java.util.Locale.ROOT)
+    private fun hasAdPrefix(vid: String): Boolean {        val v = vid.lowercase(java.util.Locale.ROOT)
         return BuiltinRules.AD_EVIDENCE_PREFIXES.any { v.contains(it) }
     }
 
@@ -1834,87 +1750,41 @@ class SkipAccessibilityService : AccessibilityService() {
         cn.startsWith("android.") || cn.startsWith("androidx.") ||
             cn.startsWith("com.android.internal.")
 
-    // ———————— 坐标点按 ————————
-
-    private fun schedulePointTaps(pkg: String, r: com.noteatoranges.skipad.db.SkipAppRule) {
-        // 开屏窗口里 root 常常还是旧窗口，落点必须在真正要点的时刻算，不能提前算好。
-        //
-        // 点 4 次而不是 1 次：广告出现时界面还没就绪，第一下常落在入场动画或骨架屏上，
-        // 落空之后再没有第二次机会。参考 Android-Touch-Helper 的做法
-        // （300ms 起、每 500ms 一次、共 6 次），这里取 0/600/1200/1800 四拍。
-        // 闸门只在第一拍记一次账，后三拍是同一轮重试，不该被冷却挡掉。
-        var gateOpened = false
-        var aborted = false
-        POINT_RETRY_OFFSETS.forEachIndexed { i, off ->
-            mainHandler.postDelayed({
-                // postDelayed 的 runnable 抛异常没有人接：Handler 直接把进程带走。
-                // 坐标规则要读跨进程节点、要投递手势，都是会抛的地方
-                try {
-                    if (aborted) return@postDelayed
-                    // 必须和主扫描链路用同一套 root 兜底：部分 ROM 上 rootInActiveWindow 恒为
-                    // null，只认它的话坐标规则在那些机器上一次都不会触发（0.17.4 修的是同一个坑）
-                    val root = currentRootOf(pkg) ?: return@postDelayed
-                    val now = SystemClock.elapsedRealtime()
-                    // 盲点时间盒：窗口出现超过 8 秒还在按坐标点，说明早就不是开屏了，
-                    // 这时候点下去是拿用户的操作界面赌运气。只作用于坐标规则——
-                    // 按文字/控件匹配的规则有自己的形状闸，不需要这层
-                    val born = lastStateChangeAt[pkg]
-                    if (born != null && now - born > POINT_MAX_WINDOW_AGE_MS) {
-                        traceD("point-skip ${r.id} $pkg 窗口已 ${now - born}ms，超过盲点时间盒")
-                        aborted = true
-                        return@postDelayed
-                    }
-                    if (i == 0) {
-                        if (!gate("$pkg|${r.id}", r.cooldownMs, r.maxCount, now)) {
-                            aborted = true
-                            return@postDelayed
-                        }
-                        gateOpened = true
-                    } else if (!gateOpened) {
-                        return@postDelayed
-                    }
-                    val point = resolvePoint(root, r) ?: return@postDelayed
-                    val fired = when (r.action) {
-                        SkipRule.ACTION_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
-                        SkipRule.ACTION_NONE -> {
-                            traceD("point-match-only ${r.id} $pkg")
-                            true
-                        }
-                        else -> clicker?.clickPoint(point.first, point.second) ?: false
-                    }
-                    traceD("point#${i + 1} ${r.id} ${r.actionLabel} $pkg ok=$fired" +
-                            " (${(point.first / resources.displayMetrics.widthPixels * 100).toInt()}%," +
-                            "${(point.second / resources.displayMetrics.heightPixels * 100).toInt()}%)",
-                    )
-                } catch (t: Throwable) {
-                    aborted = true
-                    traceW("point-fail ${r.id} $pkg", t)
-                }
-            }, r.delayMs + off)
-        }
-    }
-
     // ———————— 快照 ————————
 
     private fun postWorkNotification() {
-        // 通知只承担「服务在跑」和「点进来」两件事：抓取入口已经移到悬浮球，
-        // 通知里的「抓取快照」按钮会给人第二条路，反而让入口不唯一
-        val open = android.app.PendingIntent.getActivity(
+        // 开屏只停 3–5 秒，下拉再展开 action 根本来不及，所以抓取按钮直接画进
+        // 折叠视图（RemoteViews），下拉即可见、可点，不需要展开或长按。
+        // 系统不允许应用强制展开 action，这是唯一能做到「收起状态可点」的路径。
+        val capture = android.app.PendingIntent.getBroadcast(
             this, 0,
+            Intent(ACTION_TAKE_SNAPSHOT).setPackage(packageName),
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
+        )
+        val open = android.app.PendingIntent.getActivity(
+            this, 1,
             Intent(this, com.noteatoranges.skipad.ui.MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
         )
+        val rv = android.widget.RemoteViews(packageName, R.layout.notification_capture)
+        rv.setTextViewText(R.id.notif_title, getString(R.string.snap_notif_title))
+        // 根布局和按钮都绑：MIUI 上实测按钮子控件偶尔收不到点击，
+        // 整块视图绑定后至少点哪都能抓
+        rv.setOnClickPendingIntent(R.id.notif_root, capture)
+        rv.setOnClickPendingIntent(R.id.notif_action, capture)
         val n = NotificationCompat.Builder(this, SNAP_CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_keepalive)
-            .setContentTitle(getString(R.string.snap_notif_title))
-            .setContentText(getString(R.string.snap_notif_text))
+            .setCustomContentView(rv)
+            .setCustomBigContentView(rv)
+            // 整条通知也直接抓取：广告就那几秒，少一步是一步
+            .setContentIntent(capture)
             .setOngoing(true)
-            // 最低优先级：不弹、不响、不亮图标，只在下拉通知栏里折叠着
-            .setPriority(NotificationCompat.PRIORITY_MIN)
-            .setSilent(true)
+            // 不要 setSilent(true)：实测它会让通知被系统打上 groupKey=silent，
+            // 整条折进「静默通知」，下拉后连条目都看不到。无声靠渠道 sound=null 实现
+            .setGroup("daxiaojie_capture")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setShowWhen(false)
-            .setContentIntent(open)
             .build()
         try {
             val nm = androidx.core.app.NotificationManagerCompat.from(this)
@@ -1923,18 +1793,19 @@ class SkipAccessibilityService : AccessibilityService() {
                 nmSys.createNotificationChannel(
                     android.app.NotificationChannel(
                         SNAP_CHANNEL, getString(R.string.snap_channel),
-                        android.app.NotificationManager.IMPORTANCE_MIN,
+                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
                     ).apply {
                         setShowBadge(false)
                         setSound(null, null)
                         enableVibration(false)
                     }
                 )
-                // 渠道重要性创建后不能改，只能换新 id。snapshot 是初始版，
-                // snapshot_v2 是「要显示抓取按钮」那版（DEFAULT），两个都删掉，
-                // 免得旧用户手机上留着一条显眼的常驻通知
-                runCatching { nmSys.deleteNotificationChannel("snapshot") }
-                runCatching { nmSys.deleteNotificationChannel("snapshot_v2") }
+                // 渠道重要性创建后不能改，只能换新 id：
+                // snapshot / snapshot_v2 是带 action 的老版本，snapshot_v3 是 MIN，
+                // snapshot_v4 是 LOW（会被归进静默通知）
+                listOf("snapshot", "snapshot_v2", "snapshot_v3", "snapshot_v4").forEach {
+                    runCatching { nmSys.deleteNotificationChannel(it) }
+                }
             }
             nm.notify(SNAP_NOTIF_ID, n)
         } catch (e: SecurityException) {
@@ -2103,7 +1974,13 @@ class SkipAccessibilityService : AccessibilityService() {
         }?.second?.packageName?.toString()
         val pkg = otherPkg ?: lastFgPkg ?: UNKNOWN_PKG
         traceI("capture attempt=$attempt candidates=${candidates.size} pkg=$pkg otherPkg=$otherPkg")
-        val act = lastActivityClass[pkg] ?: ""
+        // 页面名优先用窗口事件记下来的那个；没有就用窗口根节点的类名补。
+        // 补不上时规则会变成「整个 App 生效」，主界面同位置也可能被点到，
+        // 所以这里宁可多找一次，也不要把空值直接写进规则
+        val act = lastActivityClass[pkg]?.takeIf { it.isNotBlank() }
+            ?: candidates.firstOrNull()?.second?.className?.toString()
+                ?.takeIf { it.endsWith("Activity") }
+            ?: ""
         val w = resources.displayMetrics.widthPixels
         val h = resources.displayMetrics.heightPixels
 
@@ -2558,8 +2435,9 @@ class SkipAccessibilityService : AccessibilityService() {
          */
         const val BAD_PAGE_MS = 10 * 60_000L
 
-        // v3 起改用 IMPORTANCE_MIN：常驻通知只做保活，不在状态栏占位
-        const val SNAP_CHANNEL = "snapshot_v3"
+        // v5 起用 IMPORTANCE_DEFAULT + 自定义折叠视图：LOW/MIN 会被归进静默通知，
+        // 下拉里看不到；DEFAULT 才能保证折叠状态直接显示「抓取」按钮
+        const val SNAP_CHANNEL = "snapshot_v5"
         const val SNAP_NOTIF_ID = 2001
         const val ACTION_TAKE_SNAPSHOT = "com.noteatoranges.skipad.TAKE_SNAPSHOT"
 
@@ -2583,11 +2461,11 @@ class SkipAccessibilityService : AccessibilityService() {
         const val CAPTURE_MAX_RETRY = 3
         const val CAPTURE_RETRY_DELAY_MS = 320L
 
-        /** 坐标规则的重试节拍（相对 delayMs）：一次落空不等于失败，再补三拍 */
-        val POINT_RETRY_OFFSETS = longArrayOf(0L, 600L, 1200L, 1800L)
-
-        /** 盲点时间盒：窗口出现超过这个时长就不再按坐标点（正常开屏早该过去了） */
-        const val POINT_MAX_WINDOW_AGE_MS = 8000L
+        /**
+         * 节点数超过这个值就按「主界面」处理：没绑定页面的用户规则在这种页面上
+         * 即使命中也不点。开屏页通常只有几十个节点。
+         */
+        const val USERFREE_MAINSCREEN_NODES = 40
 
         /**
          * 「内容变化兜底」打开开屏窗的最小间隔。

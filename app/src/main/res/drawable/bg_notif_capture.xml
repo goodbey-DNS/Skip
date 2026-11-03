@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知折叠视图里「抓取」按钮的底：圆角绿底 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#16A34A" />
+    <corners android:radius="16dp" />
+</shape>

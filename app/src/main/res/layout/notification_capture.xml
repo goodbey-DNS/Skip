@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  通知的折叠视图：一行文字 + 一个「抓取」按钮。
+
+  目的：开屏广告只停 3–5 秒，系统默认要把通知展开才显示 action 按钮，
+  下拉再展开根本来不及。折叠状态能直接点的只有自定义视图这一条路。
+  高度压在 48dp 以内，Android 12+ 对折叠视图的可用高度有限制。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/notif_root"
+    android:layout_width="match_parent"
+    android:layout_height="48dp"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingLeft="12dp"
+    android:paddingRight="10dp">
+
+    <TextView
+        android:id="@+id/notif_title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:text="大小姐 · 正在守护"
+        android:textColor="#DE000000"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/notif_action"
+        android:layout_width="wrap_content"
+        android:layout_height="32dp"
+        android:gravity="center"
+        android:minWidth="64dp"
+        android:paddingLeft="14dp"
+        android:paddingRight="14dp"
+        android:background="@drawable/bg_notif_capture"
+        android:text="抓取"
+        android:textColor="#FFFFFFFF"
+        android:textSize="13sp" />
+</LinearLayout>

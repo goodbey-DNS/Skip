@@ -29,26 +29,13 @@ object CaptureBubble {
     private const val KEY_X = "pos_x"
     private const val KEY_Y = "pos_y"
 
-    /** 按住超过这个时长算长按：弹出「抓快照 / 点坐标」两项菜单 */
-    private const val LONG_PRESS_MS = 600L
-
-    /** 菜单宽度与每行高度（dp） */
-    private const val PANEL_W_DP = 96
-    private const val ROW_H_DP = 40
-
-    /** 菜单自动收起时长：选就选，不选别一直挡着 */
-    private const val PANEL_TIMEOUT_MS = 5000L
-
     @Volatile
     private var view: View? = null
 
     private var wm: WindowManager? = null
 
-    /** 点击回调（宿主设置；通常 = 隐藏→广播抓取→延时回弹） */
+    /** 点击回调（宿主设置；通常 = 隐藏→广播抓取→延时回弹）。长按也走这里 */
     var onClick: (() -> Unit)? = null
-
-    /** 长按回调：立即执行前台 App 的坐标规则（识别不到的广告手动点一下） */
-    var onLongClick: (() -> Unit)? = null
 
     fun isEnabled(context: Context): Boolean =
         // 默认关闭：圆钮常驻屏幕会挡内容，由用户在「跳过规则与快照」里自己打开
@@ -80,15 +67,6 @@ object CaptureBubble {
         val density = dm.density
         val size = (SIZE_DP * density + 0.5f).toInt()
         val pad = (6 * density + 0.5f).toInt()
-        val panelW = (PANEL_W_DP * density + 0.5f).toInt()
-        val rowH = (ROW_H_DP * density + 0.5f).toInt()
-        val rowGap = (6 * density).toInt()
-
-        fun roundBg(fill: Int): GradientDrawable = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = 14f * density
-            setColor(fill)
-        }
 
         val label = TextView(appContext).apply {
             text = "抓"
@@ -103,38 +81,12 @@ object CaptureBubble {
             }
         }
 
-        fun menuRow(text: String): TextView = TextView(appContext).apply {
-            this.text = text
-            gravity = Gravity.CENTER
-            setTextColor(0xFFFFFFFF.toInt())
-            textSize = 15f
-            background = roundBg(0xE616A34A.toInt())
-        }
-
-        val rowShot = menuRow("抓快照")
-        val rowPoint = menuRow("点坐标")
-        val panel = LinearLayout(appContext).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = View.GONE
-            addView(rowShot, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, rowH))
-            addView(
-                rowPoint,
-                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, rowH).apply {
-                    topMargin = rowGap
-                },
-            )
-        }
-        // 没接长按回调时（理论上不会）不摆出「点坐标」，免得点了没反应
-        if (onLongClick == null) rowPoint.visibility = View.GONE
-
         val container = FrameLayout(appContext).apply {
             addView(label, FrameLayout.LayoutParams(size, size))
-            addView(panel, FrameLayout.LayoutParams(panelW, FrameLayout.LayoutParams.WRAP_CONTENT))
         }
 
         val baseW = size + pad * 2
         val baseH = size + pad * 2
-        val openH = rowH * 2 + rowGap
 
         val lp = WindowManager.LayoutParams(
             baseW, baseH,
@@ -161,80 +113,34 @@ object CaptureBubble {
         // 存下来的位置可能来自另一套分辨率/横屏，先夹回屏幕内再用
         clamp()
 
-        var panelOpen = false
-        val collapse = Runnable {
-            if (panelOpen) {
-                panelOpen = false
-                panel.visibility = View.GONE
-                label.visibility = View.VISIBLE
-                lp.width = baseW
-                lp.height = baseH
-                clamp()
-                runCatching { wm.updateViewLayout(container, lp) }
-            }
-        }
-
-        fun closePanel() {
-            container.removeCallbacks(collapse)
-            collapse.run()
-        }
-
-        fun openPanel() {
-            if (panelOpen) return
-            panelOpen = true
-            label.visibility = View.GONE
-            panel.visibility = View.VISIBLE
-            lp.width = panelW
-            lp.height = openH
-            clamp()
-            runCatching { wm.updateViewLayout(container, lp) }
-            container.removeCallbacks(collapse)
-            container.postDelayed(collapse, PANEL_TIMEOUT_MS)
-        }
-
-        rowShot.setOnClickListener {
-            closePanel()
-            onClick?.invoke()
-        }
-        rowPoint.setOnClickListener {
-            closePanel()
-            onLongClick?.invoke()
-        }
-
         var downX = 0f
         var downY = 0f
         var moved = false
-        var downAt = 0L
         container.setOnTouchListener { _, e ->
             when (e.action) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = e.rawX; downY = e.rawY; moved = false
-                    downAt = System.currentTimeMillis()
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    // 面板展开时不跟着拖，否则手指一滑就把两个选项带跑
-                    if (!panelOpen) {
-                        val dx = e.rawX - downX
-                        val dy = e.rawY - downY
-                        if (moved || dx * dx + dy * dy > 100) {
-                            moved = true
-                            lp.x = (lp.x + dx).toInt()
-                            lp.y = (lp.y + dy).toInt()
-                            downX = e.rawX; downY = e.rawY
-                            clamp()
-                            wm.updateViewLayout(container, lp)
-                        }
+                    val dx = e.rawX - downX
+                    val dy = e.rawY - downY
+                    if (moved || dx * dx + dy * dy > 100) {
+                        moved = true
+                        lp.x = (lp.x + dx).toInt()
+                        lp.y = (lp.y + dy).toInt()
+                        downX = e.rawX; downY = e.rawY
+                        clamp()
+                        wm.updateViewLayout(container, lp)
                     }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    // 长按不再直接执行坐标点击：先弹两项菜单，选错也还有救。
-                    // 以前慢一点的点按就会在别人界面上按坐标点一下，不可撤销
-                    if (!panelOpen && !moved) {
-                        val held = System.currentTimeMillis() - downAt
-                        if (held >= LONG_PRESS_MS) openPanel() else onClick?.invoke()
-                    } else if (moved) {
+                    // 只保留「点一下就抓」。坐标规则已经取消，长按菜单没有存在的意义，
+                    // 按住超过 600ms 也按普通点击处理，少一层等待
+                    if (!moved) {
+                        onClick?.invoke()
+                    } else {
                         appContext.getSharedPreferences(PREF, Context.MODE_PRIVATE)
                             .edit().putInt(KEY_X, lp.x).putInt(KEY_Y, lp.y).apply()
                     }

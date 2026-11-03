@@ -2,6 +2,93 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.72–0.17.73 - 2026-11-04 · 删除坐标规则，聚焦快照识别（未发布）
+
+### 为什么删
+
+用户判断：**识别不出来的广告，点坐标本来就没意义——用户自己点关闭按钮更快，
+而且坐标规则位置一变就点到别处**。整条「按屏幕坐标」的链路全部移除：
+
+- 悬浮球长按菜单（「抓快照 / 点坐标」两项）整体删掉，长按 = 单击 = 抓取，
+  少一层等待；`CaptureBubble.onLongClick` 与 `bubbleLongClicked` 一并移除。
+- 快照详情页的「长按截图取点」删除（`askLongPressPoint`）。
+- 纯图标节点的「按现在的位置记」「挨着某个字记」两个选项删除
+  （`askFallback` / `askAnchor` / `useAnchor`）。
+- 冷启动自动执行坐标规则的 `schedulePointTaps` 删除，
+  `resolvePoint` / `findAnchorRect` / `POINT_RETRY_OFFSETS` / `POINT_MAX_WINDOW_AGE_MS` 一并清理。
+- 旧坐标规则数据保留在库里但不再执行，规则列表显示「坐标规则（已停用），建议删除」。
+- `SkipAppRule` 的 `dpX/dpY` 字段保留（兼容旧备份与旧规则反序列化），只是不再写新值。
+
+### 顺带的三项优化
+
+- **节点列表排序**：文案像「跳过/关闭/skip/close/×」的排最前，其次可点击，
+  最后按面积从小到大。以前整页容器和关闭钮挤在一起，用户得自己找。
+- **补全页面名**：抓快照时 `lastActivityClass` 为空就退到窗口根节点的类名，
+  避免规则落成「整个 App 生效」。
+- **无页面规则的误点防护**：`nodeRulesAsScannerRules` 对没绑定页面的规则打 `userfree:`
+  前缀；`scanAndAct` 命中后先算广告证据，`userfree:` 且无任何广告迹象时**不点**，
+  只记 `userfree-skip`。有页面绑定的规则行为不变。
+  **0.17.74 调整**：只凭「无广告字样」拦截会误伤——大量真实开屏页只有「跳过」二字。
+  改为同时要求「页面节点数 > 40」（`USERFREE_MAINSCREEN_NODES`）才拦，
+  用节点规模区分开屏页与主界面。
+
+### 验证（ac250e7d，0.17.73 本地包）
+
+- 长按悬浮球 1200ms 直接抓取：`bubble-hide ok` → `capture nodes=3` → `snapshot saved`，
+  不再弹菜单。
+- 快照详情长按截图无任何反应（取点已删）。
+- 节点列表首项是 `#2 TextView ⬆能点 文字「跳过」`，排序符合预期。
+- 规则生成对话框只剩「文字里包含「跳过」」，无坐标相关选项。
+- 新规则在冷启动时正常命中：`HIT「跳过」168x84 规则=userfree:6271f...`，
+  `StuckActivity` 点了不消失 → `giveup`「目标仍在，已补刀2次不记账」，链路完整。
+- 0.17.73 的「无广告迹象就拦」会把只有「跳过」二字的开屏页也拦掉，
+  0.17.74 加上节点数条件后恢复正常；主界面拦截需要「主界面也有跳过字样」的真实场景，暂未构造。
+
+## 0.17.67–0.17.71 - 2026-11-04 · 通知栏折叠状态直接抓取（仅本地验证，未发布）
+
+### 目标
+
+开屏只停 3–5 秒，下拉通知栏后还要展开 action 才点，根本来不及。要求：
+**下拉就能看到「抓取」按钮，不用展开、不用长按。**
+
+### 做法
+
+系统不允许应用强制展开 action，唯一能控制收起状态外观的是**自定义视图**：
+
+- 新增 `res/layout/notification_capture.xml`：一行文字 + 绿色「抓取」按钮，高度 48dp
+  （Android 12+ 对折叠视图有高度限制）。
+- `postWorkNotification` 改用 `RemoteViews`，分别设 `setCustomContentView` 与
+  `setCustomBigContentView`；根布局 `notif_root` 和按钮 `notif_action` 都绑
+  `PendingIntent`（MIUI 上子控件偶尔收不到点击）。
+- 整条通知的 `contentIntent` 也指向抓取，少一步是一步。
+- 渠道换到 `snapshot_v5`，`IMPORTANCE_DEFAULT`；旧渠道 v3（MIN）、v4（LOW）
+  在 `createNotificationChannel` 时一并删除。
+
+### 四个坑，按踩到的顺序
+
+1. **`IMPORTANCE_MIN` 下通知整条被折叠，下拉连条目都看不到**，按钮自然也没有。
+   MIN → LOW 也不行，LOW 会被归进「静默通知」分组。
+2. **`setSilent(true)` 会给通知打上 `groupKey=silent`**，同样进静默分组。
+   无声改用渠道 `sound=null`，不再调 `setSilent`。
+3. **广播接收器注册成 `RECEIVER_NOT_EXPORTED` 时，通知按钮完全没反应**：
+   按钮走 `PendingIntent`，由系统代发，发送方不是本应用 uid，直接被丢弃。
+   改成 `ContextCompat.RECEIVER_EXPORTED` 后正常。
+4. `groupKey` 改成自定义的 `daxiaojie_capture`，避免被系统按「静默」聚合。
+
+### 验证（ac250e7d，0.17.71 本地包）
+
+- 下拉通知栏，大小姐那条**收起状态**就显示「大小姐 运行中」+ 绿色「抓取」，
+  右侧仍有系统的展开箭头，但不需要点它。
+- 点「抓取」：`capture attempt=0 candidates=2` → `nodes=3` →
+  `snapshot saved 1220x2712`，通知栏自动收起，前台回到目标 App。
+- 用 `am broadcast -a com.noteatoranges.skipad.TAKE_SNAPSHOT -p com.noteatoranges.skipad`
+  单独验证接收器本身可用，排除广播注册的问题。
+
+### 未发布
+
+用户明确要求个人项目不要每次小改都提交/发版，这几版只出了本地包，仓库里
+尚未提交（`0.17.67`–`0.17.71` 的改动都在工作区）。
+
 ## 0.17.66 - 2026-11-04 · 修悬浮球「幽灵窗口」
 
 ### 改了什么
