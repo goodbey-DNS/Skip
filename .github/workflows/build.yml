@@ -128,7 +128,7 @@ jobs:
         run: |
           mkdir -p dist
           SRC=$(ls app/build/outputs/apk/release/*.apk | head -1)
-          NAME="SkipAd-${{ github.ref_name }}-${{ github.run_number }}.apk"
+          NAME="daxiaojie-${{ github.ref_name }}-${{ github.run_number }}.apk"
           cp "$SRC" "dist/$NAME"
           echo "APK=dist/$NAME" >> "$GITHUB_ENV"
           ls -lh dist
