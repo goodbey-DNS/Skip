@@ -25,7 +25,9 @@ import com.noteatoranges.skipad.core.CornerSkipFinder
 import com.noteatoranges.skipad.core.EngineTrace
 import com.noteatoranges.skipad.core.NodeFactsCache
 import com.noteatoranges.skipad.core.NodeScanner
+import com.noteatoranges.skipad.core.PlainActTracker
 import com.noteatoranges.skipad.core.SkipRule
+import com.noteatoranges.skipad.core.TransitionDemoter
 import com.noteatoranges.skipad.db.KeywordStore
 import com.noteatoranges.skipad.db.RuleStore
 import com.noteatoranges.skipad.db.SnapshotStore
@@ -271,30 +273,20 @@ class SkipAccessibilityService : AccessibilityService() {
     private val retriedAfterHit = HashMap<String, Boolean>()
 
     /**
-     * 刚写进统计的那一条：行 id / 写入时刻 / 是不是「弱证据」（点的时候页面上没有广告迹象）。
+     * 「上一条是不是过渡页记录」（design.md 第 18 条）。
      *
      * **只在 [Io] 单线程里读写**，主线程不碰——主线程只把 `adEvidence` 随 PendingSkip 传下来。
-     * 这样避免了跨线程可见性问题，也避免了「删上一条」和「写这一条」被并发打乱。
+     * 判定逻辑本身在 [TransitionDemoter]，这里只负责按包名持久化。
      */
-    private class LastInsert(val id: Long, val at: Long, val weak: Boolean)
-    private val lastInserted = HashMap<String, LastInsert>()
+    private val demoter = TransitionDemoter(TRANSITION_DEMOTE_MS)
 
     /**
-     * 续窗后落到的 Activity 与「空窗」次数（第 21 条）。
+     * 续窗落到了哪个页面（design.md 第 21 条）。
      *
-     * 0.17.58 日志里出现过 `retry-window MainActivity@831ms`：点完直接进主界面，
-     * 续上的四秒窗口一直在主界面上白扫。
-     *
-     * 为什么不在续窗一开始就判「这是主界面」：实测第二段广告在点击后 493–1400ms 才出现，
-     * 任何早退都可能把真广告一起漏掉——那比白扫四秒贵得多。所以改成**事后学习**：
-     * 某个 Activity 连续两次作为续窗落点、整轮一次都没命中，才把它记为「空窗页」，
-     * 下次不再为它开续窗。命中过一次就立刻把这个记录清掉。
+     * 主线程读写；判定与计数在 [PlainActTracker]。命中时 [PlainActTracker.forget] 作废。
      */
     private val retryAct = HashMap<String, String>()
-    private val plainActHits = HashMap<String, Int>()
-
-    /** 已确认「续上也扫不到东西」的页面：`包名/Activity`。服务重启即清空，不落盘。 */
-    private val plainActs = HashSet<String>()
+    private val plainTracker = PlainActTracker(PLAIN_ACT_HITS)
 
     /** 本轮热窗口里点掉了几次（续窗轮结束时用来区分「扫了没命中」和「点完收手」） */
     private var hotHitCount = 0
@@ -781,8 +773,7 @@ class SkipAccessibilityService : AccessibilityService() {
         // design.md 第 21 条：主界面白扫。某个页面连着两次续上来都一次没命中，就不再为它
         // 开续窗。门槛取「连续两次」而不是一次，是因为第二段广告实测 493–1400ms 才出现，
         // 偶发一次没填充不该被判成空窗；命中过就立刻作废（见 scanAndAct 命中分支）
-        val plainKey = "$pkg/$newAct"
-        if (newAct.isNotEmpty() && plainKey in plainActs) {
+        if (plainTracker.isPlain(pkg, newAct)) {
             traceV("retry-skip-plain $pkg act=${newAct.substringAfterLast('.')}")
             return
         }
@@ -1217,11 +1208,7 @@ class SkipAccessibilityService : AccessibilityService() {
         // 计数必须赶在下面的 exitHotWindow 之前：那里要靠它区分
         // 「续窗扫满没命中」和「续窗点着了才退出」
         hotHitCount++
-        if (act.isNotEmpty()) {
-            val plainKeyNow = "$pkg/$act"
-            plainActHits.remove(plainKeyNow)
-            plainActs.remove(plainKeyNow)
-        }
+        plainTracker.forget(pkg, act)
         // 0.17.53：记下「刚点过」的凭据，供 [maybeReopenAfterHit] 判断同包换页。
         // 只有点击成功才写——没点出去就不该有续窗资格
         lastHitAt[pkg] = now
@@ -1243,7 +1230,8 @@ class SkipAccessibilityService : AccessibilityService() {
         // 广告证据必须在点击这一刻采：点完页面就换了，事后再去新页面上找「广告」字样
         // 只会找到主界面。命中本来就少，多一次整树遍历可以忽略
         val adEv = hasAdEvidence(hitRoot, hit.first)
-        if (!adEv) traceV("no-ad-evidence $pkg 「$detail」 规则=${rule.id}")
+        if (adEv) traceV("ad-evidence $pkg 「$detail」 规则=${rule.id}")
+        else traceV("no-ad-evidence $pkg 「$detail」 规则=${rule.id}")
         pending = PendingSkip(
             winKey, pkg, detail, 0, retry,
             ruleId = rule.id, act = act, rectKey = hitRectKey, adEvidence = adEv,
@@ -1296,7 +1284,7 @@ class SkipAccessibilityService : AccessibilityService() {
     /** 退出热窗口：还原事件合并窗口，停掉主动扫描 */
     private fun exitHotWindow(now: Long) {
         if (hotPkg == null) return
-        val pkg = hotPkg
+        val pkg = hotPkg!!
         hotPkg = null
         hotUntil = 0L
         hotOpenedAt = 0L
@@ -1304,17 +1292,18 @@ class SkipAccessibilityService : AccessibilityService() {
         hotScanTask = null
         setNotifTimeout(baseNotifTimeout)
         // 只对「续窗轮」记账：正常冷启动的开屏窗口扫满没命中很正常（广告没填充），
-        // 学到它头上就会把整类 App 的续窗能力废掉
-        val ra = retryAct.remove(pkg)
-        if (ra != null && ra.isNotEmpty() && hotHitCount == 0) {
-            val key = "$pkg/$ra"
-            val n = (plainActHits[key] ?: 0) + 1
-            plainActHits[key] = n
-            if (n >= PLAIN_ACT_HITS) {
-                plainActs.add(key)
-                traceV("plain-act learn $pkg act=${ra.substringAfterLast('.')} hits=$n")
-            } else {
-                traceV("plain-act count $pkg act=${ra.substringAfterLast('.')} hits=$n")
+        // 学到它头上就会把整类 App 的续窗能力废掉。
+        // 还要求这个落点看起来像 Activity：部分 App 的窗口事件只给控件类名，
+        // `lastActivityClass` 会是 `android.widget.FrameLayout`——拿它当键，
+        // 等于把该 App 的所有页面共用一个「空窗」标记，一次误学就全废
+        val actName = retryAct.remove(pkg).orEmpty()
+        if (actName.isNotEmpty() && hotHitCount == 0) {
+            val learned = plainTracker.learn(pkg, actName)
+            val n = plainTracker.countOf(pkg, actName)
+            if (learned) {
+                traceV("plain-act learn $pkg act=${actName.substringAfterLast('.')} hits=$n")
+            } else if (n > 0) {
+                traceV("plain-act count $pkg act=${actName.substringAfterLast('.')} hits=$n")
             }
         }
         traceV("hot-close $pkg scans=$hotScanCount hits=$hotHitCount")
@@ -1476,14 +1465,14 @@ class SkipAccessibilityService : AccessibilityService() {
             val adEv = p.adEvidence
             Io.run("stats-insert") {
                 val db = StatsDb.get(appCtx)
-                val prev = lastInserted[p.pkg]
-                if (prev != null && prev.weak && now - prev.at <= TRANSITION_DEMOTE_MS) {
-                    val removed = runCatching { db.deleteById(prev.id) }.getOrDefault(false)
-                    traceD("demote-page-skip ${p.pkg} 上一条 ${now - prev.at}ms 前无广告迹象 removed=$removed")
+                val prevId = demoter.demoteTarget(p.pkg, now)
+                if (prevId > 0L) {
+                    val removed = runCatching { db.deleteById(prevId) }.getOrDefault(false)
+                    traceD("demote-page-skip ${p.pkg} 上一条无广告迹象 removed=$removed")
                     StatsStore.logEvent(appCtx, "过渡页跳过：${p.pkg}")
                 }
                 val id = db.insert(statsPkg, detail)
-                lastInserted[p.pkg] = LastInsert(id, now, !adEv)
+                demoter.record(p.pkg, id, now, !adEv)
             }
             splashClosedAt[p.pkg] = now
             traceD("verified ${p.pkg} 「$detail」 (attempts=${p.attempts})")

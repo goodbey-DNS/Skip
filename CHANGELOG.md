@@ -42,15 +42,40 @@
 
 ### 踩坑
 
-`hotHitCount++` 必须赶在 `exitHotWindow()` **之前**。第一版写在 PendingSkip 构造前，
-而 `exitHotWindow` 在记录点击凭据时就调用了——续窗轮点中后计数仍是 0，
-会被学成「空窗页」，等于自己把续窗能力关掉。编译和单测都发现不了这种顺序错误。
+**一、`hotHitCount++` 必须赶在 `exitHotWindow()` 之前。** 第一版写在 PendingSkip 构造前，
+而 `exitHotWindow` 在记录点击凭据时就调用了——续窗轮点中后计数仍是 0，会被学成
+「空窗页」，等于自己把续窗能力关掉。编译和单测都发现不了这种顺序错误。
+
+**二、受控工程推翻了一个前提：第二段点击会覆盖第一段的 pending。** 引擎同一时刻只有一个
+pending，第二段在 800ms 核验延迟内出现并被点掉时，第一段根本不记账。也就是说 0.17.53
+加了续窗之后，「启动页记一次 + 广告页再记一次」在大多数情况下已经不会发生——
+第 18 条缺口大半是被续窗顺带修掉的。
+
+回撤逻辑只在**窄场景**生效：第二段比 800ms 核验更晚出现（实测 360 的两段间隔
+493–1400ms，确实会跨过这条线）。保留它是兜底，不是主修。
+
+**三、类名不可用时空窗学习会退化成 `FrameLayout`。** 受控工程第一轮日志是
+`plain-act count act=FrameLayout hits=1`——部分 App 的窗口事件只给控件类名，
+拿它当键等于把该 App 所有页面共用一个「空窗」标记，误学一次续窗能力全废。
+`PlainActTracker.learn` 现在直接拒收不可用的类名（`android.*` / `java.*` / 不含点）。
+
+**四、受控场景的坑要记下来**：两段按钮放在同一位置会被 `match-dup` 挡掉（按矩形桶判重），
+第二段只能靠补刀完成、不产生第二条 verified；而给第一段加 1.2 秒延迟又会在等待期间
+触发一次**假续窗**，把唯一的续窗名额用掉。两个坑都会让「两段各记一次」永远测不到。
 
 ### 验证
 
-受控工程（`H:\skiptest`）新增 `AdTagSplashActivity`（带「广告」角标的第 1 段）与
-`ToMainActivity` → `MainOnlyActivity`（点完进没有跳过的主界面），分别覆盖
-「有迹象不撤」和「两次空窗才学习」两侧。
+两块判定都抽成了纯逻辑（`core/SplashAccounting.kt`：`TransitionDemoter` / `PlainActTracker`），
+`SplashAccountingTest` 用 15 个用例钉死边界——时间窗内/外、强证据不撤、时钟回拨不撤、
+一次不学两次才学、命中即忘、不可用类名拒收、不同包隔离。跑在 CI 的 `testDebugUnitTest`。
+
+抽出来的理由很直接：这两条判据都是时间序问题，真机上要广告正好在同一秒里演两段才撞得到，
+受控 App 的窗口事件时序又会让结论飘。放 JVM 上才是能重复的验证。
+
+受控工程（`H:\skiptest`）负责证明接线：`no-ad-evidence` / `ad-evidence` 按页面内容区分，
+`plain-act count act=MainOnlyActivity hits=1` 只在续窗落点是真 Activity 时出现，
+`act=FrameLayout` 一律不记。新增变体：`AdTagSplashActivity`（带「广告」角标）、
+`PlainStageSplashActivity`（无角标）、`ToMainActivity` → `MainOnlyActivity`（点完进空主界面）。
 
 ## 0.17.59 - 2026-11-03 · 名称全面统一为「大小姐 / daxiaojie」
 
