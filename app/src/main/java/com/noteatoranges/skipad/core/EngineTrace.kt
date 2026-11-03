@@ -39,6 +39,18 @@ object EngineTrace {
     /** 落盘目录（filesDir 下） */
     private const val DIR = "engine"
 
+    /**
+     * 服务连接事件单独写一个文件。
+     *
+     * 常规落盘只有 3×300 行，`scan` 一秒几条，一次冷启动就能把连接记录顶掉。
+     * 2026-11-03 排查「容器广告为什么漏跳」时，正好卡在这一行被冲掉上，
+     * 只能靠推断说「服务重连过」。连接是低频事件，单独留档成本可以忽略。
+     */
+    private const val CONNECT_FILE = "connect.log"
+
+    /** 连接日志保留多少行 */
+    private const val CONNECT_KEEP = 60
+
     private val buf = ArrayDeque<String>(CAPACITY)
 
     /** 落盘文件用的时间戳带日期：事后翻日志第一件事就是确认是哪天 */
@@ -92,6 +104,26 @@ object EngineTrace {
         appendToFile(fileFmt.format(now) + " " + msg)
     }
 
+    /**
+     * 记一次服务连接。除了走常规落盘，还单独写 [CONNECT_FILE]。
+     *
+     * 单独留档的理由：连接记录必须比 scan 日志活得久，否则排查「预热期漏跳」
+     * 时永远看不到它。文件只保留最近 [CONNECT_KEEP] 行，每次重写，代价可忽略。
+     */
+    @Synchronized
+    fun addConnect(msg: String) {
+        add(msg)
+        val d = dir ?: return
+        try {
+            val f = File(d, CONNECT_FILE)
+            val old = if (f.exists()) runCatching { f.readLines() }.getOrDefault(emptyList()) else emptyList()
+            val out = (old + fileFmt.format(Date()) + " " + msg).takeLast(CONNECT_KEEP)
+            f.writeText(out.joinToString("\n") + "\n")
+        } catch (e: Exception) {
+            // 诊断层失败不影响主流程
+        }
+    }
+
     /** 当前内存里的全部痕迹，时间升序 */
     @Synchronized
     fun lines(): List<String> = buf.toList()
@@ -122,11 +154,15 @@ object EngineTrace {
         }
     }
 
+    /** 是不是滚动日志文件：排除连接留档，否则它会被当成序号 0 的老文件删掉 */
+    private fun isRollingTrace(f: File): Boolean =
+        f.isFile && f.name.endsWith(".log") && f.name != CONNECT_FILE
+
     /** 落盘目录里现有的文件，按文件名（即序号）升序 */
     fun files(): List<File> {
         val d = dir ?: return emptyList()
         return runCatching {
-            d.listFiles()?.filter { it.isFile && it.name.endsWith(".log") }
+            d.listFiles()?.filter { isRollingTrace(it) }
                 ?.sortedBy { it.name.removeSuffix(".log").toIntOrNull() ?: 0 }
                 ?: emptyList()
         }.getOrDefault(emptyList())
@@ -146,11 +182,18 @@ object EngineTrace {
      */
     fun exportText(): String {
         val sb = StringBuilder()
-        val fs = files()
-        for (f in fs) {
+        files().forEach { f ->
             sb.append("===== ").append(f.name).append(" =====\n")
             runCatching { sb.append(f.readText()) }
             sb.append('\n')
+        }
+        dir?.let { d ->
+            val c = File(d, CONNECT_FILE)
+            if (c.exists()) {
+                sb.append("===== ").append(CONNECT_FILE).append(" =====\n")
+                runCatching { sb.append(c.readText()) }
+                sb.append('\n')
+            }
         }
         val mem = synchronized(this) { buf.toList() }
         if (mem.isNotEmpty()) {
@@ -191,7 +234,7 @@ object EngineTrace {
 
     /** 只留最新 [FILE_KEEP] 份。删除最老的，序号不重置 */
     private fun trimLocked(d: File) {
-        val all = d.listFiles()?.filter { it.isFile && it.name.endsWith(".log") } ?: return
+        val all = d.listFiles()?.filter { isRollingTrace(it) } ?: return
         if (all.size <= FILE_KEEP) return
         all.sortedBy { it.name.removeSuffix(".log").toIntOrNull() ?: 0 }
             .dropLast(FILE_KEEP)

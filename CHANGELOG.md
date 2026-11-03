@@ -2,6 +2,116 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.63 - 2026-11-03 · 预热期放行系统广告容器
+
+### 为什么改
+
+0.17.62 回归里，猎豹 r1 出了容器广告但一次没跳。日志是
+`wsc com.cleanmaster.mguard_cn prev=com.miui.home fresh=false`，全程零扫描。
+`fresh=false` 只可能来自 `warmingUp`——服务在那轮之前重连过，`connectedAt` 被重置，
+广告落在 20 秒 `SERVICE_WARMUP_MS` 之内。
+
+预热期本身不能删：它防的是「服务刚连上、屏幕上停着一张正常页面，词表把正文里的‘跳过’
+当成按钮点掉」（0.17.33 实测点过微博「我的」页）。但系统容器页面上只有开屏广告本身，
+可点的只有 `view_skip_button_nearby_top_right` 这类具名控件，不存在正文误伤面。
+
+### 改了什么
+
+- 新增 `warmupExempt(pkg)`：只有 `SYSTEM_AD_GATEWAYS` 里的包（当前仅
+  `com.miui.systemAdSolution`）在预热期放行，其余一律照旧。
+- 三个判断点同步放行：WSC 分支的 `freshSwitch`、`wcc-switch` 兜底路径的 `!warmingUp`、
+  `enterHotWindow` 的预热拦截。
+- `EngineTrace.addConnect()`：服务连接事件单独写 `files/engine/connect.log`
+  （保留 60 行）。常规落盘只有 3×300 行，`scan` 一秒几条，一次冷启动就把
+  `service-connected` 顶掉了——这次排查就卡在这上面。`trimLocked`、`files()`、
+  `exportText()` 都已排除该文件，避免它被当成序号 0 的老日志删掉。
+
+### 验证（真机）
+
+- 制造预热期的方式：`am force-stop` 大小姐 → 立刻重开无障碍 → 4 秒内冷启动。
+  6 轮里 3 轮出现容器广告，**3/3 命中并 `verified`**，走的是 `wcc-switch` 兜底路径
+  （容器事件里 `prev=null`，WSC 分支本来就不进），`hot-hit` 6–8ms。
+- 反向验证：预热期内冷启动微博，日志只有 `wsc ... fresh=false`，没有 `hot-open`、
+  没有 `HIT`，广告页（`com.sina.weibo.mobileads.view.b`）没被点——普通 App 仍被拦住。
+- 预热期结束后再启动微博：`HIT「跳过」174x96`、`hot-hit 433ms`、`verified`，恢复正常。
+- 未跑 CI 单测：本次改的都是服务内分支判断，没有可下沉的纯逻辑。
+
+### 操作坑
+
+- **`am force-stop com.noteatoranges.skipad` 之后 MIUI 不会自动恢复无障碍**，
+  `enabled_accessibility_services` 会变成 `null`，必须手动 `settings put` 写回去。
+  这次有一批微博测试就是这样空跑的（服务根本没起来，日志一片空白），
+  所以脚本里必须每轮检查 `a11y_ok()`。
+
+## 验证 - 2026-11-03 · 0.17.62 六款 App 回归（无代码改动）
+
+0.17.61 动的是公共路径（`wcc-switch` 清状态），0.17.62 又停了右上角猜测。
+微博、360、高德那批结论都是改之前测的，必须在新版本上重跑。18 轮冷启动
+（六款 ×3），每轮额外读一次「累计已跳过」当统计写入的探针。
+
+### 结果：6 次真广告全跳，0 误点
+
+| App | 轮次 | 出广告 | 命中 | 记账 |
+|---|---|---|---|---|
+| 360 清理大师 | r2/r3 | 百度 mobads | 「跳过」120x120 | 1 / 1 |
+| 微博 | r2/r3 | 开屏 | 「跳过」174x96 | 1 / 1 |
+| 猎豹清理大师 | r3 | 小米容器 300x189 | 1 | 1 |
+| 高德地图 | r2 | 开屏倒计时 | 「5」269x96（`splash-countdown-num`） | 1 |
+
+- `gate-max` 0 次、`giveup` 0 次、`off-app` 0 次、落地页 0 次、`corner-hit` 0 次；
+- 统计 40→46，与 6 次 `verified` 一一对应，**design.md 第 24 条的写入失效没有复现**；
+- 淘宝、抖音各 3 轮全无广告，样本仍不足，不能据此说这两款没问题。
+
+### 1 次真实漏跳：服务重连落在预热期
+
+猎豹 r1 出了容器广告，日志是 `wsc com.cleanmaster.mguard_cn prev=com.miui.home
+fresh=false`，全程零扫描。`fresh=false` 只可能来自 `warmingUp`——
+服务在这轮之前重连过，`connectedAt` 被重置，20 秒 `SERVICE_WARMUP_MS` 之内
+不认任何「切 App」。诱因没查到：r1 的 `logcat -c` 把 `service-connected` 那行清掉了。
+
+这属于保护期带来的必然代价，不是判定错误。**改进方向（未实施）**：预热期目前一刀切，
+而系统容器广告走的是具名 viewId（`view_skip_button_nearby_top_right`），
+误点风险远低于词表扫描；可以考虑让「容器 + 具名 viewId」在预热期也放行。
+改之前必须先在 `H:\skiptest` 上验证，不能直接发版。
+
+## 验证 - 2026-11-03 · 猎豹容器广告（0.17.62，无代码改动）
+
+0.17.61 改的是「`wcc-switch` 兜底路径也要清规则计数」，当时只验证到「装完不报错」，
+真机一次广告都没等到。这次等到投放，补上验证。
+
+### 结论：修复有效
+
+连续 8 次容器广告（`com.miui.systemAdSolution`，跳转按钮 300x189）：
+
+- 8 次全部首点即中，`hot-hit` 121ms 内，随后 `verified (attempts=1)`；
+- **`gate-max` 一次都没出现**（0.17.60 时第二轮起每轮 12 行 `2/2`，一次点不下去）；
+- `giveup` 0 次、`action-fail` 0 次；
+- 第二轮起重复命中走的是 `match-dup` 与 `gate-cd 1200ms`，属于规则内冷却，不是次数上限。
+
+日志：`.temp/hunt-container/container-1-1439.log`、`container-2-1441.log`、
+`verify-r1..r6.log`（后六轮）。
+
+### 顺带发现
+
+- 清掉猎豹数据后，它除了系统容器还多了一条**自有开屏** `SplashAdActivity`，
+  按钮是文字「跳过」（`id/aoc`），也被正常点掉。这条路径的 `hasAdEvidence` 为 false
+  （无 SDK 前缀、无「广告」字样、无倒计时），只影响「过渡页回撤」是否可撤，不影响记账。
+- **统计写入曾整段失效**：12:26–14:52 之间 10 次 `verified` 没有进 `skipad.db`
+  （「最近记录」最新一条停在 12:05，累计次数一直是 37）。14:53 进程重启后恢复，
+  之后每跳一次必 +1（实测 39→40、40→41）。原因未定位，`DaxiaojieIo` 无失败日志，
+  怀疑是旧进程的 IO 单线程被某个任务卡住、队列积压；**列为待查**，
+  复现方式：持续运行进程、连续触发跳过、每轮读「累计已跳过」。见 design.md 第 24 条。
+
+### 操作坑（这次踩到的）
+
+- **`am force-stop com.noteatoranges.skipad` 会连带停用无障碍服务**，MIUI 不会自动恢复。
+  重开要 `settings put secure enabled_accessibility_services` + `accessibility_enabled 1`。
+- 服务重连后 **20 秒预热期**（`SERVICE_WARMUP_MS`）内不认任何「切 App」，
+  日志是 `wsc ... fresh=false` 且不扫描。这期间冷启动出来的广告**一定不会跳**，
+  不是判定失败。实测 14:53:45 的容器广告就是这样漏掉的。
+- `pm clear` 猎豹后先弹隐私协议页，`input touchscreen tap` 和原地 `swipe` 都点不动
+  「同意」，要先 `input keyevent 61` 把焦点移到按钮、再 `keyevent 66`（回车）才生效。
+
 ## 验证 - 2026-11-03 · 备份恢复实测（无代码改动）
 
 0.17.59 把备份标识从 `SkipAd` 改成 `daxiaojie`，同时加了 `LEGACY_APP_NAMES` 兼容。

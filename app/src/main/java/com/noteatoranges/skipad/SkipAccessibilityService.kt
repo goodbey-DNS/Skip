@@ -247,6 +247,19 @@ class SkipAccessibilityService : AccessibilityService() {
         pkg in homePkgs || pkg in SYSTEM_AD_GATEWAYS || isRealApp(pkg)
 
     /**
+     * 预热期内仍允许开窗的对象：只有系统广告容器。
+     *
+     * 预热期防的是「服务刚连上，屏幕上停着一张正常页面，词表把正文里的『跳过』当成按钮点掉」
+     * （0.17.33 实测：关开无障碍后停在微博「我的」页，3 秒后词表命中一次并点了下去）。
+     * 容器包（[SYSTEM_AD_GATEWAYS]）页面上只有开屏广告本身，可点的只有
+     * `view_skip_button_nearby_top_right` 这类具名控件，不存在正文误伤面。
+     *
+     * 2026-11-03 实测：服务重连后 20 秒内冷启动猎豹，容器广告一定漏跳
+     * （`wsc ... fresh=false`，全程零扫描）。所以只对这类包破例，其余一律照旧。
+     */
+    private fun warmupExempt(pkg: String): Boolean = pkg in SYSTEM_AD_GATEWAYS
+
+    /**
      * 本轮开屏已经点掉的时间点。
      *
      * 开屏都是立刻出现，点掉就该立即收手：不等满 [SPLASH_WINDOW_MS]，主界面零暴露。
@@ -332,7 +345,8 @@ class SkipAccessibilityService : AccessibilityService() {
         EngineTrace.init(this)
         // 连接留痕：装了新包之后服务是否真的起来了，只能靠这一行判断
         val ver = runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull()
-        traceI("service-connected $ver")
+        // 连接记录单独留档：常规滚动日志容纳不下，而「什么时候重连过」是排查预热期漏跳的唯一线索
+        EngineTrace.addConnect("service-connected $ver")
         clicker = ClickPerformer(this)
         connectedAt = SystemClock.elapsedRealtime()
         // 记住 xml 里的合并窗口，热窗口结束后按这个值还原。读不到就按 300 算
@@ -872,7 +886,7 @@ class SkipAccessibilityService : AccessibilityService() {
                 // 预热期内只更新 lastShownPkg、不开任何窗口，20 秒后判据才可信。
                 val warmingUp = SystemClock.elapsedRealtime() - connectedAt < SERVICE_WARMUP_MS
                 // 「切到这个 App」：前一个出现在屏幕上的是**已知的**别的包（含桌面）才算。
-                val freshSwitch = prevShown != null && prevShown != ep && !warmingUp
+                val freshSwitch = prevShown != null && prevShown != ep && (!warmingUp || warmupExempt(ep))
                 lastShownPkg = ep
                 traceV("wsc $ep prev=$prevShown fresh=$freshSwitch cls=${event.className}")
                 // 开屏窗口只从「真的切到这个 App 的那一刻」起算：开屏页跳主界面会再来一个
@@ -934,7 +948,7 @@ class SkipAccessibilityService : AccessibilityService() {
                     // 同一 App 一分钟内只补一次：内容变化事件比窗口事件密集得多，
                     // 不卡额度就会把「App 内换页」当成「刚切进来」，开屏窗反复重开
                     val last = splashFallbackAt[ep] ?: 0L
-                    if (!warmingUp && now - last > SPLASH_FALLBACK_GAP_MS) {
+                    if ((!warmingUp || warmupExempt(ep)) && now - last > SPLASH_FALLBACK_GAP_MS) {
                         if (splashFallbackAt.size > 50) splashFallbackAt.clear()
                         splashFallbackAt[ep] = now
                         traceV("wcc-switch $ep prev=$lastShownPkg")
@@ -1269,8 +1283,9 @@ class SkipAccessibilityService : AccessibilityService() {
      */
     private fun enterHotWindow(pkg: String) {
         val now = SystemClock.elapsedRealtime()
-        // 服务刚连上时屏幕上停的可能是一张正常页面，不是开屏页：这段预热期一律不开热窗口
-        if (now - connectedAt < SERVICE_WARMUP_MS) {
+        // 服务刚连上时屏幕上停的可能是一张正常页面，不是开屏页：这段预热期一律不开热窗口。
+        // 系统广告容器是唯一例外（见 [warmupExempt]），否则重连后 20 秒内的容器开屏必然漏跳
+        if (now - connectedAt < SERVICE_WARMUP_MS && !warmupExempt(pkg)) {
             traceV("hot-skip $pkg warmup=${now - connectedAt}ms")
             // 没开成窗就不该留下「续窗落点」，否则下一轮正常退出时会拿这个陈旧值去学习
             retryAct.remove(pkg)
