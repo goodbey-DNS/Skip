@@ -1910,7 +1910,10 @@ class SkipAccessibilityService : AccessibilityService() {
             .setContentTitle(getString(R.string.snap_notif_title))
             .setContentText(getString(R.string.snap_notif_text))
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            // 最低优先级：不弹、不响、不亮图标，只在下拉通知栏里折叠着
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setSilent(true)
+            .setShowWhen(false)
             .setContentIntent(open)
             .build()
         try {
@@ -1920,16 +1923,18 @@ class SkipAccessibilityService : AccessibilityService() {
                 nmSys.createNotificationChannel(
                     android.app.NotificationChannel(
                         SNAP_CHANNEL, getString(R.string.snap_channel),
-                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
+                        android.app.NotificationManager.IMPORTANCE_MIN,
                     ).apply {
                         setShowBadge(false)
                         setSound(null, null)
+                        enableVibration(false)
                     }
                 )
-                // 旧渠道建成了 IMPORTANCE_LOW：折叠时连 action 按钮都不显示，
-                // 抓快照这条唯一不装悬浮窗的入口等于被藏起来。渠道重要性创建后改不了，
-                // 只能换新 id，旧渠道直接删掉
+                // 渠道重要性创建后不能改，只能换新 id。snapshot 是初始版，
+                // snapshot_v2 是「要显示抓取按钮」那版（DEFAULT），两个都删掉，
+                // 免得旧用户手机上留着一条显眼的常驻通知
                 runCatching { nmSys.deleteNotificationChannel("snapshot") }
+                runCatching { nmSys.deleteNotificationChannel("snapshot_v2") }
             }
             nm.notify(SNAP_NOTIF_ID, n)
         } catch (e: SecurityException) {
@@ -2553,7 +2558,8 @@ class SkipAccessibilityService : AccessibilityService() {
          */
         const val BAD_PAGE_MS = 10 * 60_000L
 
-        const val SNAP_CHANNEL = "snapshot_v2"
+        // v3 起改用 IMPORTANCE_MIN：常驻通知只做保活，不在状态栏占位
+        const val SNAP_CHANNEL = "snapshot_v3"
         const val SNAP_NOTIF_ID = 2001
         const val ACTION_TAKE_SNAPSHOT = "com.noteatoranges.skipad.TAKE_SNAPSHOT"
 

@@ -2,6 +2,41 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.65 - 2026-11-04 · 悬浮球与通知都改为默认关闭
+
+### 改了什么
+
+- `CaptureBubble.isEnabled` 默认值定为 **false**：圆钮常驻会挡内容，由用户在
+  「跳过规则与快照」里自己打开。**注意 0.17.64 里那次「默认 true」的编辑实际没有落盘**
+  （提交 diff 只有日志改动），所以 0.17.64 的行为一直是默认关闭，这里补上正确实现。
+- 常驻通知渠道换到 `snapshot_v3`，重要性 `IMPORTANCE_MIN`，`PRIORITY_MIN` +
+  `setSilent` + `setShowWhen(false)`；同时删除旧渠道 `snapshot` 与 `snapshot_v2`。
+  渠道重要性创建后不可改，只能换 id。
+- 悬浮球位置持久化：拖动后把 `lp.x/lp.y` 存进 `capture_bubble` 偏好，
+  重连时读回并 `clamp()` 到屏幕内。以前服务每次重连都弹回默认位置。
+
+### 测试（ac250e7d，0.17.65 本地包）
+
+- `pm clear` 模拟新用户：悬浮球不出现（`dumpsys input` 无 skipad overlay），
+  符合默认关闭。
+- 通知渠道 `snapshot_v3` 的 `mImportance=1`（MIN）。此时 `POST_NOTIFICATIONS`
+  未授予（`pm clear` 重置），通知完全不显示——比 MIN 更不显眼，但保活优先级也最低。
+- 授权悬浮窗后手动开启：`bubble-show enter exists=false canDraw=true`，圆钮出现在
+  `[1040,1017][1220,1197]`。
+- 拖动到 `[208,1684][388,1864]` → 断开再写回 `enabled_accessibility_services`
+  触发服务重连 → 位置仍是 `[208,1684][388,1864]`，持久化生效。
+- 长按 1200ms：窗口扩展到 `[208,1684][496,1942]`，截图可见「抓快照 / 点坐标」两项。
+- 单击与菜单项「抓快照」都正常：`bubble-hide ok` → `capture nodes=20` →
+  `snapshot saved 1220x2712`。
+
+### 操作坑
+
+- `input tap` 对重连后/拖动后的悬浮球不一定生效，`input touchscreen tap` 才行；
+  长按要用 `input touchscreen swipe x y x y 1200`（原地），`input swipe` 与
+  `input motionevent DOWN/UP` 都弹不出菜单。
+- `pm clear` 会重置 `POST_NOTIFICATIONS` 与 `SYSTEM_ALERT_WINDOW`，测默认行为后
+  要重新授权，否则点开关只会跳系统设置页。
+
 ## 0.17.64 - 2026-11-03 · 抓取入口改为悬浮球
 
 ### 改了什么
@@ -44,6 +79,13 @@
 - 覆盖安装后无障碍服务被系统清空（`enabled_accessibility_services=null`），
   即使已授予 `WRITE_SECURE_SETTINGS` 也没有自动恢复，需要手动写回。
   `onUnbind` 里已有 `KeepAlive.checkAndRecover`，这次没生效，原因未确认。
+
+  **2026-11-03 21:45 复测：连续覆盖安装 5 次，5/5 自动恢复**，
+  耗时 1.4–6.7 秒（首次 6.7s，其余 1.4–1.5s），每次都伴随
+  `enabled_accessibility_services` 保持有值。授予 `WRITE_SECURE_SETTINGS` 之后
+  恢复是稳定的；21:09 那次失败只能按偶发处理，未再复现。若以后再次遇到，
+  先确认权限仍在（`dumpsys package | grep WRITE_SECURE_SETTINGS`），
+  再看 `connect.log` 里安装时刻有没有 `service-connected`。
 
 ## 验证 - 2026-11-03 · 遗留三件（无代码改动）
 

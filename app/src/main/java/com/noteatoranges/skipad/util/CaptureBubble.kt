@@ -25,6 +25,10 @@ object CaptureBubble {
     private const val PREF = "capture_bubble"
     private const val SIZE_DP = 48
 
+    /** 拖动后的位置（布局坐标，相对屏幕左上） */
+    private const val KEY_X = "pos_x"
+    private const val KEY_Y = "pos_y"
+
     /** 按住超过这个时长算长按：弹出「抓快照 / 点坐标」两项菜单 */
     private const val LONG_PRESS_MS = 600L
 
@@ -47,6 +51,7 @@ object CaptureBubble {
     var onLongClick: (() -> Unit)? = null
 
     fun isEnabled(context: Context): Boolean =
+        // 默认关闭：圆钮常驻屏幕会挡内容，由用户在「跳过规则与快照」里自己打开
         context.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean("on", false)
 
     fun setEnabled(context: Context, on: Boolean) {
@@ -139,8 +144,12 @@ object CaptureBubble {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = dm.widthPixels - size - pad * 2
-            y = (300 * density).toInt()
+            // 拖动后位置要能活过服务重连：否则用户每次重启都得重新摆圆钮
+            val sp = appContext.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            val savedX = sp.getInt(KEY_X, -1)
+            val savedY = sp.getInt(KEY_Y, -1)
+            x = if (savedX >= 0) savedX else dm.widthPixels - size - pad * 2
+            y = if (savedY >= 0) savedY else (300 * density).toInt()
         }
 
         fun clamp() {
@@ -149,6 +158,8 @@ object CaptureBubble {
             lp.x = lp.x.coerceIn(0, maxX)
             lp.y = lp.y.coerceIn(0, maxY)
         }
+        // 存下来的位置可能来自另一套分辨率/横屏，先夹回屏幕内再用
+        clamp()
 
         var panelOpen = false
         val collapse = Runnable {
@@ -223,6 +234,9 @@ object CaptureBubble {
                     if (!panelOpen && !moved) {
                         val held = System.currentTimeMillis() - downAt
                         if (held >= LONG_PRESS_MS) openPanel() else onClick?.invoke()
+                    } else if (moved) {
+                        appContext.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+                            .edit().putInt(KEY_X, lp.x).putInt(KEY_Y, lp.y).apply()
                     }
                     true
                 }
