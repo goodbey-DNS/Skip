@@ -173,7 +173,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
                     android:lineSpacingExtra="2dp"
-                    android:text="引擎最近做了什么：开屏窗口什么时候开的、扫到哪个控件、为什么没动手、哪一步抛了异常。内存里留最近 400 条，同时另存三份到本机，重启也不丢——事后两天再翻也翻得到。用来回答「刚才为什么没跳过」。"
+                    android:text="引擎最近做了什么：跳过成没成功、为什么没动手、哪一步出了岔子。默认用大白话按时间列出来，最新的在最上面；要贴给开发看，进去点右上角「原始日志」。记录同时存三份到本机，重启也不丢。"
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
 
@@ -188,7 +188,7 @@
                         style="?android:attr/borderlessButtonStyle"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="查看"
+                        android:text="查看诊断"
                         android:textColor="@color/primary"
                         android:textSize="13sp" />
 

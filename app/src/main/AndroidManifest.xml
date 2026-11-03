@@ -55,6 +55,7 @@
         <activity android:name=".ui.SnapshotDetailActivity" android:exported="false" />
         <activity android:name=".ui.KeepAliveSettingsActivity" android:exported="false" />
         <activity android:name=".ui.MaintenanceActivity" android:exported="false" />
+        <activity android:name=".ui.DiagnosisActivity" android:exported="false" />
 
         <!-- 备份导出：把 zip 通过系统分享面板交给用户（文件管理器 / 微信 / 邮件） -->
         <provider

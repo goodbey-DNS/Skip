@@ -51,6 +51,28 @@ object EngineTrace {
     /** 连接日志保留多少行 */
     private const val CONNECT_KEEP = 60
 
+    /**
+     * 结论日志：只留「有过决策」的行，单独一份文件。
+     *
+     * 滚动日志是 3×300 行，一次 App 冷启动的 scan 就能写掉一百多行 ——
+     * 上午跳过成功的那条，下午就被噪音冲没了。而用户打开诊断想知道的往往是
+     * 「刚才（甚至昨天）为什么没跳过」。结论行一天也就几十条，单独留一份成本很低。
+     */
+    private const val DECISION_FILE = "decision.log"
+
+    /** 结论日志按字节裁剪，超过这个大小就只留最近 [DECISION_KEEP] 行 */
+    private const val DECISION_MAX_BYTES = 64 * 1024
+
+    private const val DECISION_KEEP = 240
+
+    /** 哪些行算「结论」：用户真正关心的、能回答「跳没跳过」的那些 */
+    private val DECISION_PREFIXES = arrayOf(
+        "verified ", "giveup ", "landing ", "off-app ", "userfree-skip ", "demote-page-skip ",
+        "miss ", "hot-close ", "hot-skip ",
+        "capture nodes=", "capture-empty", "capture-fail", "snapshot saved ",
+        "service-connected ", "service-unbind",
+    )
+
     private val buf = ArrayDeque<String>(CAPACITY)
 
     /** 落盘文件用的时间戳带日期：事后翻日志第一件事就是确认是哪天 */
@@ -101,7 +123,40 @@ object EngineTrace {
         val now = Date()
         if (buf.size >= CAPACITY) buf.removeFirst()
         buf.addLast(memFmt.format(now) + " " + msg)
-        appendToFile(fileFmt.format(now) + " " + msg)
+        val stamped = fileFmt.format(now) + " " + msg
+        appendToFile(stamped)
+        // 结论行额外留一份：滚动日志很快会把它们冲掉，而这一份是给「诊断」页读的
+        if (isDecision(msg)) appendDecision(stamped)
+    }
+
+    private fun isDecision(msg: String): Boolean {
+        for (p in DECISION_PREFIXES) if (msg.startsWith(p)) return true
+        return false
+    }
+
+    /** 追加到结论日志；文件太大时裁剪到最近 [DECISION_KEEP] 行 */
+    private fun appendDecision(line: String) {
+        val d = dir ?: return
+        synchronized(ioLock) {
+            try {
+                val f = File(d, DECISION_FILE)
+                f.appendText(line + "\n")
+                if (f.length() > DECISION_MAX_BYTES) {
+                    val kept = f.readLines().takeLast(DECISION_KEEP)
+                    f.writeText(kept.joinToString("\n") + "\n")
+                }
+            } catch (e: Exception) {
+                // 诊断层失败不影响主流程
+            }
+        }
+    }
+
+    /** 结论日志的全部行（时间升序）；没有文件时返回空 */
+    fun decisionLines(): List<String> {
+        val d = dir ?: return emptyList()
+        val f = File(d, DECISION_FILE)
+        if (!f.isFile) return emptyList()
+        return runCatching { f.readLines() }.getOrDefault(emptyList())
     }
 
     /**
@@ -156,7 +211,7 @@ object EngineTrace {
 
     /** 是不是滚动日志文件：排除连接留档，否则它会被当成序号 0 的老文件删掉 */
     private fun isRollingTrace(f: File): Boolean =
-        f.isFile && f.name.endsWith(".log") && f.name != CONNECT_FILE
+        f.isFile && f.name.endsWith(".log") && f.name != CONNECT_FILE && f.name != DECISION_FILE
 
     /** 落盘目录里现有的文件，按文件名（即序号）升序 */
     fun files(): List<File> {
@@ -192,6 +247,13 @@ object EngineTrace {
             if (c.exists()) {
                 sb.append("===== ").append(CONNECT_FILE).append(" =====\n")
                 runCatching { sb.append(c.readText()) }
+                sb.append('\n')
+            }
+            // 结论日志单独一段：它就是「诊断」页读的那份，贴出去时最有用
+            val dec = File(d, DECISION_FILE)
+            if (dec.exists()) {
+                sb.append("===== ").append(DECISION_FILE).append(" =====\n")
+                runCatching { sb.append(dec.readText()) }
                 sb.append('\n')
             }
         }

@@ -2,6 +2,64 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.75 - 2026-11-04 · 诊断可见化：把引擎痕迹翻成人话（未发布）
+
+### 为什么
+
+维护页的「引擎诊断」原来把 `verified` / `no-ad-evidence` / `reject=「跳过」在中央区域`
+这类英文短码直接弹出来。写它的人一眼能懂，用的人只看到一屏代号——
+「刚才那个 App 为什么没跳过」这个问题仍然没有答案。诊断的价值不在记录多全，
+在于**用户能不能读懂**。
+
+### 做了什么
+
+- 新增 `core/Diagnosis.kt`：把痕迹行翻译成中文结论，带 `Tone`（成功/警告/提示）
+  与 `Kind`（跳过结果 / 未动手原因 / 抓取 / 服务状态）。**只在读的时候翻译**，
+  埋点一行没改，`logcat | grep verified` 仍然可用。
+- 新增 `ui/DiagnosisActivity.kt`：「引擎诊断 → 查看诊断」进入。顶部概览
+  （最近一次跳过、服务是否在线、顺利跳过/没跳成次数），下面是时间线（时间 + 一句话 +
+  一句原因），右上角「原始日志」保留完整原文。
+- 新增**结论日志** `files/engine/decision.log`：`EngineTrace.add()` 里按前缀识别
+  `verified / giveup / landing / off-app / userfree-skip / demote-page-skip / miss /
+  hot-close / hot-skip / capture* / snapshot saved / service-*`，额外追加一份，
+  超 64KB 裁到最近 240 行。原因：滚动日志只有 3×300 行，一次冷启动的 scan
+  就能写掉一百多行，上午跳过成功那条下午就没了。
+- 时间线过滤：
+  - 服务「连接成功」不进时间线（只在概览占一行），否则每次重连刷一屏；
+  - 相邻同文案且时间差 ≤3 秒才折叠（同一次操作打出的多条）；
+  - 同一 App **30 秒内已经出过跳过结果**，其后的 `miss` / `hot-close` 不再显示——
+    否则「跳过成功」下面紧跟着「看了一圈没找到」，自相矛盾。
+- 扫描拒绝理由翻成人话（`reasonOf`）：疑似教程 / 文本超长 / 中央区域 / 面积上限 /
+  no-root 等 13 条。
+- 维护页文案同步：「查看」→「查看诊断」；清空弹窗说明三份记录的区别，
+  「只清内存」不会清掉诊断页看到的历史。
+
+### 验证
+
+- 单元测试 `DiagnosisTest` 15 条全过（各事件类型的标题/原因、噪声行、
+  落盘时间戳、服务事件不计入跳过、30 秒抑制窗口）。
+- 真机 ac250e7d：受控工程 `HideActivity` 冷启动 → `verified ... (attempts=0)`
+  → 诊断页显示「SkipTest 跳过成功 / 点的是「跳过」，第一次点击就生效」；
+  概览「最近一次跳过：SkipTest（06:34:17）」「顺利跳过 4 次 · 没跳成 0 次」。
+- 跨重启保留：装包重装后，06:24 的微博跳过记录仍在（读的是 decision.log）。
+- 「原始日志」仍是完整内存日志（`ev-nopkg` 一类过程行都在），不是筛过的那份。
+- 清空后空态：概览卡隐藏，提示「让一个 App 冷启动一次再回来看」。
+
+### 踩坑
+
+- **`matchEntire` 必须整串匹配**：`USERFREE` / `CAPTURE_EMPTY` 两条正则没写到行尾，
+  用 `matchEntire` 永远不命中（两者都改成了 `find`）。单测一次就暴露了。
+- **时间戳长度判断**：内存 `HH:mm:ss.SSS` 是 12 字符、落盘是 18 字符，
+  最早写成 `> 8` 直接 substring 越界，13 条用例全崩。
+- `tally` 最初把所有 `Tone.OK` 算成「顺利跳过」，结果服务连接也被算进去，
+  出现「顺利跳过 4 次」但列表全是「无障碍服务已连接」。加 `Kind` 后才分开。
+- **本机跑不了 Gradle 测试**：用户名 `wang'chen` 含单引号，
+  Gradle 生成的 `@...gradle-worker-classpath...txt` 参数文件路径被破坏，
+  worker 报 `ClassNotFoundException: GradleWorkerMain`。把 JDK 与 Gradle 主目录
+  挪到无引号路径（`H:\jdk21`、`H:\gradle-home`）后正常：
+  `$env:GRADLE_USER_HOME='H:\gradle-home'; $env:JAVA_HOME='H:\jdk21'`。
+  `tools\build-local.ps1` 本身不受影响（不 fork test worker）。
+
 ## 0.17.72–0.17.73 - 2026-11-04 · 删除坐标规则，聚焦快照识别（未发布）
 
 ### 为什么删

@@ -58,40 +58,14 @@ class MaintenanceActivity : AppCompatActivity() {
     }
 
     /**
-     * 引擎诊断：最近若干条决策痕迹，时间倒序（最新的在最上面）。
+     * 引擎诊断：跳到诊断页，先用中文给结论。
      *
-     * 这是不连电脑也能回答「刚才为什么没跳过」的唯一入口 ——
-     * 部分机型把 logcat 缓冲区整个关掉，外部日志工具读不到任何东西。
+     * 这里原来是直接把 `verified` / `no-ad-evidence` 这类英文短码弹出来的，
+     * 不看代码的人打开只看到一屏代号。翻译放在 [Diagnosis]，原始日志在诊断页右上角，
+     * 要贴给开发看的时候仍然拿得到。
      */
     private fun showEngineLog() {
-        val lines = EngineTrace.lines()
-        val disk = EngineTrace.files()
-        val diskNote = if (disk.isEmpty()) {
-            "落盘：暂无"
-        } else {
-            "落盘：${disk.size} 份 / ${(EngineTrace.diskBytes() / 1024).coerceAtLeast(1)}KB"
-        }
-        if (lines.isEmpty()) {
-            AlertDialog.Builder(this)
-                .setTitle("引擎诊断")
-                .setMessage(
-                    "内存里还没有记录（$diskNote）。\n\n" +
-                        "服务刚重启过，或者这段时间还没有窗口事件。让目标 App 出现一次开屏广告再回来看；\n" +
-                        "如果是重启前的记录，用「导出日志」拿落盘的那份。"
-                )
-                .setPositiveButton("好", null)
-                .show()
-            return
-        }
-        val text = lines.asReversed().joinToString("\n")
-        AlertDialog.Builder(this)
-            .setTitle("引擎诊断（最近 ${lines.size} 条）")
-            .setMessage("$text\n\n$diskNote")
-            .setPositiveButton("好", null)
-            .setNeutralButton("复制全部") { _, _ ->
-                copyToClipboard(text)
-            }
-            .show()
+        startActivity(Intent(this, DiagnosisActivity::class.java))
     }
 
     /**
@@ -122,21 +96,13 @@ class MaintenanceActivity : AppCompatActivity() {
         }
     }
 
-    private fun copyToClipboard(text: String) {
-        try {
-            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-            cm.setPrimaryClip(android.content.ClipData.newPlainText("大小姐 引擎诊断", text))
-            Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "复制失败：${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
-
     private fun confirmClearEngineLog() {
         AlertDialog.Builder(this)
             .setTitle("清空引擎诊断？")
             .setMessage(
-                "内存记录与落盘日志是两份：内存只管「刚才那一下」，落盘那份能翻到前几天。\n" +
+                "引擎记录分三份：内存（只管「刚才那一下」）、扫描过程（完整原文）、" +
+                    "结论日志（诊断页显示的那份，能翻到前几天）。\n\n" +
+                    "只清内存的话，诊断页仍会显示结论日志里留下的历史记录。\n" +
                     "不影响规则、快照和跳过统计。"
             )
             .setNegativeButton("取消", null)
@@ -144,7 +110,7 @@ class MaintenanceActivity : AppCompatActivity() {
                 EngineTrace.clear()
                 Toast.makeText(this, "已清内存记录，落盘日志保留", Toast.LENGTH_SHORT).show()
             }
-            .setPositiveButton("连文件一起清") { _, _ ->
+            .setPositiveButton("全部清空") { _, _ ->
                 EngineTrace.clear()
                 EngineTrace.clearFiles()
                 Toast.makeText(this, "已全部清空", Toast.LENGTH_SHORT).show()
