@@ -722,6 +722,17 @@ class SkipAccessibilityService : AccessibilityService() {
         splashClosedAt.remove(pkg)
         lastStateChangeAt[pkg] = now
         splashState[pkg] = false          // 让下面的状态翻转日志能打出 open
+        // 清掉本包所有规则的冷却与计数。
+        //
+        // `onPageChanged` 是故意保留冷却的（同页连点会重复打同一个按钮），
+        // 但续窗面对的是**另一个页面**，冷却留着等于续了个空窗：
+        // 受控 App 实测第 1 段点击后 `splash-common-text` 还在冷却，第 2 段整个
+        // 停在 `cooldown ... 502ms` 里一次都没命中，直到冷却结束才点到第 3 段。
+        val prefix = "$pkg|"
+        ruleState.keys.filter { it.startsWith(prefix) }.forEach {
+            ruleState[it]?.lastAt = 0L
+            ruleState[it]?.count = 0
+        }
         enterHotWindow(pkg)
         traceV("retry-window $pkg act=${newAct.substringAfterLast('.')} after=${now - hitAt}ms")
     }
