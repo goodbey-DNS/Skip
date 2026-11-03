@@ -2,6 +2,49 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 验证 - 2026-11-03 · 受控工程全量回归 + 保活（无代码改动）
+
+真实广告样本太薄（18 轮只碰到 6 次），把 `H:\skiptest` 里构造好的形态全部跑一遍，
+再补上保活/掉线恢复。跑之前确认源码与设备上的 APK 一致（源码 11:22:08、APK 11:22:34）。
+
+### 受控工程结果
+
+| 用例 | 结果 | 判定 |
+|---|---|---|
+| HideActivity | HIT 1、记账 1 | 通过 |
+| StuckActivity | HIT 2、补刀后 `giveup`、记账 0 | 通过 |
+| DialogActivity | HIT 1、`win-hit` 1、记账 1 | 通过（多窗口那条路通） |
+| LandingActivity | HIT 1、`landing` 1、记账 0 | 通过（识别成同包落地页，不记账） |
+| WebViewActivity | HIT 1、记账 1 | 通过（H5 的「跳过」进了无障碍树） |
+| TwoStageSplashActivity | HIT 2、记账 1，第 3 段未被点 | 通过 |
+| AdTagSplashActivity | HIT 2、记账 1 | 与源码旧注释不符，见下 |
+| PlainStageSplashActivity | HIT 2、记账 1、`demote` 0 | 与源码旧注释不符，见下 |
+| ToMainActivity ×3 | 续窗 1/1/0，`plain-act learn` 0 | 覆盖不到，见下 |
+
+**两段开屏只记 1 次是设计行为**：`pending` 是单例，第二段在 800ms 核验延迟内出现并点掉时，
+第一段那条根本不会记账（0.17.60 已记录）。所以 AdTag / PlainStage 的「前一条被回撤」
+在受控工程里永远走不到——两段间隔 <800ms，走的是覆盖而不是回撤。
+**过渡页回撤与空窗页学习这两条，受控工程覆盖不到**，只能靠真实 App（360、微博、猎豹的日志）。
+要让它们可测，得构造「第二段稳定晚于 800ms」的变体，但之前试过 1.2 秒延迟会先触发假续窗。
+
+### 保活 / 掉线恢复
+
+| 场景 | 结果 |
+|---|---|
+| `adb reboot` 后 | 无障碍自动恢复（系统按 `enabled_accessibility_services` 重新绑定），进程 7144，`KeepAliveJobService` 已调度 |
+| 省电模式（`low_power=1`） | 进程保留、服务保持绑定，冷启动 HideActivity 正常 `HIT「跳过」168x84` + `verified` |
+| `am kill` | 杀不掉——前台通知把 adj 抬住了（符合设计） |
+| `am force-stop` | 无障碍被停且**不会自愈**，`enabled_accessibility_services` 变 `null`，必须手动写回 |
+
+### 关键发现：`uiautomator dump` 会让服务重建
+
+第一次跑 11 个用例时**全部零命中**，日志统一是 `wsc ... prev=com.miui.home fresh=false`。
+单独验证：只执行一次 `uiautomator dump`，立刻出现 `service-unbind`；紧接着冷启动 App，
+`prev=null fresh=false`，整轮零扫描。原因就是服务重建后重新计 20 秒预热期。
+
+这条推翻了 0.17.62 回归里「猎豹 r1 漏跳是未知服务重连」的归因——那次是脚本每轮读统计
+（`dump`）自己触发的。**以后批量验证里读数与启动必须隔开 20 秒以上**，否则测到的全是预热期。
+
 ## 0.17.63 - 2026-11-03 · 预热期放行系统广告容器
 
 ### 为什么改
@@ -73,6 +116,10 @@ fresh=false`，全程零扫描。`fresh=false` 只可能来自 `warmingUp`——
 而系统容器广告走的是具名 viewId（`view_skip_button_nearby_top_right`），
 误点风险远低于词表扫描；可以考虑让「容器 + 具名 viewId」在预热期也放行。
 改之前必须先在 `H:\skiptest` 上验证，不能直接发版。
+
+> 2026-11-03 补记：这次的诱因后来查清了——是本脚本每轮读统计时的 `uiautomator dump`
+> 解绑并重建了无障碍服务，见文末「受控工程全量回归」一条。0.17.63 的容器放行仍然有效
+> （重启、系统重绑、覆盖安装都会重连），但**它不是这次漏跳的原因**。
 
 ## 验证 - 2026-11-03 · 猎豹容器广告（0.17.62，无代码改动）
 
