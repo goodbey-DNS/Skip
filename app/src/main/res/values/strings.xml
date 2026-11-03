@@ -129,7 +129,7 @@
 
     <string name="accessibility_service_label">大小姐 开屏跳过</string>
     <string name="accessibility_service_summary">按自建规则与内置跳过词点击开屏按钮</string>
-    <string name="accessibility_service_description">大小姐 只在应用冷启动的头几秒内动作，尝试点掉开屏广告的跳过按钮。识别包括你自建的规则、内置的跳过词与广告控件命名，必要时按右上角位置猜一次；内置部分可在规则页关闭。不申请网络与存储权限，不上传任何数据，所有判断均在本地完成。</string>
+    <string name="accessibility_service_description">大小姐 只在应用冷启动的头几秒内动作，尝试点掉开屏广告的跳过按钮。识别包括你自建的规则、内置的跳过词与广告控件命名；内置部分可在规则页关闭。不申请网络与存储权限，不上传任何数据，所有判断均在本地完成。</string>
 
     <string name="footer_note">内置默认词负责没建过规则的 App，自建规则优先。\n下一步：广告在屏上时点悬浮钮抓快照 → 点选按钮 → 生成规则</string>
 </resources>

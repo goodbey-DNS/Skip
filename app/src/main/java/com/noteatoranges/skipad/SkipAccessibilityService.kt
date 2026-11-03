@@ -1147,22 +1147,28 @@ class SkipAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 前两条都没命中，且处在开屏窗口：试一次右上角启发式。
-        // 这是「广告有跳过按钮但既没文字也没 skip 类 id」的唯一出路——
-        // 判据收得很紧（见 CornerSkipFinder），只在开屏页右上角那一个小方块上生效。
-        // 再叠一道时间闸：只在切前台后 2.5 秒内启用。广告的跳过按钮这时早该出现了，
-        // 而主界面（右上角常有发布/保存/分享这类真按钮）通常在广告倒计时结束后才出现——
-        // 窗口开太长，从通知或 deep link 直接落到功能页时就会点错东西。
-        // 0.17.37 起它排在多窗口之后：真实命中优先于几何猜测
-        if (hit == null && splash && inCornerWindow(now) && EnginePrefs.builtinWordsEnabled(this)) {
-            val corner = runCatching { CornerSkipFinder.find(root, w, h, factsCache) }.getOrNull()
-            if (corner != null) {
-                hit = corner to CORNER_RULE
-                dbg = "corner-hit「${runCatching {
-                    (corner.text ?: corner.contentDescription ?: corner.className)?.toString()
-                }.getOrNull()?.take(12)}」"
-            }
-        }
+        // 右上角启发式：0.17.62 停用，代码保留（CornerSkipFinder 与 CORNER_RULE 都没删）。
+        //
+        // 停用依据不是一次误点，是全量账：
+        // - 0.17.60/0.17.61 两次跑批共 24 次真实冷启动，它只触发过 2 次，都是高德地图
+        //   的「图层入口」（1072,288-1204,408，高德右上角的真实功能按钮），成功跳过真广告 0 次；
+        // - 更早的 CHANGELOG 里它是常客：微博「我的」页编辑按钮、通知直落功能页、桌面网格图标，
+        //   每一次都是出事之后补一道闸（2.5 秒时间闸、可滚动整页放弃、不补刀）。
+        //
+        // 它的定位本来是「广告有跳过按钮但既没文字也没 skip 类 id」的唯一出路，
+        // 但这类开屏在 24 次样本里一次都没出现过。按「宁可少跳不可乱点」，
+        // 零收益、持续误点的功能不该默认开着。要恢复就取消下面的注释，并先拿到
+        // 「几何命中且确实跳掉了广告」的真机证据。
+        //
+        // if (hit == null && splash && inCornerWindow(now) && EnginePrefs.builtinWordsEnabled(this)) {
+        //     val corner = runCatching { CornerSkipFinder.find(root, w, h, factsCache) }.getOrNull()
+        //     if (corner != null) {
+        //         hit = corner to CORNER_RULE
+        //         dbg = "corner-hit「${runCatching {
+        //             (corner.text ?: corner.contentDescription ?: corner.className)?.toString()
+        //         }.getOrNull()?.take(12)}」"
+        //     }
+        // }
         // 扫描耗时：决定要不要给「每 App 事件次数」加预算时必须看这个数，
         // 不能凭感觉（上限是 TRAVERSE_TIMEOUT_MS=400ms）
         val cost = SystemClock.elapsedRealtime() - t0
