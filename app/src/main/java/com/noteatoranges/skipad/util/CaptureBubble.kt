@@ -257,13 +257,18 @@ object CaptureBubble {
             android.util.Log.i("DaxiaojieEngine", "bubble-hide skipped view=null")
             return
         }
+        var removed = false
         try {
             (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
                 .removeViewImmediate(v)
+            removed = true
             android.util.Log.i("DaxiaojieEngine", "bubble-hide ok")
         } catch (e: Exception) {
             android.util.Log.i("DaxiaojieEngine", "bubble-hide fail ${e.javaClass.simpleName}")
         }
-        view = null
+        // 只有真的移除成功才清引用：2026-11-04 实测，移除抛异常时如果照样把 view 置空，
+        // 这个窗口就变成既不可见、又没有任何引用能再remove的「幽灵窗口」——之后
+        // bubble-hide skipped view=null，开关也关不掉，只能杀进程
+        if (removed) view = null
     }
 }
