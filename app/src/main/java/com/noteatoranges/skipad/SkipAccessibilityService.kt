@@ -260,6 +260,9 @@ class SkipAccessibilityService : AccessibilityService() {
     private val lastHitAt = HashMap<String, Long>()
     private val lastHitAct = HashMap<String, String>()
 
+    /** 本轮已经续过窗的包。真切换到这个 App 时清掉，见 [onAppSwitched]。 */
+    private val retriedAfterHit = HashMap<String, Boolean>()
+
     /** 每个 App 上一次记录的开屏窗口状态：只在翻转时打日志，避免每个事件刷屏 */
     private val splashState = HashMap<String, Boolean>()
 
@@ -678,6 +681,10 @@ class SkipAccessibilityService : AccessibilityService() {
      */
     private fun onAppSwitched(pkg: String) {
         clickedRects.clear()
+        // 新的一轮：续窗资格与凭据都作废
+        retriedAfterHit.remove(pkg)
+        lastHitAt.remove(pkg)
+        lastHitAct.remove(pkg)
         val prefix = "$pkg|"
         ruleState.keys.filter { it.startsWith(prefix) }.forEach { ruleState[it]?.count = 0 }
     }
@@ -695,6 +702,10 @@ class SkipAccessibilityService : AccessibilityService() {
      * 扫满四秒也只是 no-match。
      */
     private fun maybeReopenAfterHit(pkg: String, newAct: String) {
+        // 一轮里只允许续一次。不能只靠「删凭据」——每次点击成功都会重新写 lastHitAt，
+        // 于是「点第 2 段 → 跳到第 3 段 → 又满足 6 秒内且换了类名」会继续续下去。
+        // 受控 App 三连跳实测确认过这个漏洞：不拦的话每一段都会续。
+        if (retriedAfterHit[pkg] == true) return
         val hitAt = lastHitAt[pkg] ?: return
         val now = SystemClock.elapsedRealtime()
         if (now - hitAt > RETRY_AFTER_HIT_MS) {
@@ -702,11 +713,12 @@ class SkipAccessibilityService : AccessibilityService() {
             lastHitAct.remove(pkg)
             return
         }
-        // 同一个 Activity 里刷新内容不算换页，交给正常的 onPageChanged 处理
-        if (newAct == lastHitAct[pkg].orEmpty()) return
+        // 同一个页面里刷新内容不算换页，交给正常的 onPageChanged 处理
+        if (newAct.isNotEmpty() && newAct == lastHitAct[pkg].orEmpty()) return
         lastHitAt.remove(pkg)
         lastHitAct.remove(pkg)
         if (pkg in blacklist) return
+        retriedAfterHit[pkg] = true
         splashClosedAt.remove(pkg)
         lastStateChangeAt[pkg] = now
         splashState[pkg] = false          // 让下面的状态翻转日志能打出 open
@@ -803,9 +815,11 @@ class SkipAccessibilityService : AccessibilityService() {
                 // 直接记下来会让「页面限定」的规则永远失配（activityMatches 按类名后缀比）
                 val cn = event.className?.toString()
                 val realCn = cn?.takeIf { it.isNotBlank() && !isSystemUiClass(it) }
-                // 0.17.53：刚点完又在本包内换了页 → 可能是第二段开屏。
-                // 只在 freshSwitch 之外补这一条：真切换过来的本来就开窗了，不用续
-                if (realCn != null && !freshSwitch) maybeReopenAfterHit(ep, realCn)
+                // 0.17.54：换页判断用**原始** className，不用过滤后的 realCn。
+                // 受控 App 实测：第二个 Activity 的 WSC 只报 android.widget.FrameLayout，
+                // 被 isSystemUiClass 当成系统控件滤掉，续窗整整晚了一段，落在第三段才触发。
+                // 真实 360 报的是真类名，两条路都要能走通。
+                if (!freshSwitch) maybeReopenAfterHit(ep, cn.orEmpty())
                 val act = realCn ?: lastActivityClass[ep].orEmpty()
                 realCn?.let { lastActivityClass[ep] = it }
                 // 换页：清属性缓存、清规则计数、下次事件重建扫描器
