@@ -16,13 +16,14 @@ class StatsDb private constructor(context: Context) :
     data class Event(val pkg: String, val detail: String, val ts: Long)
     data class PkgCount(val pkg: String, val count: Int)
 
-    fun insert(pkg: String, detail: String) {
+    /** 返回新行 id；0.17.60 起供「过渡页跳过」回撤用（见 SkipAccessibilityService） */
+    fun insert(pkg: String, detail: String): Long {
         val cv = ContentValues().apply {
             put(C_PKG, pkg)
             put(C_DETAIL, detail)
             put(C_TS, System.currentTimeMillis())
         }
-        writableDatabase.insert(TABLE, null, cv)
+        val id = writableDatabase.insert(TABLE, null, cv)
         // 每写 PRUNE_EVERY 条顺手清理一次。
         // 以前 prune 只在打开 App 时跑（MainActivity），用户装完基本不再打开的话
         // 表就只增不减，"保留最近 1000 条"的设计等于没落地。
@@ -31,6 +32,18 @@ class StatsDb private constructor(context: Context) :
             insertSincePrune = 0
             runCatching { prune(KEEP_EVENTS) }
         }
+        return id
+    }
+
+    /**
+     * 删掉一条记录，返回是否真的删到。
+     *
+     * 只服务于「回撤」这一个场景：刚记下的那次点击事后被认定为过渡页按钮，
+     * 不是广告，就不该留在「已跳过广告」的计数里。不做通用删除接口。
+     */
+    fun deleteById(id: Long): Boolean {
+        if (id <= 0) return false
+        return writableDatabase.delete(TABLE, "$C_ID = ?", arrayOf(id.toString())) > 0
     }
 
     /** 距上次清理累计写入条数（只在 IO 线程访问） */

@@ -186,6 +186,13 @@ class SkipAccessibilityService : AccessibilityService() {
          * 主界面上恰好有个「跳过」的话，会被当成按钮没点掉然后补刀——那是往正文里点。
          */
         val rectKey: String = "",
+        /**
+         * 点击那一刻页面上有没有广告迹象（SDK 资源名前缀 / 「广告」字样 / 倒计时数字）。
+         *
+         * 默认 `true` 是故意的：拿不到证据时一律按「这是广告」处理，只在**明确没有任何
+         * 广告迹象**时才允许回撤这条记录。判错的方向永远是「多记一次」，不是「少记一次」。
+         */
+        val adEvidence: Boolean = true,
     )
 
     /** 每个 App 最近一次"新窗口出现"的时间与前台 Activity 类名 */
@@ -262,6 +269,35 @@ class SkipAccessibilityService : AccessibilityService() {
 
     /** 本轮已经续过窗的包。真切换到这个 App 时清掉，见 [onAppSwitched]。 */
     private val retriedAfterHit = HashMap<String, Boolean>()
+
+    /**
+     * 刚写进统计的那一条：行 id / 写入时刻 / 是不是「弱证据」（点的时候页面上没有广告迹象）。
+     *
+     * **只在 [Io] 单线程里读写**，主线程不碰——主线程只把 `adEvidence` 随 PendingSkip 传下来。
+     * 这样避免了跨线程可见性问题，也避免了「删上一条」和「写这一条」被并发打乱。
+     */
+    private class LastInsert(val id: Long, val at: Long, val weak: Boolean)
+    private val lastInserted = HashMap<String, LastInsert>()
+
+    /**
+     * 续窗后落到的 Activity 与「空窗」次数（第 21 条）。
+     *
+     * 0.17.58 日志里出现过 `retry-window MainActivity@831ms`：点完直接进主界面，
+     * 续上的四秒窗口一直在主界面上白扫。
+     *
+     * 为什么不在续窗一开始就判「这是主界面」：实测第二段广告在点击后 493–1400ms 才出现，
+     * 任何早退都可能把真广告一起漏掉——那比白扫四秒贵得多。所以改成**事后学习**：
+     * 某个 Activity 连续两次作为续窗落点、整轮一次都没命中，才把它记为「空窗页」，
+     * 下次不再为它开续窗。命中过一次就立刻把这个记录清掉。
+     */
+    private val retryAct = HashMap<String, String>()
+    private val plainActHits = HashMap<String, Int>()
+
+    /** 已确认「续上也扫不到东西」的页面：`包名/Activity`。服务重启即清空，不落盘。 */
+    private val plainActs = HashSet<String>()
+
+    /** 本轮热窗口里点掉了几次（续窗轮结束时用来区分「扫了没命中」和「点完收手」） */
+    private var hotHitCount = 0
 
     /** 每个 App 上一次记录的开屏窗口状态：只在翻转时打日志，避免每个事件刷屏 */
     private val splashState = HashMap<String, Boolean>()
@@ -699,6 +735,7 @@ class SkipAccessibilityService : AccessibilityService() {
         retriedAfterHit.remove(pkg)
         lastHitAt.remove(pkg)
         lastHitAct.remove(pkg)
+        retryAct.remove(pkg)
     }
 
     /**
@@ -741,7 +778,16 @@ class SkipAccessibilityService : AccessibilityService() {
         lastHitAt.remove(pkg)
         lastHitAct.remove(pkg)
         if (pkg in blacklist) return
+        // design.md 第 21 条：主界面白扫。某个页面连着两次续上来都一次没命中，就不再为它
+        // 开续窗。门槛取「连续两次」而不是一次，是因为第二段广告实测 493–1400ms 才出现，
+        // 偶发一次没填充不该被判成空窗；命中过就立刻作废（见 scanAndAct 命中分支）
+        val plainKey = "$pkg/$newAct"
+        if (newAct.isNotEmpty() && plainKey in plainActs) {
+            traceV("retry-skip-plain $pkg act=${newAct.substringAfterLast('.')}")
+            return
+        }
         retriedAfterHit[pkg] = true
+        retryAct[pkg] = newAct
         splashClosedAt.remove(pkg)
         lastStateChangeAt[pkg] = now
         splashState[pkg] = false          // 让下面的状态翻转日志能打出 open
@@ -1048,6 +1094,10 @@ class SkipAccessibilityService : AccessibilityService() {
         }
 
         val t0 = SystemClock.elapsedRealtime()
+        // 命中可能来自主窗口，也可能来自同包的另一个窗口（广告 SDK 独立窗口）。
+        // 「这一页像不像广告」必须在命中的那棵树上算，否则独立窗口里的按钮
+        // 会被拿主窗口（往往只有 1 个节点）去判证据，永远判成「没有广告迹象」
+        var hitRoot = root
         var hit = userSc?.findSkipTarget(root, w, h)
         var dbg = userSc?.lastDebug
         if (hit == null && kwSc != null) {
@@ -1084,11 +1134,13 @@ class SkipAccessibilityService : AccessibilityService() {
                 val h1 = userSc?.findSkipTarget(r0, w, h)
                 if (h1 != null) {
                     hit = h1
+                    hitRoot = r0
                     dbg = userSc?.lastDebug
                 } else {
                     val h2 = kwSc?.findSkipTarget(r0, w, h)
                     if (h2 != null) {
                         hit = h2
+                        hitRoot = r0
                         dbg = kwSc?.lastDebug
                     }
                 }
@@ -1160,6 +1212,16 @@ class SkipAccessibilityService : AccessibilityService() {
         // 事件会继续走词表扫描。关窗是唯一不依赖任何推断的收手方式；
         // 核验（verifySkip）不看这个时间戳，补刀照常进行。
         splashClosedAt[pkg] = now
+        // 这个页面确实点得到东西：之前若被学成「空窗页」，立刻作废。
+        // 学习判据只允许「连续两次空手而归」才算数，命中一次就推翻它
+        // 计数必须赶在下面的 exitHotWindow 之前：那里要靠它区分
+        // 「续窗扫满没命中」和「续窗点着了才退出」
+        hotHitCount++
+        if (act.isNotEmpty()) {
+            val plainKeyNow = "$pkg/$act"
+            plainActHits.remove(plainKeyNow)
+            plainActs.remove(plainKeyNow)
+        }
         // 0.17.53：记下「刚点过」的凭据，供 [maybeReopenAfterHit] 判断同包换页。
         // 只有点击成功才写——没点出去就不该有续窗资格
         lastHitAt[pkg] = now
@@ -1178,7 +1240,14 @@ class SkipAccessibilityService : AccessibilityService() {
         // 第一下没点掉时，「还在」既可能是广告没响应，也可能是页面已换、右上角另有
         // 别的小按钮——这时再补一次裸坐标点击，风险大于收益。所以 corner 一律不补刀。
         val retry = if (rule.id == CORNER_RULE.id) 0 else MAX_RETRY
-        pending = PendingSkip(winKey, pkg, detail, 0, retry, ruleId = rule.id, act = act, rectKey = hitRectKey)
+        // 广告证据必须在点击这一刻采：点完页面就换了，事后再去新页面上找「广告」字样
+        // 只会找到主界面。命中本来就少，多一次整树遍历可以忽略
+        val adEv = hasAdEvidence(hitRoot, hit.first)
+        if (!adEv) traceV("no-ad-evidence $pkg 「$detail」 规则=${rule.id}")
+        pending = PendingSkip(
+            winKey, pkg, detail, 0, retry,
+            ruleId = rule.id, act = act, rectKey = hitRectKey, adEvidence = adEv,
+        )
         val token = pending
         mainHandler.postDelayed({ if (pending === token) verifySkip() }, VERIFY_DELAY_MS)
         return true
@@ -1204,6 +1273,8 @@ class SkipAccessibilityService : AccessibilityService() {
         // 服务刚连上时屏幕上停的可能是一张正常页面，不是开屏页：这段预热期一律不开热窗口
         if (now - connectedAt < SERVICE_WARMUP_MS) {
             traceV("hot-skip $pkg warmup=${now - connectedAt}ms")
+            // 没开成窗就不该留下「续窗落点」，否则下一轮正常退出时会拿这个陈旧值去学习
+            retryAct.remove(pkg)
             return
         }
         // 先停旧链：重复切 App 时若不停，旧任务还会在下一拍醒来，和新链叠成两条
@@ -1213,6 +1284,7 @@ class SkipAccessibilityService : AccessibilityService() {
         hotUntil = now + SPLASH_WINDOW_MS
         hotOpenedAt = now
         hotScanCount = 0
+        hotHitCount = 0
         setNotifTimeout(HOT_NOTIF_TIMEOUT)
         scheduleActiveScan()
         // 记下开窗时的 Activity：这是判断「开屏页 vs 主界面」最直接的信号，
@@ -1231,7 +1303,21 @@ class SkipAccessibilityService : AccessibilityService() {
         hotScanTask?.let { mainHandler.removeCallbacks(it) }
         hotScanTask = null
         setNotifTimeout(baseNotifTimeout)
-        traceV("hot-close $pkg scans=$hotScanCount")
+        // 只对「续窗轮」记账：正常冷启动的开屏窗口扫满没命中很正常（广告没填充），
+        // 学到它头上就会把整类 App 的续窗能力废掉
+        val ra = retryAct.remove(pkg)
+        if (ra != null && ra.isNotEmpty() && hotHitCount == 0) {
+            val key = "$pkg/$ra"
+            val n = (plainActHits[key] ?: 0) + 1
+            plainActHits[key] = n
+            if (n >= PLAIN_ACT_HITS) {
+                plainActs.add(key)
+                traceV("plain-act learn $pkg act=${ra.substringAfterLast('.')} hits=$n")
+            } else {
+                traceV("plain-act count $pkg act=${ra.substringAfterLast('.')} hits=$n")
+            }
+        }
+        traceV("hot-close $pkg scans=$hotScanCount hits=$hotHitCount")
     }
 
     /** 改系统事件合并窗口；服务未连接或系统拒绝时静默跳过 */
@@ -1377,10 +1463,30 @@ class SkipAccessibilityService : AccessibilityService() {
             // 容器命中时记到宿主名下：否则统计里会出现 com.miui.systemAdSolution
             // 这个用户完全看不懂的名字，而真正被跳过的是宿主 App 的开屏
             val statsPkg = if (gatewaySucceeded) (fg ?: p.pkg) else p.pkg
-            Io.run("stats-insert") { StatsDb.get(appCtx).insert(statsPkg, p.detail) }
-            // 点掉了就立即关窗：开屏都是立刻出现，多等一秒就是在主界面上多扫一秒
+            // 过渡页回撤（0.17.60，design.md 第 18 条）：
+            // 清理大师冷启动时，`splash-common-text` 先点掉启动页自带的「跳过」并记了一次
+            // `verified`，86ms 后真正的 `SplashAdActivity` 才出现、又被点掉一次。前一次点的
+            // 不是广告，统计里却算了一次「已跳过广告」。
+            //
+            // 判据：同一 App 两秒内连着 verified 两次，且**前一次点的时候页面上没有任何
+            // 广告迹象**（无 SDK 资源名前缀、无「广告」字样、无倒计时数字）。
+            // 不靠 Activity 名——很多 App 的窗口事件不带类名，这条判据对它们直接失效。
+            // 有一点广告迹象就不撤：宁可多记一次，也不把真广告从统计里抹掉。
+            val detail = p.detail
+            val adEv = p.adEvidence
+            Io.run("stats-insert") {
+                val db = StatsDb.get(appCtx)
+                val prev = lastInserted[p.pkg]
+                if (prev != null && prev.weak && now - prev.at <= TRANSITION_DEMOTE_MS) {
+                    val removed = runCatching { db.deleteById(prev.id) }.getOrDefault(false)
+                    traceD("demote-page-skip ${p.pkg} 上一条 ${now - prev.at}ms 前无广告迹象 removed=$removed")
+                    StatsStore.logEvent(appCtx, "过渡页跳过：${p.pkg}")
+                }
+                val id = db.insert(statsPkg, detail)
+                lastInserted[p.pkg] = LastInsert(id, now, !adEv)
+            }
             splashClosedAt[p.pkg] = now
-            traceD("verified ${p.pkg} 「${p.detail}」 (attempts=${p.attempts})")
+            traceD("verified ${p.pkg} 「$detail」 (attempts=${p.attempts})")
             pending = null
             return
         }
@@ -1635,6 +1741,55 @@ class SkipAccessibilityService : AccessibilityService() {
         if (foregroundPackage() != p.pkg) return false
         val root = currentRootOf(p.pkg) ?: return false
         return containsAdCta(root, 0)
+    }
+
+    /**
+     * 这一页有没有广告迹象——**只服务统计口径，不参与点击**。
+     *
+     * 三条任一成立就算「像广告」，判定故意偏宽：判宽了顶多多记一次，
+     * 判窄了会把真广告当成过渡页从统计里撤掉。
+     *
+     * 1. 命中节点本身或往上三层的资源名带广告 SDK 前缀；
+     * 2. 树里出现「广告 / 推广 / Sponsored」这类字样；
+     * 3. 树里出现 1–3 位纯数字（倒计时）。
+     *
+     * 实测依据（0.17.52 那次清理大师）：点在启动页自带的「跳过」上，页面里既没有
+     * SDK 资源名，也没有广告字样，几毫秒后真正的 `SplashAdActivity` 才出现。
+     */
+    private fun hasAdEvidence(root: AccessibilityNodeInfo?, hit: AccessibilityNodeInfo): Boolean {
+        var cur: AccessibilityNodeInfo? = hit
+        var depth = 0
+        while (cur != null && depth < 4) {
+            val vid = runCatching { cur?.viewIdResourceName }.getOrNull()
+            if (vid != null && hasAdPrefix(vid)) return true
+            cur = runCatching { cur?.parent }.getOrNull()
+            depth++
+        }
+        if (root == null) return false
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < AD_EVIDENCE_MAX_NODES) {
+            val n = queue.removeFirst()
+            visited++
+            val t = runCatching { n.text?.toString() }.getOrNull()?.trim()
+            if (!t.isNullOrEmpty() && t.length <= 6) {
+                if (AD_WORDS.any { w -> t.contains(w, ignoreCase = true) }) return true
+                if (t.length <= 3 && t.all { it.isDigit() }) return true
+            }
+            val vid = runCatching { n.viewIdResourceName }.getOrNull()
+            if (vid != null && hasAdPrefix(vid)) return true
+            val c = runCatching { n.childCount }.getOrDefault(0)
+            for (i in 0 until minOf(c, 20)) {
+                runCatching { n.getChild(i) }.getOrNull()?.let { queue.add(it) }
+            }
+        }
+        return false
+    }
+
+    private fun hasAdPrefix(vid: String): Boolean {
+        val v = vid.lowercase(java.util.Locale.ROOT)
+        return BuiltinRules.AD_EVIDENCE_PREFIXES.any { v.contains(it) }
     }
 
     private fun containsAdCta(node: AccessibilityNodeInfo, depth: Int): Boolean {
@@ -2289,6 +2444,35 @@ class SkipAccessibilityService : AccessibilityService() {
          * [SPLASH_WINDOW_MS] 的扫描时间，而且整个过程只允许发生一次。
          */
         const val RETRY_AFTER_HIT_MS = 6000L
+
+        /**
+         * 过渡页回撤的判定窗：两条 verified 之间不超过这个时长，才认为后一条说明
+         * 「前一条点的是过渡页」。
+         *
+         * 依据是实测间隔——清理大师启动页 → `SplashAdActivity` 86ms，360 两段之间
+         * 493–1400ms。取 2 秒，比最长实测再留 0.6 秒余量；再长就会把「用户真看了
+         * 两个广告」也串起来，把真广告撤掉。
+         */
+        const val TRANSITION_DEMOTE_MS = 2000L
+
+        /**
+         * 「空窗页」学习门槛：某个 Activity 连续这么多次作为续窗落点、整轮零命中，
+         * 才不再为它开续窗（design.md 第 21 条）。
+         *
+         * 一次不够：第二段广告可能因为没填充而暂时扫不到，一次就学等于把偶发当规律。
+         */
+        const val PLAIN_ACT_HITS = 2
+
+        /** 广告证据遍历的节点上限：开屏页再大也就几百个节点，这里是防呆 */
+        const val AD_EVIDENCE_MAX_NODES = 400
+
+        /**
+         * 广告证据里的「广告」字样。
+         *
+         * 只用于统计口径（判这一页像不像广告），不参与点击，所以可以放宽。
+         * 不收单字母缩写 "AD"：它会命中 BAD / BADGE 之类的正文词。
+         */
+        val AD_WORDS = listOf("广告", "推广", "sponsored", "advertisement")
 
         // —— 开屏热窗口（与 SPLASH_WINDOW_MS 完全对齐，不引入新的时间边界）——
         // 系统事件合并窗口：平时 300ms 省电，热窗口内压到 50ms 抢时间。

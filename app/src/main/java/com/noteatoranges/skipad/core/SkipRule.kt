@@ -107,6 +107,45 @@ object BuiltinRules {
      */
     val ids: Set<String> by lazy { defaults().map { it.id }.toSet() }
 
+    /**
+     * 广告 SDK 的资源名前缀。
+     *
+     * 0.17.60 起两处共用这一份：`ad-sdk-viewid` 规则用它找关闭钮；核验阶段用它判断
+     * 「这一页像不像广告」（见 SkipAccessibilityService.hasAdEvidence）。
+     * 拆成两份就会漂移——加了一家 SDK 只改了规则、没改证据判定，统计口径就悄悄变了。
+     */
+    val SDK_PREFIXES = listOf(
+        "gdt_",     // 优量汇
+        "topon_",   // TopOn 聚合（旧名，样本中已无关闭语义命中，保留待老版本）
+        "hiad_",    // 华为广告
+        "ksad_",    // 快手联盟
+        "csj_",     // 穿山甲（样本中无关闭语义命中，保留待老版本）
+        // 0.17.36 补的三家。来源不是猜的：48 个真实 APK（6.24 GB）逐个 dump 资源表，
+        // 再解析开屏布局 XML 核对控件类型与所在布局，取「至少 3 个 App 交叉一致」的：
+        // - anythink_ TopOn 新版命名（旧名 topon_ 已不再出现），4 个 App：墨迹、记账、两个天气
+        // - jad_      京东广告，3 个 App：迅雷、墨迹、记账
+        // - noah_     腾讯广告，3 个 App：UC、两个天气
+        // 三家都只加前缀，不放开关闭语义——广告 CTA 依旧进不来（见下方单测）
+        "anythink_",
+        "jad_",
+        "noah_",
+        // 0.17.46 复核后补的两家，各跨 2 包且 id 名逐字相同：
+        // - bsyad_ 迅雷、我的记账（bsyad_plg_iv_ad_close / bsyad_plg_iv_close）
+        // - mimo_  迅雷、美图秀秀（mimo_banner_view_close / mimo_interstitial_close_img）
+        "bsyad_",
+        "mimo_",
+    )
+
+    /**
+     * 「这一页像广告」的证据前缀，只在核验记账时用，**不参与点击**。
+     *
+     * 故意比 [SDK_PREFIXES] 宽：判定越宽，越倾向于「这就是广告」，
+     * 统计口径越保守（宁可多记广告，也不把真广告当成过渡页撤掉）。
+     * 百度 mobads 的 `bd_` / `mobads` 加在这里而不加进规则——360 那个按钮靠文本命中，
+     * 往规则里加前缀会扩大点击面，没有验证过的事不做。
+     */
+    val AD_EVIDENCE_PREFIXES = SDK_PREFIXES + listOf("bd_", "mobads")
+
     fun defaults(): List<SkipRule> = listOf(
         // viewId 带 skip 的基本就是广告 SDK 的跳过按钮本体（穿山甲 tt_splash_skip_btn 等）；
         // 冷却/次数上限：没有闸时一个窗口内会把页面上所有像跳过的控件都点一遍，
@@ -139,27 +178,7 @@ object BuiltinRules {
 
         SkipRule(
             id = "ad-sdk-viewid",
-            viewIds = listOf(
-                "gdt_",     // 优量汇
-                "topon_",   // TopOn 聚合（旧名，样本中已无关闭语义命中，保留待老版本）
-                "hiad_",    // 华为广告
-                "ksad_",    // 快手联盟
-                "csj_",     // 穿山甲（样本中无关闭语义命中，保留待老版本）
-                // 0.17.36 补的三家。来源不是猜的：48 个真实 APK（6.24 GB）逐个 dump 资源表，
-                // 再解析开屏布局 XML 核对控件类型与所在布局，取「至少 3 个 App 交叉一致」的：
-                // - anythink_ TopOn 新版命名（旧名 topon_ 已不再出现），4 个 App：墨迹、记账、两个天气
-                // - jad_      京东广告，3 个 App：迅雷、墨迹、记账
-                // - noah_     腾讯广告，3 个 App：UC、两个天气
-                // 三家都只加前缀，不放开关闭语义——广告 CTA 依旧进不来（见下方单测）
-                "anythink_",
-                "jad_",
-                "noah_",
-                // 0.17.46 复核后补的两家，各跨 2 包且 id 名逐字相同：
-                // - bsyad_ 迅雷、我的记账（bsyad_plg_iv_ad_close / bsyad_plg_iv_close）
-                // - mimo_  迅雷、美图秀秀（mimo_banner_view_close / mimo_interstitial_close_img）
-                "bsyad_",
-                "mimo_",
-            ),
+            viewIds = SDK_PREFIXES,
             // 资源名里必须同时出现关闭语义，才认它是退出按钮而不是广告 CTA
             viewIdNeeds = listOf("close", "dismiss", "skip", "cancel", "关闭", "跳过"),
             cooldownMs = BUILTIN_COOLDOWN_MS,
