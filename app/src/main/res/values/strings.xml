@@ -19,6 +19,7 @@
     <string name="times_format_detail">命中「%1$s」</string>
 
     <string name="entry_recent">查看最近记录 ›</string>
+    <string name="entry_diagnosis">为什么没跳过 ›</string>
     <string name="entry_keepalive">保活与后台 ›</string>
 
     <string name="tab_home">首页</string>

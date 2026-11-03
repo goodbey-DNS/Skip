@@ -114,7 +114,9 @@ class DiagnosisActivity : AppCompatActivity() {
         // 连接成功是常态，不进时间线；它只在概览里占一行，否则每次服务重连都刷一屏。
         val filtered = ArrayList<Diagnosis.Event>(events.size)
         for (e in events.asReversed()) {
-            if (e.kind == Diagnosis.Kind.SERVICE && e.tone == Diagnosis.Tone.OK) continue
+            // 服务连接/断开不进时间线：概览里已经有一行当前状态，断开通常几秒就自动恢复，
+            // 列在下面只会把「跳过成功」挤下去，让人以为出了大问题
+            if (e.kind == Diagnosis.Kind.SERVICE) continue
             // 相邻重复只留一条：一次重连会连打两三条断开/连接，全列出来只是噪音。
             // 必须带上时间窗 —— 同一个 App 隔五分钟跳了两次，是两条独立的记录，不能合并
             val prev = filtered.lastOrNull()

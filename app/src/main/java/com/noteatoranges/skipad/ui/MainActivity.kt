@@ -101,6 +101,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.recent_entry).setOnClickListener {
             startActivity(Intent(this, RecentActivity::class.java))
         }
+        // 首页直达诊断：遇到「明明有开屏却没跳过」时，这里是第一反应要去的地方
+        findViewById<TextView>(R.id.diagnosis_entry).setOnClickListener {
+            startActivity(Intent(this, DiagnosisActivity::class.java))
+        }
 
         // —— 设置页底部：版本号（原「关于」页唯一的长期有用信息）——
         findViewById<TextView>(R.id.version_text).text = try {
