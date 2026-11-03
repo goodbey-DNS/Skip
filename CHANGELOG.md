@@ -2,6 +2,38 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 验证 - 2026-11-03 · 备份恢复实测（无代码改动）
+
+0.17.59 把备份标识从 `SkipAd` 改成 `daxiaojie`，同时加了 `LEGACY_APP_NAMES` 兼容。
+这套兼容此前只存在于代码里，没在真机跑过。这次补上端到端验证。
+
+### 结论：正常
+
+- **导出**：`大小姐-backup-<时间戳>.zip` 落在 `Android/data/com.noteatoranges.skipad/files/backup/`，
+  内容为 manifest.json + rules.json + keywords.json + engine.json + 快照节点树。
+- **旧标识兼容**：造了一份 manifest 里 `app` 写 `SkipAd`、带一条规则和两份引擎开关的包，
+  恢复提示「已恢复：规则 1 条、关键字 0 条、快照 0 份、设置 2 项」、「这份备份来自 0.17.58」，
+  进规则页能看到那条规则。**改名没有让旧备份失效。**
+- **新标识**：同样的包改成 `app` 写 `daxiaojie`，恢复结果为规则 0 条，规则页回到
+  「还没有自建规则」——`RuleStore.importFrom` 是覆盖式写入，空数组会清空旧规则。
+- **后悔药**：每次恢复前自动导出一份当前数据，文件名带时间戳，实测生成。
+- **备份不含统计**：统计在 `StatsDb`，不在 zip 里。恢复不会改动「已跳过 N 次」。
+
+验证用的测试规则与测试 zip 已全部删除，设备上规则页回到空状态。
+
+### 操作坑（换电脑做同类验证时会重新踩）
+
+- `input tap` 在这台设备上对部分 View 无效（点 tab、点按钮都没反应）。
+  能用的是 `input touchscreen tap x y`，以及 `input swipe x y x y 120`（原地短按）。
+- 系统对话框（AlertDialog）用坐标点最稳，但按钮位置要先 dump 确认；
+  键盘 TAB（`input keyevent 61`）能在页面间移动焦点，dump 里看 `focused="true"` 确认，
+  但对话框内的按钮用 ENTER 不触发，仍要坐标点。
+- **`adb push` 到 `Android/data/<包名>/files/backup/` 会把文件名截断**：
+  `clean.zip` 变成 `clea`、`legacy-SkipAd.zip` 变成 `legacy-SkipA`。
+  推完必须 `mv` 改回带扩展名的全名，否则 App 的 `latestBackup` 会选错或读不到。
+- 备份文件名带中文（`大小姐-backup-...`），跨设备传输时也可能遇到命名问题；
+  目前不影响本机使用，暂不改。
+
 ## 0.17.62 - 2026-11-03 · 停用右上角几何猜测
 
 ### 为什么停
