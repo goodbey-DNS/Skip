@@ -2,6 +2,40 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 验证 - 2026-11-03 · 遗留三件（无代码改动）
+
+### 1. 受控工程编译问题解决，但回撤仍然覆盖不到
+
+`H:\skiptest` 里没有 gradle wrapper、系统 PATH 里也没有 gradle。可用的在
+`%USERPROFILE%\.gradle\wrapper\dists\gradle-9.8.2-bin\...\gradle-9.8.2\bin\gradle.bat`，
+配上 `JAVA_HOME=G:\teleagent工作区\.temp\jdk\jdk-21.0.13+9` 能正常 `assembleDebug`。
+
+新增 `DelayedStageSplashActivity`（第 1 段点完后延迟 N 毫秒再进第 2 段），用来给
+「过渡页回撤」造时序。900ms 与 1500ms 两版都试过，**都不行**：
+
+- 900ms 版：第二段在 496ms 就出现 `retry-check new=FrameLayout`，续窗先开，
+  点击落在第一段残留按钮上，第一段的 `pending` 被覆盖；
+- 1500ms 版：同样在 506ms 出现 `retry-check new=FrameLayout lastHit=SecondAdAltActivity`，
+  说明 `lastActivityClass` 已经提前变成第二段，续窗照样提前开。
+
+根因是 Activity 切换本身会产生 `FrameLayout` 的 `wcc-switch` 事件，引擎在 500ms 左右
+就会开续窗。**受控工程构造不出「第一段先核验记账、第二段再触发回撤」的时序**，
+这条只能靠真实 App（猎豹 `SplashAdActivity`、360 的百度 mobads）验证。
+
+### 2. 统计写入：10 次连续跳过，10/10 对上
+
+不读数的前提下连跑 10 次 `HideActivity`，累计 69 → 79，与 10 次 `verified` 完全一致。
+中途没有任何 `stats-insert` 失败。design.md 第 24 条那个整段失效**无法复现**，
+暂按「旧进程的一次性状态 / 测试期间 dump 重建服务」处理，不再投入。
+
+### 3. 淘宝、抖音：仍然没有开屏广告
+
+- 淘宝：`scan 23 次`、`nodes=155`、全程 `no-match`，6 秒后前台上是 `TBMainActivity`，
+  也就是没有开屏，直接进主界面；
+- 抖音：`scan 27 次`、`nodes=34`，8 秒后**仍停在 `splash.SplashActivity`**，
+  树里没有「跳过」文本。节点只有 34 个，说明开屏大概率是图片/视频自绘，
+  属于 0.17.62 停掉几何猜测之后覆盖不到的那一类。样本量仍不足以下结论。
+
 ## 验证 - 2026-11-03 · 受控工程全量回归 + 保活（无代码改动）
 
 真实广告样本太薄（18 轮只碰到 6 次），把 `H:\skiptest` 里构造好的形态全部跑一遍，
