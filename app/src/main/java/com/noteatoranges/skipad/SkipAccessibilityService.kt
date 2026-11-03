@@ -733,6 +733,13 @@ class SkipAccessibilityService : AccessibilityService() {
             ruleState[it]?.lastAt = 0L
             ruleState[it]?.count = 0
         }
+        // 还有一层冷却不在这张表里：scanAndAct 开头的「同 App 冷却」用的是
+        // lastSkipPkg + lastSkipAt（COOLDOWN_MS = 4000ms）。只清 ruleState 的话，
+        // 续窗一开就立刻撞上它，日志里是 `cooldown <pkg> 501ms`，整个第二段照样点不动。
+        //
+        // 只解绑包名、不动 lastSkipAt：后者还被 [landedOnAdPage] 用来判断
+        // 「点击后 3 秒内有没有出现下载类 CTA」，清成 0 会让那段判据直接失效。
+        lastSkipPkg = null
         enterHotWindow(pkg)
         traceV("retry-window $pkg act=${newAct.substringAfterLast('.')} after=${now - hitAt}ms")
     }
