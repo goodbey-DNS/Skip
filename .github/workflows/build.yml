@@ -145,7 +145,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v3
         with:
-          name: SkipAd ${{ github.ref_name }}
+          name: 大小姐 ${{ github.ref_name }}
           files: dist/*.apk
           generate_release_notes: true
           draft: false
