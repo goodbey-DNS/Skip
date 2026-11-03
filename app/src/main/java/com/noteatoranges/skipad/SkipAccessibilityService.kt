@@ -702,12 +702,23 @@ class SkipAccessibilityService : AccessibilityService() {
      * 扫满四秒也只是 no-match。
      */
     private fun maybeReopenAfterHit(pkg: String, newAct: String) {
+        // 0.17.57 诊断：0.17.56 在真实 360 上点击成功、第二段也出现了，却没有续窗，
+        // 日志里一条都没有。三个提前 return 的条件必须能看见是哪一个挡的。
+        // 只在这个包确实点过（有 lastHitAt 或已续过）时才打，否则每次 WSC 都会刷一行。
+        val hitAt = lastHitAt[pkg]
+        if (hitAt == null && retriedAfterHit[pkg] != true) return
+        val nowCheck = SystemClock.elapsedRealtime()
+        traceV(
+            "retry-check $pkg new=${newAct.substringAfterLast('.')}" +
+                " lastHit=${lastHitAct[pkg].orEmpty().substringAfterLast('.')}" +
+                " age=${hitAt?.let { nowCheck - it } ?: -1} retried=${retriedAfterHit[pkg]}"
+        )
         // 一轮里只允许续一次。不能只靠「删凭据」——每次点击成功都会重新写 lastHitAt，
         // 于是「点第 2 段 → 跳到第 3 段 → 又满足 6 秒内且换了类名」会继续续下去。
         // 受控 App 三连跳实测确认过这个漏洞：不拦的话每一段都会续。
         if (retriedAfterHit[pkg] == true) return
-        val hitAt = lastHitAt[pkg] ?: return
-        val now = SystemClock.elapsedRealtime()
+        if (hitAt == null) return
+        val now = nowCheck
         if (now - hitAt > RETRY_AFTER_HIT_MS) {
             lastHitAt.remove(pkg)
             lastHitAct.remove(pkg)

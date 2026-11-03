@@ -2,6 +2,64 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.57 - 2026-11-03 · 真实 360 点击成功了，但续窗没触发（加诊断）
+
+终于撞上一次有广告的 360 开屏。这一轮信息量很大：
+
+### 广告形态（截图确认）
+
+百度 mobads 的短剧推广，「跳过」在**左下角**，灰色圆形按钮、**没有倒计时数字**。
+而且它不在主窗口里——主窗口 `nodes=1` 一直是空的，是 **0.17.37 的多窗口扫描**
+在另一个窗口里找到的：
+
+```
+16.330  win-scan com.qihoo.cleandroid_cn #732
+16.787  win-hit  com.qihoo.cleandroid_cn #732
+16.788  match ... HIT「跳过」120x120 规则=splash-common-text
+16.846  hot-hit ... 3113ms
+17.673  verified
+```
+
+### 360 自己会崩（不是我们的问题）
+
+用户手动点跳过时 360 崩了，日志：
+
+```
+Process: com.qihoo.cleandroid_cn
+java.lang.SecurityException: cancelVibrate: ... has android.permission.VIBRATE
+  at com.baidu.mobads.sdk.api.SplashAd.destroy
+  at adsdk.rj$a$a.onAdDismissed
+```
+
+广告关闭后百度 SDK 调 `cancelVibration`，360 没申请 `VIBRATE` 权限 → 自己崩。
+这是 360 集成百度 SDK 的缺陷。**我们自动点的那次没有崩**（360 进程存活）。
+
+### 问题：续窗没触发
+
+第二段按预期出现了：
+
+```
+17.350  wsc com.qihoo.cleandroid_cn prev=同包 fresh=false cls=...SplashRecommendActivity
+```
+
+距离点击（16.846）只有 **504ms**，`newAct` 与点击时的 `SplashActivity` 不同，
+`lastHitAt` 也确实在 `performHit` 里写过（`hot-hit` 那行能证明执行到了 1144 行）。
+三个条件看起来全部满足，**但 `retry-window` 没有出现，`hot-open` 也没有**。
+
+代码位置、写入时机、判据条件都逐行核对过，找不到差异。所以先加诊断，
+不猜、不盲改：在 `maybeReopenAfterHit` 开头打一行 `retry-check`，
+把 `newAct` / `lastHit` / `age` / `retried` 四个值全打出来。
+只在该包确实点过时才打（`lastHitAt` 存在或已续过），不会刷屏。
+
+**这是纯诊断版本，不改任何行为。** 下次撞到有广告的 360 开屏，看
+`retry-check` 那一行就能确定是哪个条件挡的。
+
+### 顺带确认
+
+- 360 的 SplashActivity 在无广告时节点树长期只有 1–4 个节点（自绘或图片渲染），
+  这类情况文本规则无从下手，只能靠多窗口或坐标规则。
+- 用户手动点跳过会触发 360 崩溃，自动点不会——两者走的回调路径不同。
+
 ## 0.17.56 - 2026-11-03 · 冷却有两层，0.17.55 只清了一层
 
 0.17.55 清掉了 `ruleState` 里的规则冷却，重跑受控 App 依然是 `cooldown 501ms`。
