@@ -12,8 +12,8 @@ android {
         applicationId "com.noteatoranges.skipad"
         minSdk 26
         targetSdk 34
-        versionCode 123
-        versionName "0.17.51"
+        versionCode 124
+        versionName "0.17.52"
     }
 
     // 签名来自 CI 的 GitHub Secrets（KEYSTORE_B64 / KEYSTORE_PASSWORD），

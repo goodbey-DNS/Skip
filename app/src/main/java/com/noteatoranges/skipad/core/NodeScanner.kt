@@ -153,7 +153,15 @@ class NodeScanner(
                             continue
                         }
                         val area = rect.width().toFloat() * rect.height()
-                        val pct = (area / screenArea * 100).toInt()
+                        // 日志用像素尺寸，不用占屏百分比。
+                        //
+                        // 原先打的是 (area / screenArea * 100).toInt()，toInt() 直接截断，
+                        // 任何小于 1% 的节点都显示成「面积0%」。1220×2712 的屏上 1% 是三万
+                        // 多平方像素，0.99% 也有 180×180——一个完全正常的按钮，在日志里
+                        // 和 1 平方像素的碎屑长得一模一样。0.17.51 排查清理大师时就被这个
+                        // 误导过：看到「面积0%」先判成「极小节点被误点」，读了代码才知道
+                        // 只是打印精度。尺寸一眼能对上一个按钮，百分比还得反算。
+                        val sizeText = "${rect.width()}x${rect.height()}"
                         // 位置闸：排除屏幕中央主体区，那里出现关键字基本是正文而不是按钮。
                         // viewId 命中的是按钮本体，免此闸。
                         val cx = rect.exactCenterX()
@@ -179,11 +187,11 @@ class NodeScanner(
                         } else if (zone == null && !byViewId && !matched.node.rule.allowCenter && inCenter) {
                             reject = "「${text?.take(12)}」在中央区域(cx=${cx.toInt()},cy=${cy.toInt()})"
                         } else if (area in 1f..screenArea * matched.node.rule.maxAreaRatio) {
-                            lastDebug = "HIT「${(text ?: vid)?.take(20)}」面积${pct}% 规则=${matched.node.rule.id}" +
+                            lastDebug = "HIT「${(text ?: vid)?.take(20)}」${sizeText} 规则=${matched.node.rule.id}" +
                                 if (byViewId) "(viewId)" else ""
                             return cand to matched.node.rule
                         } else {
-                            reject = "「${text?.take(12)}」区域面积${pct}%超限"
+                            reject = "「${text?.take(12)}」${sizeText} 超出面积上限"
                         }
                     }
                 }
