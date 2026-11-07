@@ -46,6 +46,11 @@ class GlassBarView @JvmOverloads constructor(
     private val clipPath = Path()
     private val rect = Rect()
 
+    /** onDraw 每帧都要用：提成字段，避免每次分配（Lint DrawAllocation） */
+    private val barLoc = IntArray(2)
+    private val rootLoc = IntArray(2)
+    private val frameRect = RectF()
+
     /** 模糊用的缩微位图缓存：每帧重建会持续制造 GC 压力，这里按尺寸复用 */
     private var snap: Bitmap? = null
     private var lastSnapAt = 0L
@@ -75,9 +80,7 @@ class GlassBarView @JvmOverloads constructor(
             return
         }
 
-        val barLoc = IntArray(2)
         getLocationInWindow(barLoc)
-        val rootLoc = IntArray(2)
         t.getLocationInWindow(rootLoc)
         val dx = (barLoc[0] - rootLoc[0]).toFloat()
         val dy = (barLoc[1] - rootLoc[1]).toFloat()
@@ -107,7 +110,8 @@ class GlassBarView @JvmOverloads constructor(
 
         // 圆角裁剪内：模糊快照 + 白 tint + 描边；再画文字子View
         clipPath.reset()
-        clipPath.addRoundRect(RectF(0f, 0f, w.toFloat(), h.toFloat()), cornerPx, cornerPx, Path.Direction.CW)
+        frameRect.set(0f, 0f, w.toFloat(), h.toFloat())
+        clipPath.addRoundRect(frameRect, cornerPx, cornerPx, Path.Direction.CW)
         canvas.save()
         canvas.clipPath(clipPath)
         rect.set(0, 0, w, h)

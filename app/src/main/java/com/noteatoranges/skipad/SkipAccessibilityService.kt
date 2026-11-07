@@ -17,6 +17,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
+import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.noteatoranges.skipad.core.BuiltinRules
@@ -378,10 +379,14 @@ class SkipAccessibilityService : AccessibilityService() {
             com.noteatoranges.skipad.util.CaptureBubble.onClick = { bubbleClicked() }
         }
         if (!snapshotRegistered) {
-            registerReceiver(
-                snapshotReceiver, IntentFilter(ACTION_TAKE_SNAPSHOT),
-                // 必须 EXPORTED：通知里的按钮走 PendingIntent，由系统代发广播，
-                // 发送方不是本应用 uid，NOT_EXPORTED 会被直接丢弃（点了没反应）
+            // 必须 EXPORTED：通知里的按钮走 PendingIntent，由系统代发广播，
+            // 发送方不是本应用 uid，NOT_EXPORTED 会被直接丢弃（点了没反应）。
+            //
+            // 走 ContextCompat 而不是直接调 Context.registerReceiver(filter, int flags)：
+            // 后者在 Android 13 以下不认 RECEIVER_EXPORTED，虽然会被忽略、功能不受影响，
+            // 但 Lint 会按 API 33 的常量表校验，判成 WrongConstant。
+            ContextCompat.registerReceiver(
+                this, snapshotReceiver, IntentFilter(ACTION_TAKE_SNAPSHOT),
                 ContextCompat.RECEIVER_EXPORTED,
             )
             snapshotRegistered = true
@@ -2086,7 +2091,14 @@ class SkipAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** takeScreenshot 回调适配（API 30+），HardwareBuffer 转 Bitmap */
+    /**
+     * takeScreenshot 回调适配（API 30+），HardwareBuffer 转 Bitmap。
+     *
+     * 必须标 [RequiresApi]：类声明直接继承 API 30 的接口，minSdk 是 26。
+     * 调用点（[captureScreenshotOnly]、[captureNow]）都有 `SDK_INT >= R` 判断，
+     * 但类本身没有标注时 Lint 会把整片调用判成 NewApi error，`gradlew lint` 直接失败。
+     */
+    @RequiresApi(Build.VERSION_CODES.R)
     private inner abstract class TakeScreenshotCallback :
         AccessibilityService.TakeScreenshotCallback {
         override fun onFailure(errorCode: Int) {

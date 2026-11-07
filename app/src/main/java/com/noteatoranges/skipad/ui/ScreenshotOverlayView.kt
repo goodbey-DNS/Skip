@@ -132,7 +132,10 @@ class ScreenshotOverlayView @JvmOverloads constructor(
         val b = bmp ?: return
         if (width <= 0) return
         val s = scaleToView()
-        canvas.drawBitmap(b, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), viewPaint)
+        // 复用 rf：底图画完这一帧就不再用它，随后循环里会重新 set 成节点框，
+        // 不会互相污染。每帧 new RectF 属于 onDraw 里的多余分配
+        rf.set(0f, 0f, width.toFloat(), height.toFloat())
+        canvas.drawBitmap(b, null, rf, viewPaint)
 
         for (n in nodes) {
             rf.set(n.l * s, n.t * s, n.r * s, n.b * s)

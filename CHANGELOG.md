@@ -2,6 +2,40 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.78 - 2026-11-06 · 代码检查后修三项（未发布）
+
+无测试机，只做静态检查：`gradlew lintRelease` 报了 8 个 error、130 个 warning。
+逐条核过之后，7 个 NewApi 属于 Lint 无法跨方法推断版本判断，1 个 WrongConstant 是常量来源问题。
+
+### 改了什么
+
+1. **`TakeScreenshotCallback` 加 `@RequiresApi(R)`**（`SkipAccessibilityService.kt`）
+   内部类直接继承 API 30 的接口，minSdk 是 26。调用点都有 `SDK_INT >= R` 判断，
+   运行时安全，但类本身没有标注会让 lint 把整片判成 NewApi error、`gradlew lint` 直接失败。
+2. **广播注册改用 `ContextCompat.registerReceiver`**（同文件，`onServiceConnected`）
+   原来直接调 `registerReceiver(receiver, filter, int flags)`。该方法 API 26 就有，
+   flags 传 `ContextCompat.RECEIVER_EXPORTED`（值 2）在 Android 13 以下会被系统忽略，
+   功能不受影响（老系统动态注册默认导出）；但 Lint 按 API 33 常量表校验，判成 WrongConstant。
+   换成 ContextCompat 后版本差异由 androidx 处理。
+3. **`onDraw` 预分配对象**（`GlassBarView`、`ScreenshotOverlayView`）
+   每帧 new 两个 `IntArray(2)` 和一个 `RectF` 改成字段复用。剩一处 `Bitmap.createBitmap`
+   是有尺寸缓存的（只在尺寸变化时创建），Lint 识别不了条件，保留。
+
+### 验证（本机，无设备）
+
+- `gradlew lintRelease`：**BUILD SUCCESSFUL，error 8 → 0**，warning 130 → 126
+- `gradlew testDebugUnitTest`：47 条全过
+  （BuiltinRuleLogic 14 / Diagnosis 15 / SplashAccounting 12 / RuleStoreMatch 6）
+- 新增 `RuleStoreMatchTest` 6 条：页面匹配判错的后果是「用户规则静默不生效」，
+  界面上开关还在、就是永远不跳。把无页面规则全局生效、有页面但页面未知时不生效、
+  简写后缀匹配、`MainActivity` 命中 `SomeMainActivity` 的宽松行为都钉住。
+
+### 未做
+
+- 真机验证：三项改动都不涉及行为，但 `ContextCompat.registerReceiver` 换了注册路径，
+  通知栏「抓取」按钮要等有设备时确认一次。
+- 未使用的 14 个资源、32 处硬编码中文、5 处 ObsoleteSdkInt：纯清理项，没动。
+
 ## 2026-11-06 广告投放实测（0.17.77，ac250e7d，无代码改动）
 
 6 个 App 各冷启动 3 轮，启动一律 `am start`，每轮抓 `DaxiaojieEngine` 日志。
