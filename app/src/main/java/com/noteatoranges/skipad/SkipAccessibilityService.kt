@@ -1793,24 +1793,23 @@ class SkipAccessibilityService : AccessibilityService() {
             .build()
         try {
             val nm = androidx.core.app.NotificationManagerCompat.from(this)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val nmSys = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-                nmSys.createNotificationChannel(
-                    android.app.NotificationChannel(
-                        SNAP_CHANNEL, getString(R.string.snap_channel),
-                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
-                    ).apply {
-                        setShowBadge(false)
-                        setSound(null, null)
-                        enableVibration(false)
-                    }
-                )
-                // 渠道重要性创建后不能改，只能换新 id：
-                // snapshot / snapshot_v2 是带 action 的老版本，snapshot_v3 是 MIN，
-                // snapshot_v4 是 LOW（会被归进静默通知）
-                listOf("snapshot", "snapshot_v2", "snapshot_v3", "snapshot_v4").forEach {
-                    runCatching { nmSys.deleteNotificationChannel(it) }
+            // minSdk 26 = O：通知渠道必然可用，不再判版本
+            val nmSys = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            nmSys.createNotificationChannel(
+                android.app.NotificationChannel(
+                    SNAP_CHANNEL, getString(R.string.snap_channel),
+                    android.app.NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply {
+                    setShowBadge(false)
+                    setSound(null, null)
+                    enableVibration(false)
                 }
+            )
+            // 渠道重要性创建后不能改，只能换新 id：
+            // snapshot / snapshot_v2 是带 action 的老版本，snapshot_v3 是 MIN，
+            // snapshot_v4 是 LOW（会被归进静默通知）
+            listOf("snapshot", "snapshot_v2", "snapshot_v3", "snapshot_v4").forEach {
+                runCatching { nmSys.deleteNotificationChannel(it) }
             }
             nm.notify(SNAP_NOTIF_ID, n)
         } catch (e: SecurityException) {

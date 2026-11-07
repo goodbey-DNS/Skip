@@ -12,8 +12,8 @@ android {
         applicationId "com.noteatoranges.skipad"
         minSdk 26
         targetSdk 34
-        versionCode 150
-        versionName "0.17.78"
+        versionCode 151
+        versionName "0.17.79"
     }
 
     // 签名来自 CI 的 GitHub Secrets（KEYSTORE_B64 / KEYSTORE_PASSWORD），
@@ -63,8 +63,11 @@ kotlin {
 
 dependencies {
     // 依赖刻意压到最小：不引 material / compose，界面用原生 View 拼
-    implementation 'androidx.core:core-ktx:1.12.0'
-    implementation 'androidx.appcompat:appcompat:1.6.1'
+    // 2026-11-07 升级：core 1.12.0→1.19.1、appcompat 1.6.1→1.8.0。
+    // 升级前留个台阶：appcompat 1.7 起对主题/edge-to-edge 有行为变化，
+    // 本项目是手写 Ui.edgeToEdge，若 UI 出问题先回退这两行再排查。
+    implementation 'androidx.core:core-ktx:1.18.0'
+    implementation 'androidx.appcompat:appcompat:1.8.0'
     // 只给「纯逻辑」单测用：viewId 判定、文本长度闸。不引 robolectric，
     // 不伪造 AccessibilityNodeInfo——需要 Android 运行时的东西一律不测，也不为测试改结构
     testImplementation 'junit:junit:4.13.2'

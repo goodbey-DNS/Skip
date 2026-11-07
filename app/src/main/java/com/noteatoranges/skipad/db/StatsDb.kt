@@ -100,7 +100,12 @@ class StatsDb private constructor(context: Context) :
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // v1 起步，暂无迁移
+        // 目前 DB_VERSION = 1，还没有迁移。
+        //
+        // 以后加字段时：必须在这里写 ALTER TABLE 并把 DB_VERSION 加一。
+        // 只改版本号、不写迁移，老用户升级后第一条查询就会报「列不存在」，
+        // 统计整块失效且界面上没有任何提示——0.17.62 那次「统计写入整段失效」
+        // 排查了两次，不要再来一回。
     }
 
     companion object {

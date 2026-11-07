@@ -2,7 +2,65 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
-## 0.17.78 - 2026-11-06 · 代码检查后修三项（未发布）
+## 0.17.79 - 2026-11-07 · 无设备静态检查后的五项处理（未发布）
+
+0.17.78 之后又做了一轮静态检查（A 坐标残留、B 落盘隐私、C 依赖、D 死代码、E 数据完整性），
+这一版处理检查出来的问题。
+
+### A. 坐标规则死代码
+
+- 删除 `RuleStore.pointRules()`：全项目没有调用点，留着只会让人以为引擎还在执行坐标规则。
+- 删除 `SkipAppRule.hasDpPoint`：无任何使用。
+- 保留 `dpX/dpY` 的序列化/反序列化与规则详情页的展示分支——旧备份要能读、旧规则要看得见删得掉。
+
+### B. 备份导出的隐私提示
+
+`Backup` 只打 `meta.json` + `tree.json`，不含截图；但 `tree.json` 存的是整页节点的
+`text` / `desc`。用户在聊天、账单、验证码页面抓过快照时，这些文字会跟着 zip 走，
+而原来 `exportBackup()` 直接打包、直接弹分享面板，一个字都没提示。
+
+现在有快照时先弹确认框：「备份包含 N 份快照的页面文字（不含截图）……发给别人或
+传到网盘前，请确认没有你不想外传的内容。」没有快照时不打扰。
+
+### C. 依赖升级
+
+| 依赖 | 之前 | 现在 |
+|---|---|---|
+| androidx.core:core-ktx | 1.12.0 | **1.18.0** |
+| androidx.appcompat:appcompat | 1.6.1 | **1.8.0** |
+
+core 1.19.1 要求 compileSdk 37，本项目是 36，退到 1.18.0。
+appcompat 1.8.0 对主题与 edge-to-edge 有行为变化，本项目是手写 `Ui.edgeToEdge`，
+**升级后必须真机看一遍界面**（无设备时只能保证编译、lint、单测通过）。
+
+### D. 资源与死代码清理
+
+- 删除 13 个未使用字符串 + `bg_tabbar.xml`（删坐标规则后的遗留）
+- 删除 3 处 `SDK_INT >= O` 死判断（`CaptureBubble` 2 处、`KeepAlive` 1 处、通知渠道 1 处），
+  顺手清掉 `CaptureBubble` 与 `KeepAlive` 里的 `Build` 导入
+- `docs/design.md` 缺口标注从 0.17.62 更新到 0.17.78，补第 27、28 条
+  （图片型开屏实测、备份含页面文字）
+
+### E. 数据库迁移提醒
+
+`StatsDb.onUpgrade` 原来只有一句「暂无迁移」。补上说明：以后加字段必须同时写
+`ALTER TABLE` 并升 `DB_VERSION`，只升版本号会让老用户查询时报「列不存在」，
+统计整块失效且界面无提示（0.17.62 那次排查过两回）。
+
+### 验证
+
+- `assembleRelease` 成功
+- `lintRelease`：error 0，warning 126 → **108**
+- `testDebugUnitTest`：47 条全过
+
+### 踩坑
+
+- 把 `mipmap-anydpi-v26` 改成 `mipmap-anydpi`（lint 的 ObsoleteSdkInt 建议）后，
+  AAPT 直接报 `resource mipmap/ic_launcher not found`——自适应图标必须待在带 API 限定的
+  目录里。已回退，这条建议不适用。
+- 依赖升级第一次选 core 1.19.1，被 `checkReleaseAarMetadata` 拦下：它要求 compileSdk 37。
+
+## 0.17.78 - 2026-11-06 · 代码检查后修三项（已发布）
 
 无测试机，只做静态检查：`gradlew lintRelease` 报了 8 个 error、130 个 warning。
 逐条核过之后，7 个 NewApi 属于 Lint 无法跨方法推断版本判断，1 个 WrongConstant 是常量来源问题。

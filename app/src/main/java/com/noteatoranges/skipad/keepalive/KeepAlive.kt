@@ -9,7 +9,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -233,17 +232,16 @@ object KeepAlive {
     private fun notifyToReEnable(context: Context) {
         val nm = NotificationManagerCompat.from(context)
         if (!nm.areNotificationsEnabled()) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val nmSys =
-                context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nmSys.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    context.getString(R.string.ka_channel_name),
-                    NotificationManager.IMPORTANCE_HIGH,
-                )
+        // minSdk 26 = O：通知渠道必然可用，不再判版本
+        val nmSys =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nmSys.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ID,
+                context.getString(R.string.ka_channel_name),
+                NotificationManager.IMPORTANCE_HIGH,
             )
-        }
+        )
         val pi = PendingIntent.getActivity(
             context, 0,
             Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),

@@ -93,7 +93,6 @@ data class SkipAppRule(
 ) {
     val hasAnchor: Boolean get() = !anchorVid.isNullOrBlank() || !anchorText.isNullOrBlank()
     val hasPath: Boolean get() = !nodePath.isNullOrBlank()
-    val hasDpPoint: Boolean get() = dpX != null && dpY != null
 
     /** 位置区间（四边齐了才算） */
     val zone: RectF?
@@ -460,12 +459,14 @@ object RuleStore {
         return null
     }
 
-    /** 坐标类规则：某 App（某页面）下生效的 */
-    fun pointRules(context: Context, app: String, activity: String?): List<SkipAppRule> =
-        read(context).filter {
-            it.enabled && it.kind == "point" && it.app == app &&
-                activityMatches(it.activity, activity)
-        }
+    /**
+     * 坐标类规则已停用（0.17.72）。
+     *
+     * `pointRules()` 原来在这里，全项目没有调用点——引擎不执行坐标规则，
+     * 这个查询只是「看着像是还在用」。旧规则数据仍留在库里，是为了让用户在
+     * 规则页看得见、删得掉；读取靠 [read]，不需要单独的查询入口。
+     * dpX/dpY 字段本身保留在 [SkipAppRule] 里，旧备份照样能反序列化。
+     */
 
     /** 带结构路径的节点规则：服务按「窗口根 → 子索引」直接定位，不靠文字/ID */
     fun pathRules(context: Context, app: String, activity: String?): List<SkipAppRule> =

@@ -20,7 +20,6 @@
 
     <string name="entry_recent">查看最近记录 ›</string>
     <string name="entry_diagnosis">为什么没跳过 ›</string>
-    <string name="entry_keepalive">保活与后台 ›</string>
 
     <string name="tab_home">首页</string>
     <string name="tab_settings">设置</string>
@@ -40,7 +39,6 @@
 
     <string name="snap_channel">快照与规则</string>
     <string name="snap_notif_title">大小姐 运行中</string>
-    <string name="snap_notif_text">正在跳过开屏广告 · 点此查看设置</string>
     <string name="snapshot_selected">选中的元素</string>
     <string name="snapshot_pick_hint">点选截图上的元素（或下方列表），然后生成跳过规则</string>
     <string name="snapshot_target_app">目标应用：%1$s　（点这里改）</string>
@@ -48,13 +46,10 @@
     <string name="snapshot_pick_app_done">已指定为「%1$s」</string>
     <string name="action_generate_rule">生成跳过规则</string>
     <string name="section_nodes">全部节点（可点击的排前）</string>
-    <string name="snap_action">抓取快照</string>
     <string name="bubble_switch_title">抓取悬浮窗</string>
     <string name="bubble_switch_sub">开启后屏幕常驻小圆钮，广告出现时点一下即抓取，不用下拉通知栏；圆钮可拖动</string>
     <string name="snapshot_hint">点选下方任一节点生成跳过规则；可点击的节点排在最前。生成后规则立即生效，下次同款广告自动跳过。</string>
     <string name="snap_saved">快照已保存</string>
-    <string name="snap_failed">快照失败：读不到当前页面的控件，稍等一秒再点一次</string>
-    <string name="snap_no_pkg">快照失败：读不出当前是哪个应用，换个界面再试</string>
     <string name="snap_shot_failed">快照失败：系统没让截屏，稍后再试</string>
     <string name="snap_too_few">快照失败：这个页面几乎读不到控件，换个界面再试</string>
     <string name="snap_shot_only">这个应用禁止读取控件，已只保存截图——点开快照长按取点可建坐标规则</string>
@@ -63,20 +58,14 @@
     <string name="section_snapshots">快照（点开点选生成规则）</string>
     <string name="rules_empty">还没有自建规则——用下面的快照功能生成</string>
     <string name="snapshots_empty">还没有快照——广告在屏上时，下拉通知栏点「抓取快照」</string>
-    <string name="entry_rules">快照与规则 ›</string>
     <string name="rule_title">跳过规则</string>
     <string name="rule_kind_node">找按钮</string>
-    <string name="rule_kind_point">点位置</string>
-    <string name="rule_by_vid">按控件 ID 生成规则</string>
-    <string name="rule_by_text">按文本生成规则</string>
-    <string name="rule_by_point">按坐标生成规则</string>
     <string name="rule_saved">规则已保存，立即生效</string>
     <string name="rule_deleted">规则已删除</string>
     <string name="rule_delete_confirm">删除这条规则？</string>
 
     <string name="section_ka_settings">服务保活</string>
 
-    <string name="section_maintain">应用维护</string>
     <string name="mem_format">内存占用约 %1$s MB · 数据库 %2$s KB · 快照 %3$s MB</string>
     <string name="action_clear_mem_cache">清除内存缓存</string>
     <string name="action_clear_stats">清空统计数据</string>
@@ -91,7 +80,6 @@
     <string name="recent_empty">暂无记录</string>
 
     <string name="keepalive_title">保活与后台</string>
-    <string name="section_ka_mode">当前保活模式</string>
     <string name="keepalive_mode_silent">静默复活已就绪：掉线 / 开机 / 升级后自动重新开启</string>
     <string name="keepalive_mode_notify">提醒模式：掉线时发通知提醒（不自动开启）</string>
     <string name="ka_mode_explain">静默复活需要电脑 adb 授权一次 WRITE_SECURE_SETTINGS（signature 级权限，正常安装拿不到），授权后本 App 才能把「自己的无障碍服务」写回系统设置并拉起。只保活大小姐自己——无法替其他 App 保活，那些应用的后台存活得靠它们自己的前台服务与厂商白名单机制。</string>
@@ -132,5 +120,4 @@
     <string name="accessibility_service_summary">按自建规则与内置跳过词点击开屏按钮</string>
     <string name="accessibility_service_description">大小姐 只在应用冷启动的头几秒内动作，尝试点掉开屏广告的跳过按钮。识别包括你自建的规则、内置的跳过词与广告控件命名；内置部分可在规则页关闭。不申请网络与存储权限，不上传任何数据，所有判断均在本地完成。</string>
 
-    <string name="footer_note">内置默认词负责没建过规则的 App，自建规则优先。\n下一步：广告在屏上时点悬浮钮抓快照 → 点选按钮 → 生成规则</string>
 </resources>

@@ -5,7 +5,6 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
-import android.os.Build
 import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
@@ -56,9 +55,10 @@ object CaptureBubble {
     }
 
     fun show(context: Context) {
-        android.util.Log.i("DaxiaojieEngine", "bubble-show enter exists=${view != null} canDraw=${Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)}")
+        android.util.Log.i("DaxiaojieEngine", "bubble-show enter exists=${view != null} canDraw=${Settings.canDrawOverlays(context)}")
         if (view != null) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) return
+        // minSdk 26：Settings.canDrawOverlays 从 API 23 起就有，版本判断是死代码
+        if (!Settings.canDrawOverlays(context)) return
         val appContext = context.applicationContext
         val wm = appContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
         this.wm = wm

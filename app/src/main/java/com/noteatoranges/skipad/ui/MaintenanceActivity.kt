@@ -13,6 +13,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import com.noteatoranges.skipad.R
 import com.noteatoranges.skipad.core.EngineTrace
+import com.noteatoranges.skipad.db.SnapshotStore
 import com.noteatoranges.skipad.db.StatsDb
 import com.noteatoranges.skipad.util.AppLabels
 import com.noteatoranges.skipad.util.Backup
@@ -211,8 +212,32 @@ class MaintenanceActivity : AppCompatActivity() {
         }
     }
 
-    /** 导出备份：打包在 IO 线程做，完成后直接拉起系统分享面板 */
+    /**
+     * 导出备份：打包在 IO 线程做，完成后直接拉起系统分享面板。
+     *
+     * 导出前必须先让用户知道里面有什么：`tree.json` 存的是整页节点的文字，
+     * 抓过聊天、账单、验证码这类页面的话，那些字会跟着 zip 一起走。
+     * 截图不在包里（Backup 只打 meta + tree），但文字同样敏感。
+     */
     private fun exportBackup() {
+        val snapCount = runCatching { SnapshotStore.list(this).size }.getOrDefault(0)
+        if (snapCount == 0) {
+            doExport()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("导出备份？")
+            .setMessage(
+                "备份包含 $snapCount 份快照的页面文字（不含截图）。\n\n" +
+                    "抓过聊天、账单、验证码这类页面的话，那些文字也会在 zip 里。" +
+                    "发给别人或传到网盘前，请确认没有你不想外传的内容。"
+            )
+            .setNegativeButton("取消", null)
+            .setPositiveButton("继续导出") { _, _ -> doExport() }
+            .show()
+    }
+
+    private fun doExport() {
         Toast.makeText(this, "正在打包备份…", Toast.LENGTH_SHORT).show()
         Io.run("backup-export") {
             val file = Backup.export(applicationContext)
