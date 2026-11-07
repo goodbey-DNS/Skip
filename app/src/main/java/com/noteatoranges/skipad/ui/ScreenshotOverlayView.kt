@@ -43,11 +43,12 @@ class ScreenshotOverlayView @JvmOverloads constructor(
         context,
         object : android.view.GestureDetector.SimpleOnGestureListener() {
             override fun onLongPress(e: android.view.MotionEvent) {
-                val s = scaleToView()
+                val s = drawScale
                 if (s <= 0f) return
                 longFired = true
-                pickX = e.x / s
-                pickY = e.y / s
+                // 减去绘制偏移：预览图被缩到 55% 高度后，内容是居中画的
+                pickX = (e.x - drawLeft) / s
+                pickY = (e.y - drawTop) / s
                 invalidate()
                 onLongTapped?.invoke(pickX.toInt(), pickY.toInt())
             }
@@ -79,12 +80,6 @@ class ScreenshotOverlayView @JvmOverloads constructor(
     private val rf = RectF()
 
     /** 原始像素 → 视图像素的缩放比（不依赖 onDraw 是否已跑过） */
-    private fun scaleToView(): Float {
-        val sw = if (srcW > 0) srcW else bmp?.width ?: 0
-        val w = width
-        return if (w > 0 && sw > 0) w.toFloat() / sw else 1f
-    }
-
     fun setContent(
         bitmap: Bitmap?,
         nodes: List<SnapshotStore.Node>,
@@ -119,37 +114,61 @@ class ScreenshotOverlayView @JvmOverloads constructor(
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
-        val h = if (srcW > 0 && srcH > 0 && w > 0) {
+        val full = if (srcW > 0 && srcH > 0 && w > 0) {
             (w * srcH.toFloat() / srcW).toInt()
         } else {
             (200 * resources.displayMetrics.density).toInt()
         }
-        setMeasuredDimension(w, h.coerceAtLeast(1))
+        // 整屏比例的截图铺满宽度就是两三屏高，节点列表被顶到最下面，
+        // 得滚很久才够得到「生成跳过规则」。限到屏幕高度的 55%：
+        // 整张图一眼看全，下面同时露出列表
+        val maxH = (resources.displayMetrics.heightPixels * 0.55f).toInt().coerceAtLeast(1)
+        setMeasuredDimension(w, full.coerceIn(1, maxH))
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val b = bmp ?: return
-        if (width <= 0) return
-        val s = scaleToView()
+        if (width <= 0 || height <= 0) return
+        // 高度被上限截断后，宽高比不再等于原图，必须按「较短边」等比缩放再居中，
+        // 直接铺满会把画面压扁，节点框也跟着错
+        val sw = if (srcW > 0) srcW else b.width
+        val sh = if (srcH > 0) srcH else b.height
+        val s = if (sw > 0 && sh > 0) {
+            minOf(width.toFloat() / sw, height.toFloat() / sh)
+        } else 1f
+        drawScale = s
+        drawLeft = (width - sw * s) / 2f
+        drawTop = (height - sh * s) / 2f
+
         // 复用 rf：底图画完这一帧就不再用它，随后循环里会重新 set 成节点框，
         // 不会互相污染。每帧 new RectF 属于 onDraw 里的多余分配
-        rf.set(0f, 0f, width.toFloat(), height.toFloat())
+        rf.set(drawLeft, drawTop, drawLeft + sw * s, drawTop + sh * s)
         canvas.drawBitmap(b, null, rf, viewPaint)
 
         for (n in nodes) {
-            rf.set(n.l * s, n.t * s, n.r * s, n.b * s)
-            if (n.clickable) canvas.drawRect(rf, clickStroke) else canvas.drawRect(rf, strokePaint)
+            // 只画可点击节点与当前选中：淘宝这类页面节点上百个，全画出来就是一层黑网格，
+            // 页面内容全被盖住，反而没法判断该点哪个。
+            // 点选逻辑不受影响——点在空白处仍会选中「包含该点且面积最小」的节点
+            if (!n.clickable && n != selected) continue
+            rf.set(
+                drawLeft + n.l * s, drawTop + n.t * s,
+                drawLeft + n.r * s, drawTop + n.b * s,
+            )
+            canvas.drawRect(rf, if (n.clickable) clickStroke else strokePaint)
         }
         selected?.let {
-            rf.set(it.l * s, it.t * s, it.r * s, it.b * s)
+            rf.set(
+                drawLeft + it.l * s, drawTop + it.t * s,
+                drawLeft + it.r * s, drawTop + it.b * s,
+            )
             canvas.drawRect(rf, selFill)
             canvas.drawRect(rf, selStroke)
         }
         // 长按取点标记：十字星，让用户确认落点
         if (pickX >= 0f) {
-            val px = pickX * s
-            val py = pickY * s
+            val px = drawLeft + pickX * s
+            val py = drawTop + pickY * s
             val arm = 12f * resources.displayMetrics.density
             canvas.drawCircle(px, py, 9f * resources.displayMetrics.density, selStroke)
             canvas.drawLine(px - arm, py, px + arm, py, selStroke)
@@ -188,9 +207,10 @@ class ScreenshotOverlayView @JvmOverloads constructor(
             }
         }
         gesture.onTouchEvent(e)
-        val s = scaleToView()
-        val bx = e.x / s
-        val by = e.y / s
+        val s = drawScale
+        // 视图坐标 → 截图像素坐标：先减居中偏移，再除缩放
+        val bx = if (s > 0f) (e.x - drawLeft) / s else -1f
+        val by = if (s > 0f) (e.y - drawTop) / s else -1f
         if (e.action == android.view.MotionEvent.ACTION_UP) {
             if (longFired) {
                 longFired = false
@@ -211,6 +231,11 @@ class ScreenshotOverlayView @JvmOverloads constructor(
     private var downX = 0f
     private var downY = 0f
     private var dragging = false
+
+    /** 当前绘制用的缩放与偏移（高度被上限截断后，内容按比例居中） */
+    private var drawScale = 1f
+    private var drawLeft = 0f
+    private var drawTop = 0f
 
     var onNodeTapped: ((SnapshotStore.Node?) -> Unit)? = null
 
