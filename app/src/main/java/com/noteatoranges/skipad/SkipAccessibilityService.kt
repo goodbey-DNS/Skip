@@ -29,6 +29,8 @@ import com.noteatoranges.skipad.core.NodeScanner
 import com.noteatoranges.skipad.core.PlainActTracker
 import com.noteatoranges.skipad.core.SkipRule
 import com.noteatoranges.skipad.core.TransitionDemoter
+import com.noteatoranges.skipad.core.VerifyJudge
+import com.noteatoranges.skipad.core.VerifyOutcome
 import com.noteatoranges.skipad.db.KeywordStore
 import com.noteatoranges.skipad.db.RuleStore
 import com.noteatoranges.skipad.db.SnapshotStore
@@ -1351,8 +1353,8 @@ class SkipAccessibilityService : AccessibilityService() {
             // 系统广告容器（0.17.48）：开屏渲染在容器自己的包名里，点掉之后前台回到宿主 App。
             // 这里的「跨包」正是成功的样子，不是点进广告——真按 off-app 处理的话，
             // 统计会记成「疑似点进广告」，容器页还会被拉黑 10 分钟，下一次开屏直接不动作。
-            val gatewaySucceeded = p.pkg in SYSTEM_AD_GATEWAYS && fg != null && fg != p.pkg
-            if (fg != null && fg != p.pkg && !gatewaySucceeded) {
+            val outcome = VerifyJudge.classify(p.pkg, fg, SYSTEM_AD_GATEWAYS)
+            if (outcome == VerifyOutcome.OFF_APP) {
                 traceD("off-app ${p.pkg} → $fg，不计入跳过")
                 markBadPage(p.pkg, now)
                 Io.run("stats-insert") {
@@ -1380,7 +1382,7 @@ class SkipAccessibilityService : AccessibilityService() {
             }
             // 容器命中时记到宿主名下：否则统计里会出现 com.miui.systemAdSolution
             // 这个用户完全看不懂的名字，而真正被跳过的是宿主 App 的开屏
-            val statsPkg = if (gatewaySucceeded) (fg ?: p.pkg) else p.pkg
+            val statsPkg = VerifyJudge.statsPackage(p.pkg, fg, outcome)
             // 过渡页回撤（0.17.60，design.md 第 18 条）：
             // 清理大师冷启动时，`splash-common-text` 先点掉启动页自带的「跳过」并记了一次
             // `verified`，86ms 后真正的 `SplashAdActivity` 才出现、又被点掉一次。前一次点的
