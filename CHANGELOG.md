@@ -2,7 +2,7 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
-## 0.17.80 - 2026-11-07 · 快照预览可读性（未发布）
+## 0.17.80 - 2026-11-07 · 快照预览可读性（已发布，versionCode 152）
 
 ### 为什么
 
@@ -28,7 +28,43 @@
 
 ### 验证
 
-- `assembleRelease` 通过。无设备，真机效果未验证。
+- `assembleRelease` 通过；`lintRelease` error 0 / warning 108；单测 47 条通过。
+- **2026-11-08 真机验收**（Redmi 22081212C、Android 15、versionCode 152）
+
+  抓一张小米无障碍设置页快照（22 节点、1220×2712）后进点选页逐项量：
+
+  | 检查项 | 实测 |
+  |---|---|
+  | 预览限高 | 视图区 1349px，占可用高度 2453 的 55%，占整屏 2712 的 49.7% |
+  | 只画可点节点 | 22 个节点画出 8 个绿框，落在返回箭头、三个选项卡、四个列表行上 |
+  | 点选精度 | 在返回箭头位置点一下，选中 `#5 Button 说明「返回」位置 (62,142) 148×124`，与真实 bounds 一致 |
+  | 内容可读 | 状态栏到底部导航完整显示、居中、无裁切，文字全部可辨认 |
+
+  `drawScale / drawLeft / drawTop` 的换算正确，没有出现「缩小后点偏」。
+
+### 同轮回归
+
+- **通知栏抓取**：从通知栏触发（系统代发 PendingIntent，与 adb 广播不是同一条路径），
+  `ContextCompat.registerReceiver` 正常收到：`capture nodes=31` → `snapshot saved ... 1220×2712`。
+  「先收起通知栏再截屏」的判定也生效——抓到的是宿主 App，不是 SystemUI。
+- **appcompat 1.6.1 → 1.8.0**：首页状态栏留白正常、标题与状态栏无重叠；应用窗口止于 2453px，
+  内容没有钻到导航栏下；底部 Tab 纯色可辨。深色模式下应用整体仍是浅色——项目没有 `values-night`、
+  颜色硬编码，属**未适配而非回退**，文字对比正常、无黑底黑字。
+- **内置默认词开关**：真机上该开关处于关闭，导致引擎对所有文字型广告 `scan ... no-match`，
+  表面现象与「引擎失效」完全一致。打开后 360 清理三轮：1 轮主窗口 `nodes=1` 读不到树、
+  2 轮命中（首点 3702ms / 3363ms，均 `verified attempts=0`）。开关是热重建的
+  （扫描器缓存键含开关状态），改完下一个事件即生效，不需要重启服务。
+
+### 踩坑（本轮新增）
+
+- **`force-stop` 会摘掉无障碍且不自动恢复**：改深色模式时图省事停了一次进程，`stopped=true`、
+  `enabled_accessibility_services` 直接变 null，服务不再绑定。恢复靠
+  `settings put secure enabled_accessibility_services <pkg>/<cls>` 再 `am start` 一次清 `stopped`。
+  **做界面回归不要用 force-stop 换配置。**
+- **这台机器 adb 注入触摸会被随机丢弃**（约三到五成）：日志只留
+  `MIUIInput: Input event injection from package: null action ACTION_DOWN/UP`，成功失败都打；
+  判据是后面有没有跟 `[MotionEvent] publisher ..., channel '<window> (server)'`。
+  批量点击必须「点完回读状态」，本轮就因一次丢弃误判过「抓取按钮失效」。
 
 ## 0.17.79 - 2026-11-07 · 无设备静态检查后的五项处理（已发布）
 
