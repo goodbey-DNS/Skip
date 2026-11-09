@@ -44,6 +44,10 @@ RE_INSERT_FAIL = re.compile(r"stats-insert-fail")
 RE_SLOW_WAIT = re.compile(r"排队 (\d+)ms 才轮到")
 RE_SLOW_RUN = re.compile(r"执行 (\d+)ms")
 
+# 核验时前台换了包：可能是真点进广告，也可能是我们自己在核验窗口里把 App 切走了。
+# 后者是压测脚本的副作用（会让目标 App 被拉黑 10 分钟），必须单独计数。
+RE_OFF_APP = re.compile(r"off-app (\S+) → (\S+)")
+
 
 def resolve_adb(explicit: str) -> str:
     """找 adb：显式指定 > PATH > Android SDK 默认位置。
@@ -74,7 +78,7 @@ def adb(serial: str, *args: str, text: bool = True) -> str:
     return raw
 
 
-def one_round(serial: str, pkg: str, act: str, wait: float) -> dict:
+def one_round(serial: str, pkg: str, act: str, wait: float, settle: float) -> dict:
     # 1) 切到设置：让下一次启动是「换包」，开屏窗口才会开
     adb(serial, "shell", "am start -a android.settings.SETTINGS")
     time.sleep(1.2)
@@ -91,12 +95,20 @@ def one_round(serial: str, pkg: str, act: str, wait: float) -> dict:
     insert_fail = [ln for ln in lines if RE_INSERT_FAIL.search(ln)]
     slow_wait = [int(m.group(1)) for ln in lines for m in [RE_SLOW_WAIT.search(ln)] if m]
     slow_run = [int(m.group(1)) for ln in lines for m in [RE_SLOW_RUN.search(ln)] if m]
+    off_app = [m for ln in lines for m in [RE_OFF_APP.search(ln)] if m]
+
+    # 关键：本轮收完日志后先静一会儿，再让下一轮去切设置。
+    # 点击后的核验是 800ms，但广告可能在 sleep 窗口末尾才出现、点击也就落在末尾，
+    # 紧接着切应用就会让核验看到「前台是设置」→ 误判成点进广告，
+    # 目标 App 还会被拉黑 10 分钟，后面几轮自然全 0 命中。
+    time.sleep(settle)
 
     return {
         "verified": len(verified),
         "insert_fail": len(insert_fail),
         "slow_wait": slow_wait,
         "slow_run": slow_run,
+        "off_app": len(off_app),
         "engine_lines": len(lines),
     }
 
@@ -109,39 +121,50 @@ def main() -> int:
     ap.add_argument("--serial", default="")
     ap.add_argument("--adb", default="", help="adb 路径，默认自动查找")
     ap.add_argument("--wait", type=float, default=9.0, help="每轮启动后等多久再收日志（秒）")
+    ap.add_argument(
+        "--settle",
+        type=float,
+        default=4.0,
+        help="本轮收完日志后先静多久再进下一轮（秒）；太短会让下一轮切应用的动作污染 800ms 核验",
+    )
     args = ap.parse_args()
 
     global ADB
     ADB = resolve_adb(args.adb)
 
     print(f"压测 {args.rounds} 轮：{args.pkg}")
-    print(f"{'轮次':<4}{'verified':<10}{'写失败':<8}{'排队>3s':<10}{'执行>5s':<10}{'引擎日志':<8}")
-    total = {"verified": 0, "insert_fail": 0, "slow_wait": 0, "slow_run": 0}
+    print(f"{'轮次':<4}{'verified':<10}{'写失败':<8}{'排队>3s':<10}{'执行>5s':<10}{'误判off-app':<12}{'引擎日志':<8}")
+    total = {"verified": 0, "insert_fail": 0, "slow_wait": 0, "slow_run": 0, "off_app": 0}
     worst_wait = 0
     worst_run = 0
 
     for i in range(1, args.rounds + 1):
-        r = one_round(args.serial, args.pkg, args.activity, args.wait)
+        r = one_round(args.serial, args.pkg, args.activity, args.wait, args.settle)
         total["verified"] += r["verified"]
         total["insert_fail"] += r["insert_fail"]
         total["slow_wait"] += len(r["slow_wait"])
         total["slow_run"] += len(r["slow_run"])
+        total["off_app"] += r["off_app"]
         if r["slow_wait"]:
             worst_wait = max(worst_wait, max(r["slow_wait"]))
         if r["slow_run"]:
             worst_run = max(worst_run, max(r["slow_run"]))
         print(
             f"{i:<5}{r['verified']:<10}{r['insert_fail']:<9}"
-            f"{len(r['slow_wait']):<10}{len(r['slow_run']):<10}{r['engine_lines']:<8}"
+            f"{len(r['slow_wait']):<10}{len(r['slow_run']):<10}{r['off_app']:<12}{r['engine_lines']:<8}"
         )
 
-    print("-" * 52)
+    print("-" * 64)
     print(f"合计：verified {total['verified']} 次，写被拒 {total['insert_fail']} 次，"
-          f"排队超 3 秒 {total['slow_wait']} 次，执行超 5 秒 {total['slow_run']} 次")
+          f"排队超 3 秒 {total['slow_wait']} 次，执行超 5 秒 {total['slow_run']} 次，"
+          f"off-app 误判 {total['off_app']} 次")
     if total["insert_fail"]:
         print("→ 出现 stats-insert-fail：抓 logcat 里那几行，连同 SQLiteDatabase 的报错一起看")
     if total["slow_wait"] or total["slow_run"]:
         print(f"→ 线程被堵：最长排队 {worst_wait}ms，最长单任务 {worst_run}ms")
+    if total["off_app"]:
+        print("→ 有 off-app：可能是真点进广告落地页，也可能是本轮切应用撞上了 800ms 核验窗口；"
+              "后者会让目标被拉黑 10 分钟，调大 --settle 再跑")
     if not any(total.values()):
         print("→ 本轮没撞到失效，也没撞到跳过（可能这些 App 今天没投开屏）")
     return 1 if total["insert_fail"] else 0
