@@ -122,7 +122,24 @@ class MaintenanceActivity : AppCompatActivity() {
     private val pickBackup = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri ->
-        if (uri != null) confirmImport(uri, uri.lastPathSegment ?: "选中的备份文件")
+        if (uri != null) confirmImport(uri, displayNameOf(uri))
+    }
+
+    /**
+     * 文件选择器返回的 URI 转成给人看的文件名。
+     *
+     * 不能直接用 `uri.lastPathSegment`：从「最近使用 / 图片」这类媒体入口选文件时，
+     * lastPathSegment 是 `image:1000002645` 这种标识，恢复确认框会显示成
+     * 「来自：image:1000002645」，用户根本不知道自己选的是哪个包。
+     */
+    private fun displayNameOf(uri: android.net.Uri): String {
+        val proj = arrayOf(android.provider.OpenableColumns.DISPLAY_NAME)
+        val fromProvider = runCatching {
+            contentResolver.query(uri, proj, null, null, null)?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null
+            }
+        }.getOrNull()
+        return fromProvider ?: uri.lastPathSegment ?: "选中的备份文件"
     }
 
     private fun confirmImport(file: java.io.File, label: String) {

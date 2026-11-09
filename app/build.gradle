@@ -4,21 +4,20 @@ plugins {
 
 android {
     namespace 'com.noteatoranges.skipad'
-    // compileSdk 36：跟随 AGP 要求；targetSdk 压在 34，避免新系统行为（前台服务类型、
-    // 后台调度限制）在没验证过的前提下被动生效
+    // compileSdk 36锛氳窡闅?AGP 瑕佹眰锛泃argetSdk 鍘嬪湪 34锛岄伩鍏嶆柊绯荤粺琛屼负锛堝墠鍙版湇鍔＄被鍨嬨€?    // 鍚庡彴璋冨害闄愬埗锛夊湪娌￠獙璇佽繃鐨勫墠鎻愪笅琚姩鐢熸晥
     compileSdk 36
 
     defaultConfig {
         applicationId "com.noteatoranges.skipad"
         minSdk 26
         targetSdk 34
-        versionCode 154
-        versionName "0.17.82"
+        versionCode 155
+        versionName "0.17.83"
     }
 
-    // 签名来自 CI 的 GitHub Secrets（KEYSTORE_B64 / KEYSTORE_PASSWORD），
-    // 本地没有这两个环境变量时不做任何签名配置，交给 Gradle 默认行为
-    // ——因此本地构建出的包和 CI 出的包签名不同，不能互相覆盖安装
+    // 绛惧悕鏉ヨ嚜 CI 鐨?GitHub Secrets锛圞EYSTORE_B64 / KEYSTORE_PASSWORD锛夛紝
+    // 鏈湴娌℃湁杩欎袱涓幆澧冨彉閲忔椂涓嶅仛浠讳綍绛惧悕閰嶇疆锛屼氦缁?Gradle 榛樿琛屼负
+    // 鈥斺€斿洜姝ゆ湰鍦版瀯寤哄嚭鐨勫寘鍜?CI 鍑虹殑鍖呯鍚嶄笉鍚岋紝涓嶈兘浜掔浉瑕嗙洊瀹夎
     def ciStoreB64 = System.getenv("KEYSTORE_B64")
     def ciStorePwd = System.getenv("KEYSTORE_PASSWORD")
 
@@ -38,13 +37,10 @@ android {
             if (ciStoreB64 && ciStorePwd) signingConfig signingConfigs.ci
         }
         release {
-            // 不开启混淆：本项目零第三方 SDK，代码量小，混淆收益低；
-            // 保留符号便于自己看堆栈
-            minifyEnabled false
+            // 涓嶅紑鍚贩娣嗭細鏈」鐩浂绗笁鏂?SDK锛屼唬鐮侀噺灏忥紝娣锋穯鏀剁泭浣庯紱
+            // 淇濈暀绗﹀彿渚夸簬鑷繁鐪嬪爢鏍?            minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // release 必须不可调试：debuggable=true 时拿到手机的人可以 run-as 读私有数据、
-            // attach 调试器改内存。对一个常驻无障碍服务的 App 来说这不是能留的口子，
-            // CI 里还有一步 apksigner/aapt2 校验，产物可调试会直接让发布失败
+            // release 蹇呴』涓嶅彲璋冭瘯锛歞ebuggable=true 鏃舵嬁鍒版墜鏈虹殑浜哄彲浠?run-as 璇荤鏈夋暟鎹€?            // attach 璋冭瘯鍣ㄦ敼鍐呭瓨銆傚涓€涓父椹绘棤闅滅鏈嶅姟鐨?App 鏉ヨ杩欎笉鏄兘鐣欑殑鍙ｅ瓙锛?            // CI 閲岃繕鏈変竴姝?apksigner/aapt2 鏍￠獙锛屼骇鐗╁彲璋冭瘯浼氱洿鎺ヨ鍙戝竷澶辫触
             if (ciStoreB64 && ciStorePwd) signingConfig signingConfigs.ci
         }
     }
@@ -54,26 +50,19 @@ android {
     }
 
     lint {
-        // 这两条都是刻意选择，不是待办：
-        // - OldTargetApi：targetSdk 压在 34，避免新系统的前台服务类型/后台调度限制
-        //   在没做过真机验证的前提下被动生效（见文件顶部注释）；
-        // - GradleDependency：提示的 compileSdk 37 与 core-ktx 1.19 是同一个前提，
-        //   升 compileSdk 要连带重测整条落地链路，等有设备窗口再做。
-        // 其余警告照常报，不用 baseline 整体压掉——以后新增的问题还要看得见。
-        // ObsoleteSdkInt：mipmap-anydpi-v26 这个 -v26 后缀不能去掉——自适应图标
-        // 的资源限定符一旦删掉，AAPT 会报 resource mipmap/ic_launcher not found
-        // （0.17.79 试过，回退了）。lint 认为 minSdk 26 时它多余，实际不是。
-        disable += ['OldTargetApi', 'GradleDependency', 'ObsoleteSdkInt']
+        // 杩欎袱鏉￠兘鏄埢鎰忛€夋嫨锛屼笉鏄緟鍔烇細
+        // - OldTargetApi锛歵argetSdk 鍘嬪湪 34锛岄伩鍏嶆柊绯荤粺鐨勫墠鍙版湇鍔＄被鍨?鍚庡彴璋冨害闄愬埗
+        //   鍦ㄦ病鍋氳繃鐪熸満楠岃瘉鐨勫墠鎻愪笅琚姩鐢熸晥锛堣鏂囦欢椤堕儴娉ㄩ噴锛夛紱
+        // - GradleDependency锛氭彁绀虹殑 compileSdk 37 涓?core-ktx 1.19 鏄悓涓€涓墠鎻愶紝
+        //   鍗?compileSdk 瑕佽繛甯﹂噸娴嬫暣鏉¤惤鍦伴摼璺紝绛夋湁璁惧绐楀彛鍐嶅仛銆?        // 鍏朵綑璀﹀憡鐓у父鎶ワ紝涓嶇敤 baseline 鏁翠綋鍘嬫帀鈥斺€斾互鍚庢柊澧炵殑闂杩樿鐪嬪緱瑙併€?        // ObsoleteSdkInt锛歮ipmap-anydpi-v26 杩欎釜 -v26 鍚庣紑涓嶈兘鍘绘帀鈥斺€旇嚜閫傚簲鍥炬爣
+        // 鐨勮祫婧愰檺瀹氱涓€鏃﹀垹鎺夛紝AAPT 浼氭姤 resource mipmap/ic_launcher not found
+        // 锛?.17.79 璇曡繃锛屽洖閫€浜嗭級銆俵int 璁や负 minSdk 26 鏃跺畠澶氫綑锛屽疄闄呬笉鏄€?        disable += ['OldTargetApi', 'GradleDependency', 'ObsoleteSdkInt']
 
-        // 0.17.82 起 warning 也当错误：这一版刚把 109 条清到 0，不设闸门的话
-        // 过两个月又会慢慢长回来。CI 的 lintRelease 步骤会把这里的结果直接变成红叉。
-        // 真遇到「要么升级依赖、要么改产品行为」的告警，按上面 disable 的方式逐条说明理由，
-        // 不要用 baseline 整体压掉——那种做法等于把新问题也一起藏起来。
-        warningsAsErrors = true
+        // 0.17.82 璧?warning 涔熷綋閿欒锛氳繖涓€鐗堝垰鎶?109 鏉℃竻鍒?0锛屼笉璁鹃椄闂ㄧ殑璇?        // 杩囦袱涓湀鍙堜細鎱㈡參闀垮洖鏉ャ€侰I 鐨?lintRelease 姝ラ浼氭妸杩欓噷鐨勭粨鏋滅洿鎺ュ彉鎴愮孩鍙夈€?        // 鐪熼亣鍒般€岃涔堝崌绾т緷璧栥€佽涔堟敼浜у搧琛屼负銆嶇殑鍛婅锛屾寜涓婇潰 disable 鐨勬柟寮忛€愭潯璇存槑鐞嗙敱锛?        // 涓嶈鐢?baseline 鏁翠綋鍘嬫帀鈥斺€旈偅绉嶅仛娉曠瓑浜庢妸鏂伴棶棰樹篃涓€璧疯棌璧锋潵銆?        warningsAsErrors = true
     }
 }
 
-// Kotlin 2.x 已移除 kotlinOptions，统一用 compilerOptions
+// Kotlin 2.x 宸茬Щ闄?kotlinOptions锛岀粺涓€鐢?compilerOptions
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
@@ -81,13 +70,9 @@ kotlin {
 }
 
 dependencies {
-    // 依赖刻意压到最小：不引 material / compose，界面用原生 View 拼
-    // 2026-11-07 升级：core 1.12.0→1.19.1、appcompat 1.6.1→1.8.0。
-    // 升级前留个台阶：appcompat 1.7 起对主题/edge-to-edge 有行为变化，
-    // 本项目是手写 Ui.edgeToEdge，若 UI 出问题先回退这两行再排查。
-    implementation 'androidx.core:core-ktx:1.18.0'
+    // 渚濊禆鍒绘剰鍘嬪埌鏈€灏忥細涓嶅紩 material / compose锛岀晫闈㈢敤鍘熺敓 View 鎷?    // 2026-11-07 鍗囩骇锛歝ore 1.12.0鈫?.19.1銆乤ppcompat 1.6.1鈫?.8.0銆?    // 鍗囩骇鍓嶇暀涓彴闃讹細appcompat 1.7 璧峰涓婚/edge-to-edge 鏈夎涓哄彉鍖栵紝
+    // 鏈」鐩槸鎵嬪啓 Ui.edgeToEdge锛岃嫢 UI 鍑洪棶棰樺厛鍥為€€杩欎袱琛屽啀鎺掓煡銆?    implementation 'androidx.core:core-ktx:1.18.0'
     implementation 'androidx.appcompat:appcompat:1.8.0'
-    // 只给「纯逻辑」单测用：viewId 判定、文本长度闸。不引 robolectric，
-    // 不伪造 AccessibilityNodeInfo——需要 Android 运行时的东西一律不测，也不为测试改结构
+    // 鍙粰銆岀函閫昏緫銆嶅崟娴嬬敤锛歷iewId 鍒ゅ畾銆佹枃鏈暱搴﹂椄銆備笉寮?robolectric锛?    // 涓嶄吉閫?AccessibilityNodeInfo鈥斺€旈渶瑕?Android 杩愯鏃剁殑涓滆タ涓€寰嬩笉娴嬶紝涔熶笉涓烘祴璇曟敼缁撴瀯
     testImplementation 'junit:junit:4.13.2'
 }
