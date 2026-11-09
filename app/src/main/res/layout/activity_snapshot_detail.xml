@@ -14,9 +14,9 @@
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingLeft="12dp"
+        android:paddingStart="12dp"
         android:paddingTop="8dp"
-        android:paddingRight="20dp"
+        android:paddingEnd="20dp"
         android:paddingBottom="8dp">
 
         <TextView
@@ -24,7 +24,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:padding="12dp"
-            android:text="←"
+            android:text="@string/back_arrow"
             android:textColor="@color/text_primary"
             android:textSize="20sp"
             android:textStyle="bold" />
@@ -33,7 +33,7 @@
             android:id="@+id/detail_title"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginLeft="8dp"
+            android:layout_marginStart="8dp"
             android:text="@string/recent_title"
             android:textColor="@color/text_primary"
             android:textSize="20sp"
@@ -50,8 +50,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:paddingLeft="20dp"
-            android:paddingRight="20dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
             android:paddingBottom="32dp">
 
             <TextView
@@ -69,9 +69,9 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
                 android:background="@drawable/bg_card"
-                android:paddingLeft="14dp"
+                android:paddingStart="14dp"
                 android:paddingTop="12dp"
-                android:paddingRight="14dp"
+                android:paddingEnd="14dp"
                 android:paddingBottom="12dp"
                 android:textColor="@color/text_primary"
                 android:textSize="13sp"

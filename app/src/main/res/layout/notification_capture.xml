@@ -12,8 +12,8 @@
     android:layout_height="48dp"
     android:orientation="horizontal"
     android:gravity="center_vertical"
-    android:paddingLeft="12dp"
-    android:paddingRight="10dp">
+    android:paddingStart="12dp"
+    android:paddingEnd="10dp">
 
     <TextView
         android:id="@+id/notif_title"
@@ -22,7 +22,7 @@
         android:layout_weight="1"
         android:maxLines="1"
         android:ellipsize="end"
-        android:text="大小姐 · 正在守护"
+        android:text="@string/notif_title_guard"
         android:textColor="#DE000000"
         android:textSize="13sp" />
 
@@ -32,10 +32,10 @@
         android:layout_height="32dp"
         android:gravity="center"
         android:minWidth="64dp"
-        android:paddingLeft="14dp"
-        android:paddingRight="14dp"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
         android:background="@drawable/bg_notif_capture"
-        android:text="抓取"
+        android:text="@string/notif_capture_action"
         android:textColor="#FFFFFFFF"
         android:textSize="13sp" />
 </LinearLayout>

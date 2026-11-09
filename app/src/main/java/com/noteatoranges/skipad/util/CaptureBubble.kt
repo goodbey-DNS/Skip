@@ -13,12 +13,18 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.content.edit
 
 /**
  * 抓取悬浮窗（GKD 同款交互）：屏幕上常驻一个小圆钮，点一下 = 抓快照。
  * 点击后自动隐藏→回调（宿主广播抓取）→再弹回；支持拖动换位。
  * 需要 SYSTEM_ALERT_WINDOW 悬浮窗权限（设置页开关引导授权）。
+ *
+ * [view] / [wm] 是静态字段，lint 会报 StaticFieldLeak。这里有意如此：窗口挂在
+ * application context 上，生命周期与进程一致，而且 [hide] 会把 view 置空；
+ * 改成 WeakReference 反而会让窗口在 GC 后变成点不动的幽灵视图。
  */
+@SuppressLint("StaticFieldLeak")
 object CaptureBubble {
 
     private const val PREF = "capture_bubble"
@@ -42,7 +48,7 @@ object CaptureBubble {
 
     fun setEnabled(context: Context, on: Boolean) {
         context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-            .edit().putBoolean("on", on).apply()
+            .edit { putBoolean("on", on) }
     }
 
     /** 权限已授且开关开 → 显示；否则移除 */
@@ -54,6 +60,7 @@ object CaptureBubble {
         }
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     fun show(context: Context) {
         android.util.Log.i("DaxiaojieEngine", "bubble-show enter exists=${view != null} canDraw=${Settings.canDrawOverlays(context)}")
         if (view != null) return
@@ -139,10 +146,13 @@ object CaptureBubble {
                     // 只保留「点一下就抓」。坐标规则已经取消，长按菜单没有存在的意义，
                     // 按住超过 600ms 也按普通点击处理，少一层等待
                     if (!moved) {
+                        // 无障碍要求：用 setOnTouchListener 处理触摸时，识别到点击要补一次
+                        // performClick，否则 TalkBack 把这个圆钮当成不可点的装饰
+                        container.performClick()
                         onClick?.invoke()
                     } else {
                         appContext.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-                            .edit().putInt(KEY_X, lp.x).putInt(KEY_Y, lp.y).apply()
+                            .edit { putInt(KEY_X, lp.x); putInt(KEY_Y, lp.y) }
                     }
                     true
                 }

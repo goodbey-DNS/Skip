@@ -17,6 +17,7 @@ import com.noteatoranges.skipad.R
 import com.noteatoranges.skipad.SkipAccessibilityService
 import com.noteatoranges.skipad.store.StatsStore
 import org.json.JSONArray
+import androidx.core.content.edit
 
 /**
  * 无障碍保活中枢（分级设计，详见 docs/design.md §3.1）：
@@ -65,7 +66,7 @@ object KeepAlive {
      */
     fun markConnected(context: Context) {
         context.getSharedPreferences(PREF_KA, Context.MODE_PRIVATE)
-            .edit().putLong(KEY_LAST_CONN, System.currentTimeMillis()).apply()
+            .edit { putLong(KEY_LAST_CONN, System.currentTimeMillis()) }
     }
 
     fun lastConnectedAt(context: Context): Long =
@@ -215,7 +216,7 @@ object KeepAlive {
             val t = arr.optLong(i)
             if (now - t < 3600_000L) out.put(t)
         }
-        prefs.edit().putString(KEY_RESURRECT_TS, out.toString()).apply()
+        prefs.edit { putString(KEY_RESURRECT_TS, out.toString()) }
     }
 
     /** 15 分钟周期自检；persisted 跨重启（开机广播只是让它更早跑第一次的保险）。幂等：已注册不再重排 */

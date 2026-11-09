@@ -4,6 +4,7 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import androidx.core.content.edit
 
 /**
  * 关键字表（用户自建）：命中词提高识别，排除词降低误点。
@@ -132,7 +133,7 @@ object KeywordStore {
         }
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val v = prefs.getInt("v", 0) + 1
-        prefs.edit().putInt("v", v).apply()
+        prefs.edit { putInt("v", v) }
         // 写的时候同步内存：服务在热窗口里每 80ms 问一次版本，不更新就会拿旧版本号，
         // 用户刚改完词表却要等下一次冷启动才生效
         cachedVer = v

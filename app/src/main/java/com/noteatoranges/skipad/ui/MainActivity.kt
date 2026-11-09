@@ -224,7 +224,7 @@ class MainActivity : AppCompatActivity() {
         val shown = counts.take(SHOW_TOP)
         shown.forEachIndexed { idx, pc ->
             val row = layoutInflater.inflate(R.layout.item_rank, rankContainer, false)
-            row.findViewById<TextView>(R.id.rank_num).text = (idx + 1).toString()
+            row.findViewById<TextView>(R.id.rank_num).text = getString(R.string.rank_num_format, idx + 1)
             val info = AppLabels.get(this, pc.pkg)
             row.findViewById<TextView>(R.id.app_name).text = info.label
             row.findViewById<ImageView>(R.id.app_icon).setImageDrawable(info.icon)

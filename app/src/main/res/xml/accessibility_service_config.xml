@@ -11,7 +11,13 @@
     压到约三分之一，代价是开屏按钮最多晚 300ms 开始处理——开屏倒计时通常在 3~5 秒，
     这点延迟不影响点中。服务内部还有 600ms 的内容变化节流，两者叠起来仍然灵敏
 -->
+<!-- tools:targetApi 压住两条 UnusedAttribute：
+     canTakeScreenshot（API 30+）与 isAccessibilityTool（API 31+）在 minSdk 26 上必然
+     报「只有更高版本才用」，但这两项就是给新系统看的——低版本系统读到会忽略，
+     不需要在代码里按版本分支。 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:targetApi="33"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeWindowsChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"

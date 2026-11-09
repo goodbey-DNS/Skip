@@ -19,9 +19,9 @@
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingLeft="12dp"
+            android:paddingStart="12dp"
             android:paddingTop="8dp"
-            android:paddingRight="20dp"
+            android:paddingEnd="20dp"
             android:paddingBottom="8dp">
 
             <TextView
@@ -29,7 +29,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:padding="12dp"
-                android:text="←"
+                android:text="@string/back_arrow"
                 android:textColor="@color/text_primary"
                 android:textSize="20sp"
                 android:textStyle="bold" />
@@ -37,7 +37,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginLeft="8dp"
+                android:layout_marginStart="8dp"
                 android:text="@string/maintain_title"
                 android:textColor="@color/text_primary"
                 android:textSize="20sp"
@@ -48,8 +48,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:paddingLeft="20dp"
-            android:paddingRight="20dp">
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -102,7 +102,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="备份与导出"
+                    android:text="@string/maint_section_backup"
                     android:textColor="@color/text_primary"
                     android:textSize="15sp"
                     android:textStyle="bold" />
@@ -112,7 +112,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
                     android:lineSpacingExtra="2dp"
-                    android:text="把自建规则、关键字、所有快照的节点树打包成 zip，可通过系统分享保存到网盘或发给自己。不含截图（一份十几 MB），节点树足够重建规则。"
+                    android:text="@string/maint_backup_desc"
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
 
@@ -127,7 +127,7 @@
                         style="?android:attr/borderlessButtonStyle"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="导出备份"
+                        android:text="@string/maint_export_backup"
                         android:textColor="@color/primary"
                         android:textSize="13sp" />
 
@@ -136,7 +136,7 @@
                         style="?android:attr/borderlessButtonStyle"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="从备份恢复"
+                        android:text="@string/maint_restore_backup"
                         android:textColor="@color/primary"
                         android:textSize="13sp" />
                 </LinearLayout>
@@ -147,7 +147,7 @@
                     android:layout_height="wrap_content"
                     android:paddingTop="2dp"
                     android:paddingBottom="2dp"
-                    android:text="恢复最近一次备份（backup 目录里最新那份）"
+                    android:text="@string/maint_restore_desc"
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
             </LinearLayout>
@@ -163,7 +163,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="引擎诊断"
+                    android:text="@string/maint_section_diag"
                     android:textColor="@color/text_primary"
                     android:textSize="15sp"
                     android:textStyle="bold" />
@@ -173,7 +173,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
                     android:lineSpacingExtra="2dp"
-                    android:text="引擎最近做了什么：跳过成没成功、为什么没动手、哪一步出了岔子。默认用大白话按时间列出来，最新的在最上面；要贴给开发看，进去点右上角「原始日志」。记录同时存三份到本机，重启也不丢。"
+                    android:text="@string/maint_diag_desc"
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
 
@@ -188,7 +188,7 @@
                         style="?android:attr/borderlessButtonStyle"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="查看诊断"
+                        android:text="@string/maint_view_diag"
                         android:textColor="@color/primary"
                         android:textSize="13sp" />
 
@@ -197,7 +197,7 @@
                         style="?android:attr/borderlessButtonStyle"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="导出日志"
+                        android:text="@string/maint_export_log"
                         android:textColor="@color/primary"
                         android:textSize="13sp" />
 
@@ -206,7 +206,7 @@
                         style="?android:attr/borderlessButtonStyle"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="清空"
+                        android:text="@string/maint_clear"
                         android:textColor="@color/status_off"
                         android:textSize="13sp" />
                 </LinearLayout>

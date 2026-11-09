@@ -12,8 +12,8 @@ android {
         applicationId "com.noteatoranges.skipad"
         minSdk 26
         targetSdk 34
-        versionCode 153
-        versionName "0.17.81"
+        versionCode 154
+        versionName "0.17.82"
     }
 
     // 签名来自 CI 的 GitHub Secrets（KEYSTORE_B64 / KEYSTORE_PASSWORD），
@@ -51,6 +51,19 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        // 这两条都是刻意选择，不是待办：
+        // - OldTargetApi：targetSdk 压在 34，避免新系统的前台服务类型/后台调度限制
+        //   在没做过真机验证的前提下被动生效（见文件顶部注释）；
+        // - GradleDependency：提示的 compileSdk 37 与 core-ktx 1.19 是同一个前提，
+        //   升 compileSdk 要连带重测整条落地链路，等有设备窗口再做。
+        // 其余警告照常报，不用 baseline 整体压掉——以后新增的问题还要看得见。
+        // ObsoleteSdkInt：mipmap-anydpi-v26 这个 -v26 后缀不能去掉——自适应图标
+        // 的资源限定符一旦删掉，AAPT 会报 resource mipmap/ic_launcher not found
+        // （0.17.79 试过，回退了）。lint 认为 minSdk 26 时它多余，实际不是。
+        disable += ['OldTargetApi', 'GradleDependency', 'ObsoleteSdkInt']
     }
 }
 

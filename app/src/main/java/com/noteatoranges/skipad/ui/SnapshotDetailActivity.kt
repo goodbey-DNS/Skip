@@ -1,6 +1,7 @@
 package com.noteatoranges.skipad.ui
 
 import android.content.Intent
+import androidx.core.content.edit
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.os.Bundle
@@ -208,7 +209,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
                 setTextColor(getColor(R.color.text_secondary))
             })
             row.addView(TextView(this).apply {
-                text = "位置 (${n.l},${n.t}) ${n.w}×${n.h}"
+                text = getString(R.string.snapshot_node_pos, n.l, n.t, n.w, n.h)
                 textSize = 11f
                 setTextColor(getColor(R.color.text_secondary))
             })
@@ -340,9 +341,8 @@ class SnapshotDetailActivity : AppCompatActivity() {
                 Toast.makeText(this, R.string.rule_saved, Toast.LENGTH_SHORT).show()
                 // 规则列表是按 App 分组的、默认收起。不告诉它该展开哪个组，
                 // 用户回列表只能看到一行「某App · N 条」，找不到自己刚加的东西
-                getSharedPreferences("rules_ui", MODE_PRIVATE).edit()
-                    .putString(RulesActivity.PREF_EXPAND_PKG, meta.pkg)
-                    .apply()
+                getSharedPreferences("rules_ui", MODE_PRIVATE)
+                    .edit { putString(RulesActivity.PREF_EXPAND_PKG, meta.pkg) }
             }
             .setNegativeButton("取消", null)
             .show()

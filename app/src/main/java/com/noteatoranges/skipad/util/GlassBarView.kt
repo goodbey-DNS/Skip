@@ -1,5 +1,6 @@
 package com.noteatoranges.skipad.util
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -14,6 +15,8 @@ import android.view.View
 import android.view.ViewTreeObserver
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.withClip
 
 /**
  * 真·磨砂玻璃 Tab 栏（快照自模糊，酷安观感）：
@@ -69,6 +72,9 @@ class GlassBarView @JvmOverloads constructor(
         super.onDetachedFromWindow()
     }
 
+    // 这里的 createBitmap 只在「尺寸变了」时发生一次，之后整块复用（snap 字段），
+    // 不属于逐帧分配；lint 只能看到 onDraw 里有分配就报，故按实际情况豁免。
+    @SuppressLint("DrawAllocation")
     override fun onDraw(canvas: Canvas) {
         val t = target
         val w = width
@@ -92,7 +98,7 @@ class GlassBarView @JvmOverloads constructor(
         val bh = maxOf(1, (h / ss).toInt())
         val cache: Bitmap = snap?.takeIf { it.width == bw && it.height == bh } ?: run {
             snap?.recycle()
-            Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888).also {
+            androidx.core.graphics.createBitmap(bw, bh).also {
                 snap = it
                 lastSnapAt = 0L
             }
@@ -112,12 +118,12 @@ class GlassBarView @JvmOverloads constructor(
         clipPath.reset()
         frameRect.set(0f, 0f, w.toFloat(), h.toFloat())
         clipPath.addRoundRect(frameRect, cornerPx, cornerPx, Path.Direction.CW)
-        canvas.save()
-        canvas.clipPath(clipPath)
         rect.set(0, 0, w, h)
-        canvas.drawBitmap(cache, null, rect, bitmapPaint)
-        canvas.drawPaint(tintPaint)
-        canvas.restore()
+        // withClip 会自动 save/restore，少一层手动配对
+        canvas.withClip(clipPath) {
+            drawBitmap(cache, null, rect, bitmapPaint)
+            drawPaint(tintPaint)
+        }
         canvas.drawPath(clipPath, borderPaint)
 
         super.onDraw(canvas)

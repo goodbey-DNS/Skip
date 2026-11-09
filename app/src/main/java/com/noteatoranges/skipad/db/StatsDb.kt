@@ -23,12 +23,17 @@ class StatsDb private constructor(context: Context) :
             put(C_DETAIL, detail)
             put(C_TS, System.currentTimeMillis())
         }
-        val id = writableDatabase.insert(TABLE, null, cv)
-        // 每写 PRUNE_EVERY 条顺手清理一次。
-        // 以前 prune 只在打开 App 时跑（MainActivity），用户装完基本不再打开的话
-        // 表就只增不减，"保留最近 1000 条"的设计等于没落地。
-        // 调用方都是后台 IO 线程（Io.run("stats-insert")），不需要额外加锁
-        if (++insertSincePrune >= PRUNE_EVERY) {
+        var id = writableDatabase.insert(TABLE, null, cv)
+        // `insert()` 在底层写失败时不抛异常，只返回 -1（SQLException 被 SQLiteDatabase 自己
+        // 吞掉，日志打在 "SQLiteDatabase" 这个 tag 上）。0.17.62 那轮「verified 一直在打、
+        // 库里不涨、DaxiaojieIo 一条失败都没有」很可能就是这个形态：失败信息落在了别的
+        // tag 上，没人看。这里补一次重试，并把结果交给调用方判断。
+        if (id <= 0L) {
+            runCatching { Thread.sleep(INSERT_RETRY_GAP_MS) }
+            id = writableDatabase.insert(TABLE, null, cv)
+        }
+        // 只有真的写进去了才累加计数：失败也计的话，prune 会被空转触发
+        if (id > 0L && ++insertSincePrune >= PRUNE_EVERY) {
             insertSincePrune = 0
             runCatching { prune(KEEP_EVENTS) }
         }
@@ -120,6 +125,9 @@ class StatsDb private constructor(context: Context) :
 
         /** 每写入这么多条触发一次 prune，避免只在打开 App 时才清理 */
         private const val PRUNE_EVERY = 200
+
+        /** 写入被拒后的重试间隔：给正在收尾的读事务一点时间让出写锁 */
+        private const val INSERT_RETRY_GAP_MS = 50L
 
         @Volatile
         private var inst: StatsDb? = null

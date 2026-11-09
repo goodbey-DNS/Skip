@@ -19,8 +19,8 @@
         android:id="@+id/dot_text"
         android:layout_width="16dp"
         android:layout_height="wrap_content"
-        android:text="●"
-        android:textSize="9sp" />
+        android:text="@string/diag_dot"
+        android:textSize="11sp" />
 
     <LinearLayout
         android:layout_width="0dp"

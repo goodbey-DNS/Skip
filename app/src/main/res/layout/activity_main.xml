@@ -31,8 +31,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:paddingLeft="20dp"
-                android:paddingRight="20dp"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
                 android:paddingBottom="92dp">
 
                 <TextView
@@ -172,7 +172,7 @@
                             android:id="@+id/diagnosis_entry"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:layout_marginLeft="20dp"
+                            android:layout_marginStart="20dp"
                             android:paddingTop="6dp"
                             android:paddingBottom="6dp"
                             android:text="@string/entry_diagnosis"
@@ -196,8 +196,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:paddingLeft="20dp"
-                android:paddingRight="20dp"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
                 android:paddingBottom="92dp">
 
                 <TextView
@@ -222,8 +222,8 @@
                     android:layout_height="wrap_content"
                     android:background="@drawable/bg_card"
                     android:orientation="vertical"
-                    android:paddingLeft="16dp"
-                    android:paddingRight="16dp">
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp">
                     <LinearLayout
                         android:id="@+id/row_rules"
                         android:layout_width="match_parent"
@@ -259,7 +259,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="›"
+                            android:text="@string/chevron_right"
                             android:textColor="@color/text_secondary"
                             android:textSize="18sp" />
                     </LinearLayout>
@@ -278,8 +278,8 @@
                     android:layout_height="wrap_content"
                     android:background="@drawable/bg_card"
                     android:orientation="vertical"
-                    android:paddingLeft="16dp"
-                    android:paddingRight="16dp">
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp">
                     <LinearLayout
                         android:id="@+id/row_keepalive"
                         android:layout_width="match_parent"
@@ -315,7 +315,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="›"
+                            android:text="@string/chevron_right"
                             android:textColor="@color/text_secondary"
                             android:textSize="18sp" />
                     </LinearLayout>
@@ -334,8 +334,8 @@
                     android:layout_height="wrap_content"
                     android:background="@drawable/bg_card"
                     android:orientation="vertical"
-                    android:paddingLeft="16dp"
-                    android:paddingRight="16dp">
+                    android:paddingStart="16dp"
+                    android:paddingEnd="16dp">
                     <LinearLayout
                         android:id="@+id/row_maintain"
                         android:layout_width="match_parent"
@@ -371,7 +371,7 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="›"
+                            android:text="@string/chevron_right"
                             android:textColor="@color/text_secondary"
                             android:textSize="18sp" />
                     </LinearLayout>
@@ -428,8 +428,8 @@
                 android:background="@drawable/bg_tab_on"
                 android:gravity="center"
                 android:minWidth="88dp"
-                android:paddingLeft="20dp"
-                android:paddingRight="20dp"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
                 android:text="@string/tab_home"
                 android:textColor="@color/primary"
                 android:textSize="14sp"
@@ -439,12 +439,12 @@
                 android:id="@+id/tab_settings"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
-                android:layout_marginLeft="4dp"
+                android:layout_marginStart="4dp"
                 android:layout_weight="1"
                 android:gravity="center"
                 android:minWidth="88dp"
-                android:paddingLeft="20dp"
-                android:paddingRight="20dp"
+                android:paddingStart="20dp"
+                android:paddingEnd="20dp"
                 android:text="@string/tab_settings"
                 android:textColor="@color/text_secondary"
                 android:textSize="14sp" />

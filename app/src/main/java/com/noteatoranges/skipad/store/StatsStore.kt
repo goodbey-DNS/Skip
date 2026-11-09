@@ -2,6 +2,7 @@ package com.noteatoranges.skipad.store
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.core.content.edit
 import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -29,7 +30,7 @@ object StatsStore {
     }
 
     fun clear(context: Context) {
-        prefs(context).edit().clear().apply()
+        prefs(context).edit { clear() }
     }
 
     private fun prefs(context: Context): SharedPreferences =
@@ -44,6 +45,6 @@ object StatsStore {
             if (fresh.length() >= LOG_LIMIT) break
             fresh.put(old.optString(i))
         }
-        prefs.edit().putString(KEY_LOG, fresh.toString()).apply()
+        prefs.edit { putString(KEY_LOG, fresh.toString()) }
     }
 }

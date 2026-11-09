@@ -15,9 +15,9 @@
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingLeft="12dp"
+        android:paddingStart="12dp"
         android:paddingTop="8dp"
-        android:paddingRight="20dp"
+        android:paddingEnd="20dp"
         android:paddingBottom="8dp">
 
         <TextView
@@ -25,7 +25,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:padding="12dp"
-            android:text="←"
+            android:text="@string/back_arrow"
             android:textColor="@color/text_primary"
             android:textSize="20sp"
             android:textStyle="bold" />
@@ -33,9 +33,9 @@
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginLeft="8dp"
+            android:layout_marginStart="8dp"
             android:layout_weight="1"
-            android:text="诊断"
+            android:text="@string/diag_title"
             android:textColor="@color/text_primary"
             android:textSize="20sp"
             android:textStyle="bold" />
@@ -45,7 +45,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:padding="8dp"
-            android:text="原始日志"
+            android:text="@string/diag_raw_log"
             android:textColor="@color/primary"
             android:textSize="13sp" />
     </LinearLayout>
@@ -60,8 +60,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:paddingLeft="20dp"
-            android:paddingRight="20dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
             android:paddingBottom="24dp">
 
             <LinearLayout
@@ -96,15 +96,15 @@
                 android:layout_marginTop="16dp"
                 android:background="@drawable/bg_card"
                 android:orientation="vertical"
-                android:paddingLeft="16dp"
+                android:paddingStart="16dp"
                 android:paddingTop="14dp"
-                android:paddingRight="16dp"
+                android:paddingEnd="16dp"
                 android:paddingBottom="10dp">
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="发生了什么"
+                    android:text="@string/diag_what_happened"
                     android:textColor="@color/text_primary"
                     android:textSize="15sp"
                     android:textStyle="bold" />
@@ -131,7 +131,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="14dp"
                 android:lineSpacingExtra="3dp"
-                android:text="上面只写结论，不写英文代号。需要贴给开发看的时候，点右上角「原始日志」。"
+                android:text="@string/diag_hint"
                 android:textColor="@color/text_secondary"
                 android:textSize="12sp" />
 

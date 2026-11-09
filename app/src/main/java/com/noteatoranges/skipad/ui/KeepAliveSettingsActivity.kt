@@ -1,5 +1,7 @@
 package com.noteatoranges.skipad.ui
 
+import android.annotation.SuppressLint
+import androidx.core.net.toUri
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
@@ -84,12 +86,16 @@ class KeepAliveSettingsActivity : AppCompatActivity() {
             if (log.isEmpty()) getString(R.string.ka_log_empty) else log.joinToString("\n")
     }
 
+    // 个人自用、不上应用商店：直接申请忽略电池优化是这个工具能常驻的前提。
+    // lint 的 BatteryLife 是 Play 商店政策规则（该权限只允许特定类别应用使用），
+    // 这里不适用。
+    @SuppressLint("BatteryLife")
     private fun requestIgnoreBatteryOptimization() {
         try {
             startActivity(
                 Intent(
                     Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                    Uri.parse("package:$packageName")
+                    ("package:$packageName").toUri()
                 )
             )
         } catch (e: Exception) {
@@ -212,7 +218,7 @@ class KeepAliveSettingsActivity : AppCompatActivity() {
     private fun openAppInfo() {
         try {
             startActivity(
-                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, ("package:$packageName").toUri())
             )
         } catch (e: Exception) {
             Toast.makeText(this, e.message ?: "failed", Toast.LENGTH_SHORT).show()

@@ -33,13 +33,17 @@
         </intent>
     </queries>
 
+    <!-- allowBackup=false：规则与统计全在应用私有目录，不参与系统备份/换机迁移。
+         lint 的 DataExtractionRules 是给「开着备份」的应用准备的配置入口，这里是关着的，
+         没有可配置的内容；用户要迁移用自己的「备份规则」导出 zip。 -->
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Daxiaojie">
+        android:theme="@style/Theme.Daxiaojie"
+        tools:ignore="DataExtractionRules,AllowBackup">
 
         <activity
             android:name=".ui.MainActivity"

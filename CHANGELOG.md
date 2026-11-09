@@ -2,6 +2,66 @@
 
 > 规矩：每轮修改必须记录（改了什么/为什么/影响面/踩坑），换电脑先读本文件再动手。
 
+## 0.17.82 - 2026-11-09 · 统计写入加固、几何判据补测、lint 归零（未发布）
+
+三件事一起做：design.md §8 第 24 条那笔只有怀疑没有证据的悬案、第 3 条列着的两块无测试判定、
+以及一直挂着的 109 条 lint warning。
+
+### A. 统计写入：把「静默失败」变成「有痕迹」
+
+第 24 条的形态是：`verified` 一直在打，`skipad.db` 不涨，`DaxiaojieIo` 一条失败都没有，
+force-stop 之后自愈。这轮没能在真机上复现，所以做的是**加可观测性**，不是猜着改逻辑：
+
+- `StatsDb.insert()` 现在检查返回值。`SQLiteDatabase.insert()` 写失败时**不抛异常、只返回 -1**
+  （SQLException 被它自己吞了，日志打在 `SQLiteDatabase` 这个 tag 上）——这正好解释了
+  「为什么一条失败都没留下」。现在返回 -1 会先隔 50ms 重试一次，仍失败就由调用方记账。
+- 统计入库那里补一行：`stats-insert-fail <pkg> 「<detail>」 两次写入都被拒`，同时进
+  `decision.log`，手机上也能看到。
+- `Io` 加了排队与执行耗时埋点：任务从提交到开始超过 3 秒记 `排队 Nms 才轮到（前一个任务在堵）`，
+  单个任务超过 5 秒记 `执行 Nms`。单线程队列的盲点就是「排队的任务连一行日志都不会留」，
+  这两条正好补上。只观测，不改行为。
+
+### B. 几何判据抽成纯函数并补 30 条单测
+
+`NodeScanner` 的中央区/面积/文本长度三道闸抽到 `core/NodeGates`；`CornerSkipFinder` 的
+面积、宽高比、右上角位置、文案语义、打分抽到 `core/CornerGates`。判定逻辑逐条对齐，阈值原样搬。
+
+- `NodeGatesTest` 12 条：30%/70%、20%/80% 四条边界都是开区间（压线算外面，宁可漏跳也不误点）、
+  1 平方像素下限、面积上限含等号、真实 180×84 按钮能过、整屏容器过不了。
+- `CornerGatesTest` 18 条：0.15%/3.5% 面积边界、宽高比 0.5/4.5 边界、72%/22%/2% 位置边界、
+  8 字上限、非跳过语义（更多/菜单/search…）、四级打分与叠义。
+- 测试总数 62 → **92 条，全过**。
+
+踩到两个坑并写进注释：① 「8 个字」用 `跳过跳过跳过跳` 数出来是 7 个，用例一开始就写错了；
+② 面积「小于上限 30%」不能用正好 30000 做边界，`0.3f` 在 Float 上是 0.30000001，
+100000×0.3f = 30000.001，边界值会误判成「偏小」。
+
+### C. lint 109 → 0
+
+| 类别 | 条数 | 处理 |
+|---|---|---|
+| RtlHardcoded / RtlSymmetry | 28 | `paddingLeft/Right`、`marginLeft/Right` 全部改 `Start/End`，补对称 paddingEnd |
+| HardcodedText | 32 | 抽到 `strings.xml`（26 个资源，←/› 各复用一个） |
+| UseKtx | 16 | `edit {}`、`toUri()`、`createBitmap`、`withClip` |
+| SetTextI18n | 8 | 改 `getString(R.string.x, args)`，新增 10 个带占位符的资源 |
+| Switch / ClickableViewAccessibility 等 | 12 | `SwitchCompat`；`performClick`；`withClip`；`@SuppressLint` 附理由 |
+| GradleDependency / OldTargetApi / ObsoleteSdkInt | 4 | 项目级 disable，注释写明原因（targetSdk 压 34、compileSdk 37 前提未验证、`-v26` 后缀删了 AAPT 报错） |
+| UselessParent | 2 | `tools:ignore` + 注释：外层 padding 是刻意的「卡片外留白」，挪上去视觉会变 |
+
+一次性把 `Switch` 换成 `SwitchCompat` 时踩到：XML 标签名换掉之后，Kotlin 侧
+`findViewById<Switch>` 也要跟着换，否则运行期类型转换崩；另外 PowerShell 单引号里的
+`` `n `` 不会转义，写文件时会留下字面量反斜杠 n，两次把 XML 写坏又修回来。
+
+### 验证
+
+- `testDebugUnitTest` 92 条全过；`assembleDebug`、`compileReleaseKotlin`、`lintRelease` 通过，
+  **lint 0 条 warning**。
+- 真机（Redmi 22081212C / Android 15）：装机 0.17.82，无障碍绑定未被更新打断；
+  首页、设置、跳过规则（开关已是 SwitchCompat，绿色滑块在右）、数据与维护、诊断页逐页截图核对，
+  没有 `@string` 残留、没有错位或截断；统计从 6 次继续累加，无崩溃、无 `DaxiaojieIo` 告警。
+- 统计写入这次**只加了观测**，第 24 条的根因仍未复现；下次出现时抓
+  `stats-insert-fail` 或 `排队 Nms` 这两行就能定性。
+
 ## 0.17.81 - 2026-11-08 · 核验包名判定抽成纯函数 + 15 条单测（已发布，versionCode 153）
 
 ### 为什么

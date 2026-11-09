@@ -82,7 +82,6 @@ class NodeScanner(
         screenH: Int,
     ): Pair<AccessibilityNodeInfo, SkipRule>? {
         if (screenW <= 0 || screenH <= 0) return null
-        val screenArea = screenW.toFloat() * screenH
         val deadline = System.currentTimeMillis() + TRAVERSE_TIMEOUT_MS
 
         val queue = ArrayDeque<AccessibilityNodeInfo>()
@@ -112,7 +111,7 @@ class NodeScanner(
             if (matched != null) {
                 val byViewId = vid != null && matched.node.rule.viewIdHit(vid)
                 val limit = allowedLen(matched)
-                val tooLong = text != null && text.length > limit
+                val tooLong = text != null && !NodeGates.textLengthAllowed(text.length, limit)
                 // 排除词命中 = 整屏放弃。界面上写的就是「排除词命中就整屏放弃」，
                 // 而以前只拒这一个节点、接着扫下一个，等于承诺没兑现，
                 // 用户写了排除词却还是被点了
@@ -152,7 +151,6 @@ class NodeScanner(
                             reject = "「${(text ?: vid)?.take(12)}」矩形无效"
                             continue
                         }
-                        val area = rect.width().toFloat() * rect.height()
                         // 日志用像素尺寸，不用占屏百分比。
                         //
                         // 原先打的是 (area / screenArea * 100).toInt()，toInt() 直接截断，
@@ -166,8 +164,7 @@ class NodeScanner(
                         // viewId 命中的是按钮本体，免此闸。
                         val cx = rect.exactCenterX()
                         val cy = rect.exactCenterY()
-                        val inCenter = cx > screenW * 0.3f && cx < screenW * 0.7f &&
-                            cy > screenH * 0.2f && cy < screenH * 0.8f
+                        val inCenter = NodeGates.inCenterRegion(cx, cy, screenW, screenH)
                         // 位置校验：规则记了用户点选时的位置，就只认那块地方；
                         // 没记（旧规则）才退回「屏幕正中算正文」的粗闸。
                         // 比的是命中节点本身（带文字那个）的矩形，不是可点击祖先——
@@ -186,7 +183,10 @@ class NodeScanner(
                             reject = "「${text?.take(12)}」附近没有跳过文案"
                         } else if (zone == null && !byViewId && !matched.node.rule.allowCenter && inCenter) {
                             reject = "「${text?.take(12)}」在中央区域(cx=${cx.toInt()},cy=${cy.toInt()})"
-                        } else if (area in 1f..screenArea * matched.node.rule.maxAreaRatio) {
+                        } else if (NodeGates.areaAllowed(
+                                rect.width(), rect.height(), screenW, screenH,
+                                matched.node.rule.maxAreaRatio,
+                            )) {
                             lastDebug = "HIT「${(text ?: vid)?.take(20)}」${sizeText} 规则=${matched.node.rule.id}" +
                                 if (byViewId) "(viewId)" else ""
                             return cand to matched.node.rule

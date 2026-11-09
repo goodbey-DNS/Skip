@@ -1,16 +1,18 @@
 package com.noteatoranges.skipad.ui
 
 import android.content.Intent
+import androidx.core.content.edit
+import androidx.core.net.toUri
 import android.net.Uri
 import android.provider.Settings
 import com.noteatoranges.skipad.util.CaptureBubble
 import android.os.Bundle
 import android.view.View
 import android.widget.LinearLayout
-import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.widget.SwitchCompat
 import androidx.appcompat.app.AppCompatActivity
 import com.noteatoranges.skipad.R
 import com.noteatoranges.skipad.SkipAccessibilityService
@@ -62,7 +64,7 @@ class RulesActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.back_button).setOnClickListener { finish() }
 
         findViewById<TextView>(R.id.kw_add).setOnClickListener { showPickAppForKeyword() }
-        val kwSw = findViewById<Switch>(R.id.kw_builtin)
+        val kwSw = findViewById<SwitchCompat>(R.id.kw_builtin)
         kwSw.isChecked = EnginePrefs.builtinWordsEnabled(this)
         kwSw.setOnCheckedChangeListener { _, checked ->
             EnginePrefs.setBuiltinWordsEnabled(this, checked)
@@ -70,14 +72,14 @@ class RulesActivity : AppCompatActivity() {
             Toast.makeText(this, if (checked) "内置默认词已启用" else "已关闭内置默认词，只认你填的词", Toast.LENGTH_SHORT).show()
         }
 
-        val sw = findViewById<android.widget.Switch>(R.id.bubble_switch)
+        val sw = findViewById<SwitchCompat>(R.id.bubble_switch)
         sw.isChecked = CaptureBubble.isEnabled(this) && Settings.canDrawOverlays(this)
         sw.setOnClickListener {
             if (sw.isChecked && !Settings.canDrawOverlays(this)) {
                 sw.isChecked = false
                 try {
                     startActivity(
-                        Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+                        Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, ("package:$packageName").toUri())
                     )
                 } catch (e: Exception) {
                     startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
@@ -148,7 +150,7 @@ class RulesActivity : AppCompatActivity() {
                 setTextColor(getColor(R.color.text_secondary))
             })
             row.addView(info)
-            row.addView(Switch(this).apply {
+            row.addView(SwitchCompat(this).apply {
                 isChecked = k.enabled
                 setOnCheckedChangeListener { _, checked ->
                     KeywordStore.setEnabled(this@RulesActivity, k.id, checked)
@@ -260,7 +262,7 @@ class RulesActivity : AppCompatActivity() {
         val uiPrefs = getSharedPreferences(UI_PREFS, MODE_PRIVATE)
         uiPrefs.getString(PREF_EXPAND_PKG, null)?.let { pkg ->
             expandedGroups[pkg] = true
-            uiPrefs.edit().remove(PREF_EXPAND_PKG).apply()
+            uiPrefs.edit { remove(PREF_EXPAND_PKG) }
         }
 
         val grouped = LinkedHashMap<String, MutableList<com.noteatoranges.skipad.db.SkipAppRule>>()
@@ -322,7 +324,7 @@ class RulesActivity : AppCompatActivity() {
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
             addView(TextView(this@RulesActivity).apply {
-                text = "$count $unit"
+                text = getString(R.string.rule_count_unit, count, unit)
                 textSize = 12f
                 setTextColor(getColor(R.color.text_secondary))
             })
@@ -391,11 +393,17 @@ class RulesActivity : AppCompatActivity() {
             // 需要区分多条规则时看上面那行的匹配条件就够了
             val scoped = !r.activity.isNullOrBlank()
             val limits = buildString {
-                if (r.cooldownMs > 0) append("间隔 ${r.cooldownMs / 1000f} 秒")
-                if (r.maxCount > 0) append(if (isEmpty()) "最多 ${r.maxCount} 次" else "，最多 ${r.maxCount} 次")
+                if (r.cooldownMs > 0) {
+                    append(getString(R.string.rules_limit_gap, (r.cooldownMs / 1000f).toString()))
+                }
+                if (r.maxCount > 0) {
+                    val res = if (isEmpty()) R.string.rules_limit_max else R.string.rules_limit_max_cont
+                    append(getString(res, r.maxCount))
+                }
             }
-            text = (if (scoped) "只在那一页动手" else "整个 App 都会试") +
-                (if (limits.isEmpty()) "" else " · $limits")
+            val scope = getString(if (scoped) R.string.rule_scope_page else R.string.rule_scope_app)
+            text = if (limits.isEmpty()) scope
+            else getString(R.string.rule_scope_with_limits, scope, limits)
             textSize = 11f
             setTextColor(getColor(R.color.text_secondary))
         })
@@ -427,7 +435,7 @@ class RulesActivity : AppCompatActivity() {
                 renderRules()
             }
         })
-        val sw = Switch(this).apply {
+        val sw = SwitchCompat(this).apply {
             isChecked = r.enabled
             setOnCheckedChangeListener { _, checked ->
                 RuleStore.setEnabled(this@RulesActivity, r.id, checked)

@@ -105,6 +105,59 @@
     <string name="ka_scope_note">边界说明：无障碍服务被「一键强停」后 App 进入 stopped 状态，任何保活都失效（系统红线），打开一次本 App 即恢复；用户主动关闭在静默模式下也会被自动拉起，介意请保持提醒模式。</string>
 
     <string name="ka_channel_name">服务掉线提醒</string>
+
+    <!-- 诊断页空态：说明「为什么一条记录都没有」，比一个「暂无数据」有用 -->
+    <string name="diag_timeline_empty">还没有可读的记录。\n\n让一个 App 冷启动一次（看到开屏广告），再回来看这里，就会有「跳过成功 / 没找到按钮 / 没敢点」这类结论。</string>
+
+    <!-- 排行榜序号：%1$d = 第几名 -->
+    <string name="rank_num_format">%1$d</string>
+
+    <!-- 规则分组的条数徽标：%1$d = 条数，%2$s = 单位（条 / 份） -->
+    <string name="rule_count_unit">%1$d %2$s</string>
+
+    <!-- 规则生效范围 -->
+    <string name="rule_scope_page">只在那一页动手</string>
+    <string name="rule_scope_app">整个 App 都会试</string>
+    <string name="rule_scope_with_limits">%1$s · %2$s</string>
+
+    <!-- 规则频次限制：%1$s = 秒数（可能是小数），%2$d = 次数 -->
+    <string name="rules_limit_gap">间隔 %1$s 秒</string>
+    <string name="rules_limit_max">最多 %1$d 次</string>
+    <string name="rules_limit_max_cont">，最多 %1$d 次</string>
+
+    <!-- 快照节点位置：%1$d,%2$d = 左上角，%3$d×%4$d = 宽高 -->
+    <string name="snapshot_node_pos">位置 (%1$d,%2$d) %3$d×%4$d</string>
+
+    <!-- 布局里的固定文案：抽出来是为了让 lint 的 HardcodedText 归零，
+         同时也方便以后改一处全站生效 -->
+    <string name="back_arrow">←</string>
+    <string name="chevron_right">›</string>
+    <string name="diag_dot">●</string>
+    <string name="diag_title">诊断</string>
+    <string name="diag_raw_log">原始日志</string>
+    <string name="diag_what_happened">发生了什么</string>
+    <string name="diag_hint">上面只写结论，不写英文代号。需要贴给开发看的时候，点右上角「原始日志」。</string>
+
+    <string name="maint_section_backup">备份与导出</string>
+    <string name="maint_backup_desc">把自建规则、关键字、所有快照的节点树打包成 zip，可通过系统分享保存到网盘或发给自己。不含截图（一份十几 MB），节点树足够重建规则。</string>
+    <string name="maint_export_backup">导出备份</string>
+    <string name="maint_restore_backup">从备份恢复</string>
+    <string name="maint_restore_desc">恢复最近一次备份（backup 目录里最新那份）</string>
+    <string name="maint_section_diag">引擎诊断</string>
+    <string name="maint_diag_desc">引擎最近做了什么：跳过成没成功、为什么没动手、哪一步出了岔子。默认用大白话按时间列出来，最新的在最上面；要贴给开发看，进去点右上角「原始日志」。记录同时存三份到本机，重启也不丢。</string>
+    <string name="maint_view_diag">查看诊断</string>
+    <string name="maint_export_log">导出日志</string>
+    <string name="maint_clear">清空</string>
+
+    <string name="rules_section_keywords">关键字</string>
+    <string name="rules_add_keyword">+ 添加</string>
+    <string name="rules_keywords_desc">只在开屏那几秒内参与匹配。命中词提高识别，排除词防误点，排除优先。按应用生效，全应用兜底。</string>
+    <string name="rules_builtin_title">启用内置默认词</string>
+    <string name="rules_builtin_desc">跳过 / Skip / 倒计时，以及常见广告平台的跳过按钮；关掉只认你自己填的词</string>
+    <string name="rules_no_keywords">还没有自定义关键字</string>
+
+    <string name="notif_title_guard">大小姐 · 正在守护</string>
+    <string name="notif_capture_action">抓取</string>
     <string name="ka_notify_title">大小姐 无障碍服务已掉线</string>
     <string name="ka_notify_text">点按前往无障碍设置重新开启</string>
     <string name="ka_log_connected">保活：无障碍服务已连接</string>

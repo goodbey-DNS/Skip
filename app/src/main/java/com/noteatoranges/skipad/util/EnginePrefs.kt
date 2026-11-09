@@ -1,6 +1,7 @@
 package com.noteatoranges.skipad.util
 
 import android.content.Context
+import androidx.core.content.edit
 
 /**
  * 引擎开关。
@@ -35,7 +36,7 @@ object EnginePrefs {
 
     fun setBuiltinWordsEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-            .edit().putBoolean(KEY_BUILTIN_WORDS, enabled).apply()
+            .edit { putBoolean(KEY_BUILTIN_WORDS, enabled) }
         cached = enabled
     }
 }

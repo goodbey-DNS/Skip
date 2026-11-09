@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:fillViewport="true">
@@ -19,9 +20,9 @@
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingLeft="12dp"
+            android:paddingStart="12dp"
             android:paddingTop="8dp"
-            android:paddingRight="20dp"
+            android:paddingEnd="20dp"
             android:paddingBottom="8dp">
 
             <TextView
@@ -29,7 +30,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:padding="12dp"
-                android:text="←"
+                android:text="@string/back_arrow"
                 android:textColor="@color/text_primary"
                 android:textSize="20sp"
                 android:textStyle="bold" />
@@ -37,7 +38,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginLeft="8dp"
+                android:layout_marginStart="8dp"
                 android:text="@string/rule_title"
                 android:textColor="@color/text_primary"
                 android:textSize="20sp"
@@ -48,11 +49,12 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:paddingLeft="20dp"
-            android:paddingRight="20dp"
+            android:paddingStart="20dp"
+            android:paddingEnd="20dp"
             android:paddingBottom="32dp">
 
             <LinearLayout
+                tools:ignore="UselessParent"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="16dp"
@@ -89,7 +91,7 @@
                             android:textSize="12sp" />
                     </LinearLayout>
 
-                    <Switch
+                    <androidx.appcompat.widget.SwitchCompat
                         android:id="@+id/bubble_switch"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content" />
@@ -144,7 +146,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="关键字"
+                        android:text="@string/rules_section_keywords"
                         android:textColor="@color/text_secondary"
                         android:textSize="13sp" />
 
@@ -152,10 +154,11 @@
                         android:id="@+id/kw_add"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:paddingLeft="12dp"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="0dp"
                         android:paddingTop="4dp"
                         android:paddingBottom="4dp"
-                        android:text="+ 添加"
+                        android:text="@string/rules_add_keyword"
                         android:textColor="@color/status_on"
                         android:textSize="13sp" />
                 </LinearLayout>
@@ -165,7 +168,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
                     android:lineSpacingExtra="2dp"
-                    android:text="只在开屏那几秒内参与匹配。命中词提高识别，排除词防误点，排除优先。按应用生效，全应用兜底。"
+                    android:text="@string/rules_keywords_desc"
                     android:textColor="@color/text_secondary"
                     android:textSize="12sp" />
 
@@ -185,19 +188,19 @@
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="启用内置默认词"
+                            android:text="@string/rules_builtin_title"
                             android:textColor="@color/text_primary"
                             android:textSize="14sp" />
 
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="跳过 / Skip / 倒计时，以及常见广告平台的跳过按钮；关掉只认你自己填的词"
+                            android:text="@string/rules_builtin_desc"
                             android:textColor="@color/text_secondary"
                             android:textSize="12sp" />
                     </LinearLayout>
 
-                    <Switch
+                    <androidx.appcompat.widget.SwitchCompat
                         android:id="@+id/kw_builtin"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content" />
@@ -208,7 +211,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="6dp"
-                    android:text="还没有自定义关键字"
+                    android:text="@string/rules_no_keywords"
                     android:textColor="@color/text_secondary"
                     android:textSize="13sp" />
 

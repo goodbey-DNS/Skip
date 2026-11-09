@@ -1403,6 +1403,9 @@ class SkipAccessibilityService : AccessibilityService() {
                     StatsStore.logEvent(appCtx, "过渡页跳过：${p.pkg}")
                 }
                 val id = db.insert(statsPkg, detail)
+                // 写失败时 insert() 只返回 -1，不抛异常；不回读就完全不知道这条丢了。
+                // 0.17.62 那轮「verified 照打、库里不涨」缺的就是这一行。
+                if (id <= 0L) traceW("stats-insert-fail ${statsPkg} 「$detail」 两次写入都被拒")
                 demoter.record(p.pkg, id, now, !adEv)
             }
             splashClosedAt[p.pkg] = now
@@ -1759,6 +1762,10 @@ class SkipAccessibilityService : AccessibilityService() {
 
     // ———————— 快照 ————————
 
+    // 通知里确实用了 getActivity（点「掉线」提示要能跳到无障碍设置页）。
+    // lint 的 LaunchActivityFromNotification 建议只发广播，但这里的目的就是
+    // 「让用户去系统设置里操作」，跳 Activity 是唯一合理的落点。
+    @android.annotation.SuppressLint("LaunchActivityFromNotification")
     private fun postWorkNotification() {
         // 开屏只停 3–5 秒，下拉再展开 action 根本来不及，所以抓取按钮直接画进
         // 折叠视图（RemoteViews），下拉即可见、可点，不需要展开或长按。

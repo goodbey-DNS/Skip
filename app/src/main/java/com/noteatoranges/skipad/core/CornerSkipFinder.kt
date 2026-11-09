@@ -32,11 +32,7 @@ object CornerSkipFinder {
     ): AccessibilityNodeInfo? {
         if (screenW <= 0 || screenH <= 0) return null
         val screenArea = screenW.toFloat() * screenH
-        val minArea = screenArea * MIN_AREA_RATIO
-        val maxArea = screenArea * MAX_AREA_RATIO
-        val rightEdge = screenW * RIGHT_RATIO
-        val bottomEdge = screenH * TOP_RATIO
-        val minTop = screenH * STATUS_BAR_RATIO
+        val maxArea = screenArea * CornerGates.MAX_AREA_RATIO
 
         var best: AccessibilityNodeInfo? = null
         var bestScore = Int.MIN_VALUE
@@ -73,9 +69,7 @@ object CornerSkipFinder {
                 if (!f.visible) continue
 
                 val label = f.label?.trim().orEmpty()
-                if (label.length > MAX_TEXT_LEN) continue
-                val lower = label.lowercase(Locale.ROOT)
-                if (lower.isNotEmpty() && NEGATIVE.any { lower.contains(it) }) continue
+                if (!CornerGates.textAllowed(label)) continue
 
                 val target = if (f.clickable) node else clickableAncestor(node, cache) ?: continue
                 val tf = if (target === node) f else factsOf(target, cache)
@@ -83,23 +77,14 @@ object CornerSkipFinder {
                 val r = tf.rect
                 if (r.isEmpty || r.width() <= 0 || r.height() <= 0) continue
 
-                val area = r.width().toFloat() * r.height()
-                if (area < minArea || area > maxArea) continue
-
-                val aspect = r.width().toFloat() / r.height()
-                if (aspect < MIN_ASPECT || aspect > MAX_ASPECT) continue
-
-                val cx = r.exactCenterX()
-                val cy = r.exactCenterY()
-                if (cx < rightEdge || cy > bottomEdge) continue
-                if (r.top < minTop) continue
+                val w = r.width()
+                val h = r.height()
+                if (!CornerGates.areaAllowed(w, h, screenW, screenH)) continue
+                if (!CornerGates.aspectAllowed(w, h)) continue
+                if (!CornerGates.inCorner(r.exactCenterX(), r.exactCenterY(), r.top, screenW, screenH)) continue
 
                 val vid = tf.vid?.lowercase(Locale.ROOT).orEmpty()
-                var score = 0
-                if (vid.contains("skip")) score += 4
-                if (vid.contains("close")) score += 2
-                if (label.isNotEmpty()) score += 2
-                if (area < maxArea * 0.3f) score += 1
+                val score = CornerGates.score(vid, label, w.toFloat() * h, maxArea)
 
                 if (score > bestScore) {
                     bestScore = score
@@ -130,18 +115,8 @@ object CornerSkipFinder {
     private const val MAX_NODES = 400
     private const val ANCESTOR_HOPS = 4
 
-    /** 面积下限 0.15%：小于这个基本是图标碎屑，点不中也别点 */
-    private const val MIN_AREA_RATIO = 0.0015f
-
-    /** 面积上限 3.5%：超过它更像图片热区或整条横幅，不是跳过按钮 */
-    private const val MAX_AREA_RATIO = 0.035f
-
-    private const val RIGHT_RATIO = 0.72f
-    private const val TOP_RATIO = 0.22f
-    private const val STATUS_BAR_RATIO = 0.02f
-    private const val MIN_ASPECT = 0.5f
-    private const val MAX_ASPECT = 4.5f
-    private const val MAX_TEXT_LEN = 8
+    // 阈值与「非跳过语义」表都在 CornerGates 里：那边是纯函数，能被单测逐条钉住；
+    // 这里只负责遍历、取节点属性和选最高分。
 
     private val EXCLUDED_CLASSES = setOf(
         "android.widget.EditText",
@@ -152,15 +127,5 @@ object CornerSkipFinder {
         "android.widget.HorizontalScrollView",
         "androidx.viewpager.widget.ViewPager",
         "androidx.viewpager2.widget.ViewPager2",
-    )
-
-    /** 出现且可滚动，说明这是 App 的列表页面而不是开屏页 */
-
-    /** 右上角经常出现的"非跳过"语义，命中即排除 */
-    private val NEGATIVE = listOf(
-        "更多", "菜单", "搜索", "分享", "设置", "个人", "我的", "消息", "通知",
-        "客服", "反馈", "帮助", "登录", "注册",
-        "more", "menu", "search", "share", "setting", "profile", "account",
-        "notification", "help", "feedback", "login", "sign",
     )
 }

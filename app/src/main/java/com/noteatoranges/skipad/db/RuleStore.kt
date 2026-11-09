@@ -8,6 +8,7 @@ import com.noteatoranges.skipad.core.SkipRule
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import androidx.core.content.edit
 
 /**
  * 用户自建跳过规则（GKD 式）：App + 可选页面 + 匹配条件，JSON 落盘 filesDir/rules.json。
@@ -483,7 +484,7 @@ object RuleStore {
         ver = context.getSharedPreferences("rulever", Context.MODE_PRIVATE)
             .getInt("v", 0) + 1
         context.getSharedPreferences("rulever", Context.MODE_PRIVATE)
-            .edit().putInt("v", ver).apply()
+            .edit { putInt("v", ver) }
     }
 
     /**

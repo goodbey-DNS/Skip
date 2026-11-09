@@ -129,9 +129,7 @@ class DiagnosisActivity : AppCompatActivity() {
         timeline.removeAllViews()
         if (shown.isEmpty()) {
             emptyText.visibility = View.VISIBLE
-            emptyText.text =
-                "还没有可读的记录。\n\n让一个 App 冷启动一次（看到开屏广告），再回来看这里，" +
-                    "就会有「跳过成功 / 没找到按钮 / 没敢点」这类结论。"
+            emptyText.text = getString(R.string.diag_timeline_empty)
             return
         }
         emptyText.visibility = View.GONE

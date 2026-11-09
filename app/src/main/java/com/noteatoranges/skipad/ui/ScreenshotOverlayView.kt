@@ -228,6 +228,18 @@ class ScreenshotOverlayView @JvmOverloads constructor(
         return true
     }
 
+    /**
+     * 无障碍要求：自定义 View 覆盖 onTouchEvent 时必须也覆盖 performClick。
+     *
+     * 这里的行为不变（点选在 ACTION_UP 里已经处理完，并且显式调了 performClick），
+     * 只是把「这是一个可点击控件」这件事告诉系统——TalkBack 之类的辅助功能靠它
+     * 决定要不要把这个 View 当成按钮念出来。
+     */
+    override fun performClick(): Boolean {
+        super.performClick()
+        return true
+    }
+
     private var downX = 0f
     private var downY = 0f
     private var dragging = false
