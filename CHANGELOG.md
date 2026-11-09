@@ -62,6 +62,29 @@ force-stop 之后自愈。这轮没能在真机上复现，所以做的是**加�
 - 统计写入这次**只加了观测**，第 24 条的根因仍未复现；下次出现时抓
   `stats-insert-fail` 或 `排队 Nms` 这两行就能定性。
 
+### 后续（同日晚）
+
+**1. 0.17.82 真机实跳**：冷启动 360 清理，`hot-open` → `match「跳过」180x84` 耗时 3ms →
+点击 → 1.1 秒后 `verified (attempts=0)`。几何判据换调用方式后主路径没有退化。
+
+**2. lint 进 CI 当闸门**：`app/build.gradle` 加 `warningsAsErrors = true`，
+`.github/workflows/build.yml` 在出包前加 `lintRelease` 步骤（失败时把最后 60 行贴进
+Step Summary）。这一版刚把 109 条清到 0，不设闸门过两个月就会长回来。
+刻意保留的四条在 `lint { disable }` 里逐条写了理由，不用 baseline 整体压掉。
+
+**3. 压测脚本 `tools/soak-stats.py`**：循环「切到设置 → 冷启动目标 App → 收日志」，
+逐轮统计 `verified` / `stats-insert-fail` / `排队 >3s` / `执行 >5s` 四列。
+写脚本时踩到两个坑：① Python 的 PATH 与 PowerShell 不是同一份，`adb` 要三步兜底
+（显式参数 → PATH → `%LOCALAPPDATA%\Android\Sdk`）；② `subprocess` 用 `text=True`
+会在 logcat 的 0xa0 字节上抛 `UnicodeDecodeError`，整轮日志被吞成 0 条，必须自己
+`decode("utf-8", "replace")`。
+
+**顺带观察（不是本版引入）**：360 清理今天多次在广告关闭时崩进自己的
+`crashhandler.UploadActivity`，就是 design.md 第 22 条那个百度 SDK `cancelVibrate`
+缺 `VIBRATE` 权限的老问题；同一批里「运满满」素材的「跳过」也出现过扫 16 次
+`hits=0`（无障碍树读不到，与第 21、30 条同源）。两件都不影响结论，但压测时会被误当成
+「引擎失效」，写在这里免得下次重新查一遍。
+
 ## 0.17.81 - 2026-11-08 · 核验包名判定抽成纯函数 + 15 条单测（已发布，versionCode 153）
 
 ### 为什么

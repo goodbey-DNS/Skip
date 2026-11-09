@@ -97,6 +97,25 @@ jobs:
           fi
           exit $code
 
+      # 0.17.82 起 lint 也进 CI：build.gradle 里设了 warningsAsErrors，
+      # 这一步红了就说明静态检查倒退，直接拦在出包之前。
+      - name: Lint (warnings are errors)
+        run: |
+          chmod +x gradlew
+          set +e
+          ./gradlew lintRelease --no-daemon > lint.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            {
+              echo '### Lint 失败（warning 也算失败）'
+              echo '```'
+              tail -n 60 lint.log
+              echo '```'
+              echo '报告：app/build/reports/lint-results-release.txt'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $code
+
       - name: Build release APK
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}

@@ -64,6 +64,12 @@ android {
         // 的资源限定符一旦删掉，AAPT 会报 resource mipmap/ic_launcher not found
         // （0.17.79 试过，回退了）。lint 认为 minSdk 26 时它多余，实际不是。
         disable += ['OldTargetApi', 'GradleDependency', 'ObsoleteSdkInt']
+
+        // 0.17.82 起 warning 也当错误：这一版刚把 109 条清到 0，不设闸门的话
+        // 过两个月又会慢慢长回来。CI 的 lintRelease 步骤会把这里的结果直接变成红叉。
+        // 真遇到「要么升级依赖、要么改产品行为」的告警，按上面 disable 的方式逐条说明理由，
+        // 不要用 baseline 整体压掉——那种做法等于把新问题也一起藏起来。
+        warningsAsErrors = true
     }
 }
 
