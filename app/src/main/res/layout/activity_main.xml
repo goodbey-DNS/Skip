@@ -52,6 +52,49 @@
                     android:textColor="@color/text_secondary"
                     android:textSize="13sp" />
 
+                <!--
+                  内置词表长期关闭提醒：默认隐藏。
+                  判定在 core/BuiltinWordsNudge（关着 + 满 24 小时 + 关闭期间扫过页面）。
+                  放在服务状态卡之上，因为它是「你以为没坏但功能少了一半」这类问题里
+                  最容易被忽略的一个。
+                -->
+                <LinearLayout
+                    android:id="@+id/builtin_off_banner"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:background="@drawable/bg_card"
+                    android:orientation="vertical"
+                    android:padding="16dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/builtin_off_text"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/status_off"
+                        android:textSize="15sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:lineSpacingExtra="2dp"
+                        android:text="@string/builtin_off_hint"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+
+                    <Button
+                        android:id="@+id/builtin_off_action"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:background="@drawable/bg_button_primary"
+                        android:text="@string/builtin_off_action"
+                        android:textColor="#FFFFFF" />
+                </LinearLayout>
+
                 <!-- 服务状态卡 -->
                 <LinearLayout
                     android:layout_width="match_parent"

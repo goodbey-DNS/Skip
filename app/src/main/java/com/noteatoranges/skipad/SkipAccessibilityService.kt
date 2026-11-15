@@ -1087,6 +1087,9 @@ class SkipAccessibilityService : AccessibilityService() {
         if (hit == null) {
             traceV("scan $pkg ${cost}ms: $dbg")
             traceMiss(pkg, dbg)
+            // 内置词表关着的时候扫过页面却没命中，正是「关了还在用」的证据，
+            // 首页据此才会提示（只写一次盘，之后是一个布尔判断直接返回）
+            EnginePrefs.noteScanWhileOff(this)
             return false
         }
         // 命中节点的文本可能在定位之后、动作之前失效（页面正在跳）。读失败退回规则 id，

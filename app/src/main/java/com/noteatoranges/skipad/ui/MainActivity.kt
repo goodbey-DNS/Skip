@@ -17,9 +17,11 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.noteatoranges.skipad.R
+import com.noteatoranges.skipad.core.BuiltinWordsNudge
 import com.noteatoranges.skipad.db.StatsDb
 import com.noteatoranges.skipad.keepalive.KeepAlive
 import com.noteatoranges.skipad.util.AppLabels
+import com.noteatoranges.skipad.util.EnginePrefs
 import com.noteatoranges.skipad.util.GlassBarView
 import com.noteatoranges.skipad.util.Ui
 
@@ -39,6 +41,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var rankEmpty: TextView
     private lateinit var rankOthers: TextView
     private lateinit var tabBar: GlassBarView
+    private lateinit var builtinOffBanner: View
+    private lateinit var builtinOffText: TextView
 
     private var bottomInsetPx = 0
     private var currentTab = 0
@@ -58,6 +62,8 @@ class MainActivity : AppCompatActivity() {
         rankEmpty = findViewById(R.id.rank_empty_text)
         rankOthers = findViewById(R.id.rank_others_text)
         tabBar = findViewById(R.id.tab_bar)
+        builtinOffBanner = findViewById(R.id.builtin_off_banner)
+        builtinOffText = findViewById(R.id.builtin_off_text)
         // 玻璃：把内容层（本栏的兄弟节点）指定为模糊目标
         tabBar.setup(findViewById(R.id.blur_content))
 
@@ -105,6 +111,13 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.diagnosis_entry).setOnClickListener {
             startActivity(Intent(this, DiagnosisActivity::class.java))
         }
+
+        // 内置词表长期关闭提醒：按钮直接送到规则页那个开关上，别再让用户自己找
+        findViewById<Button>(R.id.builtin_off_action).setOnClickListener {
+            startActivity(Intent(this, RulesActivity::class.java))
+        }
+        // 升级前就已经关着开关的用户没有起点时间，补一个：从此刻起算满 24 小时才会提示
+        EnginePrefs.ensureOffSince(this)
 
         // —— 设置页底部：版本号（原「关于」页唯一的长期有用信息）——
         findViewById<TextView>(R.id.version_text).text = try {
@@ -154,7 +167,28 @@ class MainActivity : AppCompatActivity() {
             }
         }
         actionButton.setText(if (inSettings) R.string.action_open_settings else R.string.action_enable)
+        refreshBuiltinOff()
         loadStatsAsync()
+    }
+
+    /**
+     * 内置词表长期关闭横幅。
+     *
+     * 「关着但还在用」是唯一会让人把功能缺失误当成故障的场景，所以判定很保守：
+     * 满 24 小时、且关闭期间真的扫过页面（core/BuiltinWordsNudge）。任何一条不满足就收起。
+     */
+    private fun refreshBuiltinOff() {
+        val enabled = EnginePrefs.builtinWordsEnabled(this)
+        val since = EnginePrefs.builtinOffSince(this)
+        val scanned = EnginePrefs.builtinOffScanned(this)
+        val now = System.currentTimeMillis()
+        if (BuiltinWordsNudge.shouldWarn(enabled, since, scanned, now)) {
+            builtinOffText.text =
+                getString(R.string.builtin_off_text, BuiltinWordsNudge.offPhrase(since, now))
+            builtinOffBanner.visibility = View.VISIBLE
+        } else {
+            builtinOffBanner.visibility = View.GONE
+        }
     }
 
     /** 「设置里开着但没连上」的提示，带上距上次真正连上的分钟数 */

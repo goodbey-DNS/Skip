@@ -11,6 +11,11 @@
     <string name="action_open_settings">查看无障碍设置</string>
     <string name="action_check_now">立即自检</string>
 
+    <!-- 内置词表长期关闭提醒（core/BuiltinWordsNudge） -->
+    <string name="builtin_off_text">内置词表已关闭 %1$s，文字型广告不会跳</string>
+    <string name="builtin_off_hint">服务在正常扫描，只是开屏广告十有八九只写「跳过」两个字，这组词关了就认不出来。你自己填的词和快照规则仍然有效。</string>
+    <string name="builtin_off_action">去打开内置词表</string>
+
     <string name="section_rank">广告排行榜</string>
     <string name="stats_summary_format">累计已跳过 %1$d 次开屏广告 · 涉及 %2$d 个应用</string>
     <string name="stats_empty">还没有跳过记录——开启服务后，开屏广告的「跳过」一点就会记在这里</string>
