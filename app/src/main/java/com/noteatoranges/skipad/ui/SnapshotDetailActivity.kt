@@ -271,6 +271,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
                     viewId = n.vid.takeIf { it.isNotEmpty() },
                     textContains = t,
                     zone = zoneOf(n),
+                    parentCls = parentClsOf(n),
                 )
             }
             .setNegativeButton("取消", null)
@@ -304,8 +305,39 @@ class SnapshotDetailActivity : AppCompatActivity() {
         dpX: Float? = null,
         dpY: Float? = null,
         zone: android.graphics.RectF? = null,
+        parentCls: String? = null,
     ) {
-        AlertDialog.Builder(this)
+        val save: (String?) -> Unit = { lockedParent ->
+            RuleStore.add(
+                this,
+                rule(
+                    kind,
+                    viewId = viewId,
+                    textContains = textContains,
+                    xRatio = xRatio,
+                    yRatio = yRatio,
+                    anchorVid = anchorVid,
+                    anchorText = anchorText,
+                    dxDp = dxDp,
+                    dyDp = dyDp,
+                    nodePath = nodePath,
+                    nodeWinId = nodeWinId,
+                    nodeCls = nodeCls,
+                    nodeWDp = nodeWDp,
+                    nodeHDp = nodeHDp,
+                    dpX = dpX,
+                    dpY = dpY,
+                    zone = zone,
+                    parentCls = lockedParent,
+                ),
+            )
+            Toast.makeText(this, R.string.rule_saved, Toast.LENGTH_SHORT).show()
+            // 规则列表是按 App 分组的、默认收起。不告诉它该展开哪个组，
+            // 用户回列表只能看到一行「某App · N 条」，找不到自己刚加的东西
+            getSharedPreferences("rules_ui", MODE_PRIVATE)
+                .edit { putString(RulesActivity.PREF_EXPAND_PKG, meta.pkg) }
+        }
+        val builder = AlertDialog.Builder(this)
             .setTitle("确认生成")
             .setMessage(
                 preview(
@@ -313,39 +345,19 @@ class SnapshotDetailActivity : AppCompatActivity() {
                     nodePath, dpX, dpY, zone,
                 ) +
                     "\n\n" + scopeNote() +
-                    "动作默认点击，可在规则页改成返回键。"
+                    "动作默认点击，可在规则页改成返回键。" +
+                    (if (parentCls == null) "" else
+                        "\n\n如果同一个词在别的页面也出现过、经常被误点，" +
+                            "可以选「锁父容器」：要求按钮的上一层是 " +
+                            parentCls.substringAfterLast('.') +
+                            "。App 改版换了布局，这条会失配（漏跳，不会乱点）。")
             )
-            .setPositiveButton("保存") { _, _ ->
-                RuleStore.add(
-                    this,
-                    rule(
-                        kind,
-                        viewId = viewId,
-                        textContains = textContains,
-                        xRatio = xRatio,
-                        yRatio = yRatio,
-                        anchorVid = anchorVid,
-                        anchorText = anchorText,
-                        dxDp = dxDp,
-                        dyDp = dyDp,
-                        nodePath = nodePath,
-                        nodeWinId = nodeWinId,
-                        nodeCls = nodeCls,
-                        nodeWDp = nodeWDp,
-                        nodeHDp = nodeHDp,
-                        dpX = dpX,
-                        dpY = dpY,
-                        zone = zone,
-                    ),
-                )
-                Toast.makeText(this, R.string.rule_saved, Toast.LENGTH_SHORT).show()
-                // 规则列表是按 App 分组的、默认收起。不告诉它该展开哪个组，
-                // 用户回列表只能看到一行「某App · N 条」，找不到自己刚加的东西
-                getSharedPreferences("rules_ui", MODE_PRIVATE)
-                    .edit { putString(RulesActivity.PREF_EXPAND_PKG, meta.pkg) }
-            }
+            .setPositiveButton("保存") { _, _ -> save(null) }
             .setNegativeButton("取消", null)
-            .show()
+        if (parentCls != null) {
+            builder.setNeutralButton("锁父容器") { _, _ -> save(parentCls) }
+        }
+        builder.show()
     }
 
     private fun preview(
@@ -499,6 +511,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
         dpX: Float? = null,
         dpY: Float? = null,
         zone: android.graphics.RectF? = null,
+        parentCls: String? = null,
     ) = SkipAppRule(
         id = UUID.randomUUID().toString(),
         app = meta.pkg,
@@ -519,6 +532,7 @@ class SnapshotDetailActivity : AppCompatActivity() {
         nodePath = nodePath,
         nodeWinId = nodeWinId,
         nodeCls = nodeCls,
+        parentCls = parentCls,
         nodeWDp = nodeWDp,
         nodeHDp = nodeHDp,
         dpX = dpX,
@@ -564,6 +578,21 @@ class SnapshotDetailActivity : AppCompatActivity() {
         val w = if (meta.screenW > 0) meta.screenW.toFloat() else rw.toFloat()
         val h = if (meta.screenH > 0) meta.screenH.toFloat() else rh.toFloat()
         return android.graphics.RectF(n.l / w, n.t / h, n.r / w, n.b / h)
+    }
+
+    /**
+     * 父容器类名（短名），用于「锁父容器」选项。
+     *
+     * 快照用 [SnapshotStore.Node.path] 表示层级（`0/3/1`），父节点就是去掉最后一段。
+     * 取不到（根节点、路径为空）返回 null —— 这种情况下不提供这个选项，
+     * 而不是拿一个猜出来的类名把规则写死。
+     */
+    private fun parentClsOf(n: SnapshotStore.Node): String? {
+        if (n.path.isEmpty()) return null
+        val parentPath = n.path.substringBeforeLast('/', "")
+        if (parentPath.isEmpty()) return null
+        val cls = nodes.firstOrNull { it.path == parentPath }?.cls ?: return null
+        return cls.substringAfterLast('.').takeIf { it.isNotBlank() }
     }
 
     /**

@@ -381,6 +381,8 @@ class RulesActivity : AppCompatActivity() {
                     r.viewId?.let { "按编号 $it" },
                     r.textContains?.let { "文字里包含「$it」" },
                     r.nodePath?.let { "按层级 $it" },
+                    // 锁父容器是收窄条件，不写出来用户会以为规则「没生效」
+                    r.parentCls?.let { "锁定父容器 $it" },
                     "动作：${r.actionLabel}",
                 ).joinToString(" / ")
                 else -> "按屏幕坐标的规则已停用，建议删除"
@@ -451,7 +453,7 @@ class RulesActivity : AppCompatActivity() {
                 AlertDialog.Builder(this@RulesActivity)
                     .setMessage(R.string.rule_delete_confirm)
                     .setNegativeButton(R.string.action_cancel, null)
-                    .setPositiveButton(R.string.action_confirm_clear) { _, _ ->
+                    .setPositiveButton(R.string.action_delete) { _, _ ->
                         RuleStore.remove(this@RulesActivity, r.id)
                         Toast.makeText(this@RulesActivity, R.string.rule_deleted, Toast.LENGTH_SHORT).show()
                         renderRules()
@@ -565,7 +567,7 @@ class RulesActivity : AppCompatActivity() {
                     AlertDialog.Builder(this@RulesActivity)
                         .setMessage("删除这条快照？")
                         .setNegativeButton(R.string.action_cancel, null)
-                        .setPositiveButton(R.string.action_confirm_clear) { _, _ ->
+                        .setPositiveButton(R.string.action_delete) { _, _ ->
                             SnapshotStore.remove(this@RulesActivity, dir)
                             renderSnapshots()
                         }

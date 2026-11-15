@@ -76,6 +76,18 @@ data class SkipRule(
      * 空列表 = 不做这项校验（用户规则一律为空，不进这条路径）。
      */
     val neighborHints: List<String> = emptyList(),
+    /**
+     * 命中节点的祖先类名必须包含其中之一（忽略大小写），最多向上看 6 层。
+     *
+     * 从 GKD 的结构选择器借来的最小子集：只加「爹是谁」这一层，不做完整选择器。
+     * 要解决的是**单看节点分不出归属**：同一个「关闭」文案、甚至同一个 close 类 id，
+     * 既可能是淘宝 3D 试穿的业务控件，也可能是穿山甲开屏的退出按钮——这正是
+     * design.md 第 13 条里 `tt_` 前缀被迫移除的原因（静态分析只能证明 id 名存在，
+     * 证明不了它属于哪个 SDK）。看一眼父容器就能分开。
+     *
+     * 空列表 = 不做这项校验。内置规则和老规则一律为空，行为与 0.17.84 完全一致。
+     */
+    val parentNames: List<String> = emptyList(),
 ) {
     companion object {
         const val ACTION_CLICK = "click"

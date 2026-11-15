@@ -52,6 +52,17 @@ data class SkipAppRule(
     val nodeWinId: Int = 0,
     /** 路径锚点记录时的控件类名：回放时类名不符就不点（防页面变动后路径指向别的控件） */
     val nodeCls: String? = null,
+    /**
+     * 点选时锁定的父容器类名（短名，如 `FrameLayout`）。
+     *
+     * 只在用户选了「锁父容器」时才有值。用途是解决单看节点分不出归属的问题：
+     * 同一个「关闭」文案、甚至同一个含 close 的资源 id，可能既是淘宝 3D 试穿的业务控件，
+     * 又是广告 SDK 的开屏退出按钮（design.md 第 13 条）。加上父容器就能分开。
+     *
+     * 代价是 App 改版换了容器类名会失配（表现为漏跳，不会乱点），
+     * 所以默认不加，由用户在确认框里按需勾选。
+     */
+    val parentCls: String? = null,
     /** 路径锚点记录时的大致尺寸（dp）：偏差超 40% 视为已不是同一个控件 */
     val nodeWDp: Int? = null,
     val nodeHDp: Int? = null,
@@ -151,6 +162,7 @@ object RuleStore {
             nodePath = j.optString("nodePath").takeIf { it.isNotEmpty() },
             nodeWinId = j.optInt("nodeWinId", 0),
             nodeCls = j.optString("nodeCls").takeIf { it.isNotEmpty() },
+            parentCls = j.optString("parentCls").takeIf { it.isNotEmpty() },
             nodeWDp = if (j.has("nodeWDp")) j.optInt("nodeWDp") else null,
             nodeHDp = if (j.has("nodeHDp")) j.optInt("nodeHDp") else null,
             dpX = if (j.has("dpX")) j.optDouble("dpX").toFloat() else null,
@@ -237,6 +249,7 @@ object RuleStore {
                 r.nodePath?.let { put("nodePath", it) }
                 if (r.nodeWinId != 0) put("nodeWinId", r.nodeWinId)
                 r.nodeCls?.let { put("nodeCls", it) }
+                r.parentCls?.let { put("parentCls", it) }
                 r.nodeWDp?.let { put("nodeWDp", it) }
                 r.nodeHDp?.let { put("nodeHDp", it) }
                 r.dpX?.let { put("dpX", it.toDouble()) }
@@ -335,6 +348,8 @@ object RuleStore {
         a.app == b.app && a.kind == b.kind && a.activity == b.activity &&
             a.viewId == b.viewId && a.textContains == b.textContains &&
             a.nodePath == b.nodePath &&
+            // 父容器也是匹配条件的一部分：同词同页但锁的容器不同，是两条规则
+            a.parentCls == b.parentCls &&
             a.anchorVid == b.anchorVid && a.anchorText == b.anchorText &&
             a.dxDp == b.dxDp && a.dyDp == b.dyDp &&
             a.dpX == b.dpX && a.dpY == b.dpY &&
@@ -435,6 +450,8 @@ object RuleStore {
                     // 只给文字规则加位置约束：viewId / 结构路径已经精确指向控件本身，
                     // 再加位置反而会在布局微调后把规则判死
                     zone = if (r.textContains != null) zoneFor(context, r) else null,
+                    // 父容器锁定只在用户手动选过时生效；空列表 = 不校验，与旧版本行为一致
+                    parentNames = listOfNotNull(r.parentCls),
                 )
             }
 

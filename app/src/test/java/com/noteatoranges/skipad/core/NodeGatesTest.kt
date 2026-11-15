@@ -96,4 +96,112 @@ class NodeGatesTest {
     fun `空文本不算超长`() {
         assertTrue(NodeGates.textLengthAllowed(0, 0))
     }
+
+    // —— 祖先类名闸（parentNames）——
+
+    @Test
+    fun `没要求父容器就一律放行`() {
+        assertTrue(NodeGates.ancestorAllowed(emptyList(), emptyList()))
+        assertTrue(NodeGates.ancestorAllowed(listOf("android.widget.FrameLayout"), emptyList()))
+    }
+
+    @Test
+    fun `要求了父容器但读不到祖先就不放行`() {
+        // 读不到证据时按不通过处理：宁可漏跳，也不要在没证据的情况下动手
+        assertFalse(NodeGates.ancestorAllowed(emptyList(), listOf("FrameLayout")))
+    }
+
+    @Test
+    fun `短名包含匹配`() {
+        assertTrue(
+            NodeGates.ancestorAllowed(
+                listOf("android.widget.LinearLayout", "android.widget.FrameLayout"),
+                listOf("FrameLayout"),
+            ),
+        )
+    }
+
+    @Test
+    fun `大小写不敏感`() {
+        assertTrue(NodeGates.ancestorAllowed(listOf("android.widget.FrameLayout"), listOf("framelayout")))
+        assertTrue(NodeGates.ancestorAllowed(listOf("android.widget.FRAMELAYOUT"), listOf("FrameLayout")))
+    }
+
+    @Test
+    fun `都不匹配就不放行`() {
+        assertFalse(
+            NodeGates.ancestorAllowed(
+                listOf("android.widget.FrameLayout", "android.widget.RelativeLayout"),
+                listOf("RecyclerView"),
+            ),
+        )
+    }
+
+    @Test
+    fun `任意一层祖先命中即可`() {
+        // 按钮在外层横栏里、横栏在广告容器里，只要容器类名对上就算数
+        assertTrue(
+            NodeGates.ancestorAllowed(
+                listOf("android.widget.LinearLayout", "com.bytedance.sdk.SplashAdView"),
+                listOf("SplashAdView"),
+            ),
+        )
+    }
+
+    @Test
+    fun `要求的名字是空串等于没要求`() {
+        assertTrue(NodeGates.ancestorAllowed(listOf("android.widget.FrameLayout"), listOf("")))
+    }
+
+    // —— 可点祖先过大时退回点自身 ——
+
+    @Test
+    fun `整屏祖先配小按钮时退回点自身`() {
+        // 1220×2712 的屏、上限 12%：整屏容器必然超限，144×65 的「跳过」两个字必然合规
+        assertTrue(
+            NodeGates.shouldFallbackToSelf(
+                ancW = w, ancH = h,
+                selfW = 144, selfH = 65,
+                screenW = w, screenH = h,
+                maxAreaRatio = 0.12f,
+            ),
+        )
+    }
+
+    @Test
+    fun `祖先本身就合规时不需要退回`() {
+        assertFalse(
+            NodeGates.shouldFallbackToSelf(
+                ancW = 320, ancH = 120,
+                selfW = 144, selfH = 65,
+                screenW = w, screenH = h,
+                maxAreaRatio = 0.12f,
+            ),
+        )
+    }
+
+    @Test
+    fun `两边都超限就放弃`() {
+        // 祖先整屏、自身也是半屏：点哪儿都不安全，保持「宁可漏跳」
+        assertFalse(
+            NodeGates.shouldFallbackToSelf(
+                ancW = w, ancH = h,
+                selfW = w, selfH = h / 2,
+                screenW = w, screenH = h,
+                maxAreaRatio = 0.12f,
+            ),
+        )
+    }
+
+    @Test
+    fun `自身尺寸无效时放弃`() {
+        assertFalse(
+            NodeGates.shouldFallbackToSelf(
+                ancW = w, ancH = h,
+                selfW = 0, selfH = 0,
+                screenW = w, screenH = h,
+                maxAreaRatio = 0.12f,
+            ),
+        )
+    }
 }

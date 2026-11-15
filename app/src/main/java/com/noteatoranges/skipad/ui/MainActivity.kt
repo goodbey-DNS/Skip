@@ -16,6 +16,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import com.noteatoranges.skipad.R
 import com.noteatoranges.skipad.core.BuiltinWordsNudge
 import com.noteatoranges.skipad.db.StatsDb
@@ -43,6 +44,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tabBar: GlassBarView
     private lateinit var builtinOffBanner: View
     private lateinit var builtinOffText: TextView
+    private lateinit var restrictedHint: TextView
+    private lateinit var openDetailButton: Button
 
     private var bottomInsetPx = 0
     private var currentTab = 0
@@ -64,6 +67,8 @@ class MainActivity : AppCompatActivity() {
         tabBar = findViewById(R.id.tab_bar)
         builtinOffBanner = findViewById(R.id.builtin_off_banner)
         builtinOffText = findViewById(R.id.builtin_off_text)
+        restrictedHint = findViewById(R.id.restricted_hint)
+        openDetailButton = findViewById(R.id.open_detail_button)
         // 玻璃：把内容层（本栏的兄弟节点）指定为模糊目标
         tabBar.setup(findViewById(R.id.blur_content))
 
@@ -116,6 +121,17 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.builtin_off_action).setOnClickListener {
             startActivity(Intent(this, RulesActivity::class.java))
         }
+
+        // Android 13+ 侧载应用的无障碍开关会被系统置灰，而「允许受限制的设置」入口
+        // 只在本应用的详情页右上角 ⋮ 里，用户基本找不到。给一条直达路径。
+        openDetailButton.setOnClickListener {
+            startActivity(
+                Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    "package:$packageName".toUri(),
+                )
+            )
+        }
         // 升级前就已经关着开关的用户没有起点时间，补一个：从此刻起算满 24 小时才会提示
         EnginePrefs.ensureOffSince(this)
 
@@ -167,6 +183,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
         actionButton.setText(if (inSettings) R.string.action_open_settings else R.string.action_enable)
+        // 没开的时候才提示「受限制的设置」：开了的用户永远不需要看到这段
+        val needGuide = !inSettings
+        restrictedHint.visibility = if (needGuide) View.VISIBLE else View.GONE
+        openDetailButton.visibility = if (needGuide) View.VISIBLE else View.GONE
         refreshBuiltinOff()
         loadStatsAsync()
     }

@@ -139,6 +139,32 @@
                         android:text="@string/action_check_now"
                         android:textColor="@color/primary"
                         android:textSize="13sp" />
+
+                    <!--
+                      Android 13+ 侧载应用的无障碍开关会被系统置灰。
+                      只在「设置里没开」时出现，开了就不占任何空间。
+                    -->
+                    <TextView
+                        android:id="@+id/restricted_hint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:lineSpacingExtra="3dp"
+                        android:text="@string/restricted_hint"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="12sp"
+                        android:visibility="gone" />
+
+                    <Button
+                        android:id="@+id/open_detail_button"
+                        style="?android:attr/borderlessButtonStyle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center_horizontal"
+                        android:text="@string/action_open_app_detail"
+                        android:textColor="@color/primary"
+                        android:textSize="13sp"
+                        android:visibility="gone" />
                 </LinearLayout>
 
                 <!-- 广告排行榜卡 -->

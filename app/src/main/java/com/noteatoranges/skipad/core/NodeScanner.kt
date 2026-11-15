@@ -146,10 +146,39 @@ class NodeScanner(
                     if (candFacts == null || !visible) {
                         reject = "「${(text ?: vid)?.take(12)}」不可见"
                     } else {
-                        val rect = runCatching { candFacts.rect }.getOrNull()
+                        var target = cand
+                        var fellBack = false
+                        var rect = runCatching { candFacts.rect }.getOrNull()
                         if (rect == null || rect.width() <= 0 || rect.height() <= 0) {
                             reject = "「${(text ?: vid)?.take(12)}」矩形无效"
                             continue
+                        }
+                        // 可点祖先是整屏容器时，退回点命中节点自身。
+                        //
+                        // 不少 App 把根布局设成 clickable，用来实现「点空白关闭弹窗」。
+                        // 开屏页里那个「跳过」就挂在这层容器下面，于是可点祖先 = 整屏，
+                        // 面积闸把它判掉，连带把里面那个真正的按钮一起放弃——表现为漏跳，
+                        // 而且日志只写「超出面积上限」，看起来像规则写错了。
+                        //
+                        // 换回命中节点本身是更安全的做法：它是几十像素的小控件，
+                        // 点它的中心永远落在按钮上；而点整屏容器的中心会落到容器里的随机内容。
+                        if (target !== node && !NodeGates.areaAllowed(
+                                rect.width(), rect.height(), screenW, screenH,
+                                matched.node.rule.maxAreaRatio,
+                            )
+                        ) {
+                            val selfRect = runCatching { f.rect }.getOrNull()
+                            val selfVisible = runCatching { f.visible }.getOrDefault(false)
+                            if (selfRect != null && selfVisible && NodeGates.shouldFallbackToSelf(
+                                    rect.width(), rect.height(),
+                                    selfRect.width(), selfRect.height(),
+                                    screenW, screenH, matched.node.rule.maxAreaRatio,
+                                )
+                            ) {
+                                target = node
+                                rect = selfRect
+                                fellBack = true
+                            }
                         }
                         // 日志用像素尺寸，不用占屏百分比。
                         //
@@ -181,15 +210,26 @@ class NodeScanner(
                         } else if (!neighborHasHint(node, matched.node.rule.neighborHints)) {
                             // 倒计时数字这类「旁边必须有跳过文案」的规则：孤立数字不点
                             reject = "「${text?.take(12)}」附近没有跳过文案"
+                        } else if (matched.node.rule.parentNames.isNotEmpty() &&
+                            !NodeGates.ancestorAllowed(ancestorClassesOf(node), matched.node.rule.parentNames)
+                        ) {
+                            // 规则要求了父容器（从快照点选时锁定的）：祖先里找不到就不动手。
+                            // 这条是收紧，不是放宽——失配的代价是漏跳，误判的代价是乱点
+                            reject = "「${text?.take(12)}」父容器不符"
                         } else if (zone == null && !byViewId && !matched.node.rule.allowCenter && inCenter) {
                             reject = "「${text?.take(12)}」在中央区域(cx=${cx.toInt()},cy=${cy.toInt()})"
                         } else if (NodeGates.areaAllowed(
                                 rect.width(), rect.height(), screenW, screenH,
                                 matched.node.rule.maxAreaRatio,
                             )) {
-                            lastDebug = "HIT「${(text ?: vid)?.take(20)}」${sizeText} 规则=${matched.node.rule.id}" +
-                                if (byViewId) "(viewId)" else ""
-                            return cand to matched.node.rule
+                            lastDebug = buildString {
+                                append("HIT「${(text ?: vid)?.take(20)}」")
+                                append(sizeText)
+                                append(" 规则=${matched.node.rule.id}")
+                                if (byViewId) append("(viewId)")
+                                if (fellBack) append("(祖先过大→点自身)")
+                            }
+                            return target to matched.node.rule
                         } else {
                             reject = "「${text?.take(12)}」${sizeText} 超出面积上限"
                         }
@@ -339,9 +379,39 @@ class NodeScanner(
         return false
     }
 
+    /**
+     * 命中节点向上 [PARENT_HOPS] 层内的祖先类名，供 [SkipRule.parentNames] 校验。
+     *
+     * 只对声明了 parentNames 的规则调用（调用点已判空），普通规则零开销。
+     * 每层都套 runCatching：节点在遍历中途失效会抛，读不到就当这一层没有，
+     * 不要把一次扫描整段打断——最终由 NodeGates.ancestorAllowed 判「没证据就不点」。
+     */
+    private fun ancestorClassesOf(node: AccessibilityNodeInfo): List<String> {
+        val out = ArrayList<String>(PARENT_HOPS)
+        var cur = runCatching { node.parent }.getOrNull()
+        var hops = 0
+        while (cur != null && hops < PARENT_HOPS) {
+            runCatching { cur?.className?.toString() }.getOrNull()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { out.add(it) }
+            cur = runCatching { cur?.parent }.getOrNull()
+            hops++
+        }
+        return out
+    }
+
     private companion object {
         const val MAX_NODES = 800
         const val TRAVERSE_TIMEOUT_MS = 400L
+
+        /**
+         * parentNames 校验向上看几层。
+         *
+         * 开屏页「按钮 → 横栏 → 广告容器 → 根」一般 3~4 层，6 层足够；
+         * 再往上就抓到 Activity 的 DecorView，那对区分 SDK 归属没有意义。
+         */
+        const val PARENT_HOPS = 6
+
         const val ANCESTOR_HOPS = 6
 
         /** 邻近文案校验向上看几层（见 neighborHasHint） */

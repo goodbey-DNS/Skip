@@ -57,4 +57,47 @@ object NodeGates {
      * 相等放行：`limit` 是「最多允许多少字」，不是「必须少于」。
      */
     fun textLengthAllowed(length: Int, limit: Int): Boolean = length <= limit
+
+    /**
+     * 可点祖先超出面积上限、而命中节点自身合规时，是否退回点节点自身。
+     *
+     * 场景：不少 App 把根布局设成 `clickable` 来实现「点空白关闭弹窗」，开屏页的
+     * 「跳过」两个字就挂在这层整屏容器下面。面积闸会把整屏容器判掉，连带把里面
+     * 真正的按钮一起放弃——表现为漏跳，日志却只写「超出面积上限」，看着像规则写错了。
+     *
+     * 退回点自身更安全：几十像素的小控件，点它的中心一定落在按钮上；
+     * 而点整屏容器的中心会落到容器里的随机内容。两边都不合规时返回 false（放弃），
+     * 保持「宁可漏跳不可乱点」。
+     */
+    fun shouldFallbackToSelf(
+        ancW: Int,
+        ancH: Int,
+        selfW: Int,
+        selfH: Int,
+        screenW: Int,
+        screenH: Int,
+        maxAreaRatio: Float,
+    ): Boolean =
+        !areaAllowed(ancW, ancH, screenW, screenH, maxAreaRatio) &&
+            areaAllowed(selfW, selfH, screenW, screenH, maxAreaRatio)
+
+    /**
+     * 祖先类名闸（[SkipRule.parentNames]）：names 为空一律放行。     *
+     * 匹配用「包含」而不是全等，且忽略大小写：同一个控件在不同 ROM、不同 appcompat
+     * 版本里的类名前缀会变（`android.widget.FrameLayout` / `androidx.appcompat.widget.FrameLayout`），
+     * 全等会把规则判死。名字取短（`FrameLayout`），包含匹配就够。
+     *
+     * 取不到任何祖先类名时按不通过处理：规则明确要求了父容器，读不到证据就不该动手，
+     * 方向与全局一致——宁可漏跳。
+     */
+    fun ancestorAllowed(ancestorClasses: List<String>, names: List<String>): Boolean {
+        if (names.isEmpty()) return true
+        if (ancestorClasses.isEmpty()) return false
+        val wanted = names.map { it.lowercase(java.util.Locale.ROOT) }.filter { it.isNotEmpty() }
+        if (wanted.isEmpty()) return true
+        return ancestorClasses.any { cls ->
+            val c = cls.lowercase(java.util.Locale.ROOT)
+            wanted.any { c.contains(it) }
+        }
+    }
 }

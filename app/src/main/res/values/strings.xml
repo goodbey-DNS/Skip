@@ -11,6 +11,10 @@
     <string name="action_open_settings">查看无障碍设置</string>
     <string name="action_check_now">立即自检</string>
 
+    <!-- Android 13+ 侧载应用的「受限制的设置」：开关灰色点不动时的四步引导 -->
+    <string name="restricted_hint">开关是灰的、点不动？Android 13 起，非应用商店安装的应用默认拿不到无障碍权限。先在系统设置里点一次那个灰开关，看到「已拒绝」弹窗后关掉；再进应用详情，右上角 ⋮ →「允许受限制的设置」，回来就能打开了。</string>
+    <string name="action_open_app_detail">打开应用详情页</string>
+
     <!-- 内置词表长期关闭提醒（core/BuiltinWordsNudge） -->
     <string name="builtin_off_text">内置词表已关闭 %1$s，文字型广告不会跳</string>
     <string name="builtin_off_hint">服务在正常扫描，只是开屏广告十有八九只写「跳过」两个字，这组词关了就认不出来。你自己填的词和快照规则仍然有效。</string>
@@ -79,6 +83,8 @@
     <string name="clear_stats_msg">将清空全部跳过记录：累计次数、排行榜、最近记录全部归零，且不可恢复。保活日志不受影响。</string>
     <string name="action_cancel">取消</string>
     <string name="action_confirm_clear">确认清空</string>
+    <!-- 删除单条（规则 / 快照）专用：原文案借用「确认清空」，删一条却说清空，容易让人以为是大范围操作 -->
+    <string name="action_delete">删除</string>
     <string name="clear_stats_done">统计数据已清空</string>
 
     <string name="recent_title">最近记录</string>
