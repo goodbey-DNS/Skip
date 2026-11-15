@@ -239,3 +239,11 @@
     **用 `adb install` 装的应用有时不出现这个入口**，需要卸载后从文件管理点 APK 重装一次。
     这条不是我们能绕过的限制，只能把路径指清楚。
 
+    **2026-11-15 实测（ac250e7d / Android 15，0.17.86）**：显示侧与按钮跳转都验过。
+    关掉无障碍后首页文案与「打开应用详情页」正常出现、布局无空白；点按钮落在 MIUI 自家的
+    「大小姐 · 0.17.86」应用信息页，右上角 ⋮ 确实在文案说的位置，四步指引与本机 ROM 一致。
+    验证时会撞到两条坑：（a）只清 `enabled_accessibility_services` 会被
+    `KeepAliveJobService` 在包被拉起瞬间补跑写回，2 秒内复原，必须先 revoke
+    `WRITE_SECURE_SETTINGS` 才复现得出来；（b）`pm disable` 对发布版应用报
+    `Shell cannot change component state`，停不掉这个 Job。
+

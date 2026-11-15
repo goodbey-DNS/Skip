@@ -42,6 +42,20 @@
   - 诊断页日志完整：`hot-hit 2758ms 规则=splash-common-text` → `verified (attempts=0)`，
     两段式开屏靠 `retry-window` 补了第二段命中。
   - 本轮**没有**出现 `(祖先过大→点自身)` 后缀，说明新加的退回逻辑没有干扰正常命中路径。
+- 「受限制的设置」引导分支补测通过（此前只验证了「已开启时不显示」，未验证显示侧）：
+  关掉无障碍后首页状态卡变「✗ 未开启，点下方按钮去系统设置开启」+「去开启无障碍服务」，
+  下方出现引导文案与「打开应用详情页」，文案四步完整、布局无空白、排行榜未受挤压；
+  点按钮跳到 MIUI 自家「大小姐 · 0.17.86」应用信息页
+  （`com.miui.securitycenter/.appmanager.ApplicationsDetailsActivity`，taskDescription=「应用详情」），
+  右上角 ⋮ 就在文案所指的位置，说明 `ACTION_APPLICATION_DETAILS_SETTINGS + package: URI` 走通。
+  复现这道分支有两个坑：
+  1. 只删 `enabled_accessibility_services` 没用——15 分钟周期的 `KeepAliveJobService`
+     会在包被拉起瞬间补跑 `checkAndRecover → tryReEnable`，2 秒内把服务登记写回去，
+     界面只闪一下「已开启但没连上」的中间态。必须先 `pm revoke WRITE_SECURE_SETTINGS`
+     （真实侧载用户本来也没有这个 adb 权限，所以这反而更接近现场）。
+  2. `pm disable` 改不动发布版应用的组件状态，报
+     `SecurityException: Shell cannot change component state`，想停 Job 走这条路行不通。
+  测试完成后已 `pm grant` 回权限并确认 `Bound services` 重新出现。
 
 ### 影响面
 
